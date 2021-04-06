@@ -10,9 +10,13 @@ The program vdb allows one to search the GISAID dataset for spike mutation patte
 The default cluster to search is the collection of all sequenced SARS-CoV-2 viruses (“world”).
 To search for all viruses from the United States, enter “from US” or just “us”.
 A cluster or pattern can be assigned to a variable:
-            a = us
-Clusters can be filtered by date, number of mutations, country, and Pango lineage.
 
+            a = us
+            
+Clusters can be filtered by date, number of mutations, country, and Pango lineage. For example, to find all viruses collected in the US containing both mutations E484K and N501Y, and then to see what mutations patterns this set has, use the following two commands:
+
+            b = us w/ E484K N501Y
+            patterns b
 
 2. INSTALLATION
 
