@@ -23,7 +23,7 @@ vdbCreate - this converts multiple sequence alignments (MSA) of SARS-CoV-2 genom
 vdb - this is the query tool
 
 These programs are written in Swift. Swift is available at https://swift.org/download/ or as part of Xcode.
-To compile the programs, first check that the Swift compiler (swiftc) is part of your path. On a Ubuntu system, the following command is appropriate for a bash shell:
+To compile the programs, first check that the Swift compiler (swiftc) is part of your path. On an Ubuntu system, the following command is appropriate for a bash shell:
 
 export PATH=/data/username/swift-5.3.3-RELEASE-ubuntu16.04/usr/bin:$PATH
 
@@ -35,12 +35,12 @@ swiftc -O vdb.swift
 
 3. DATA FILES
 
-The MSA of viral geneomes can downloaded from GISAID. On the “Downloads” window, select “MSA full0405 (64MB)” or the latest file in the "Alignment and proteins" section.
-Also download the “metadata” file in the "Download packages" section or in teh "Genomic epidemiology" section. Uncompress the files and place the fasta file and the metadata file in the same directory that will be used to run vdb. One can also downloaded selected sequences from GISAID, add the WIV04 reference sequence, and align these with MAFFT. It is possible to load both the large dataset from the main MSA plus a more local, manually aligned set. The FASTA sequence identifier lines must have the same format as used by GISAID:
+The sequence alignment of viral genomes can be downloaded from GISAID (this requires registration with GISAID and an account). On the “Downloads” window, select “MSA full0405 (64MB)” or the latest file in the "Alignment and proteins" section.
+Also download the “metadata” file in the "Download packages" section or in the "Genomic epidemiology" section. Uncompress the files and place the FASTA file and the metadata file in the same directory that will be used to run vdb. One can also downloaded selected sequences from GISAID, add the WIV04 reference sequence, and align these with MAFFT. It is possible to load both the large dataset from the main MSA and a more local, manually aligned set. The FASTA sequence identifier lines must have the same format as used by GISAID:
 
 \>hCoV-19/Wuhan/WIV04/2019|EPI_ISL_402124|2019-12-30|China
 
-Manually added sequences without GISAID-assigned accession numubers should use a provisional number slightly greater than the highest accession number in the current dataset.
+Manually added sequences without GISAID-assigned accession numbers should use a provisional number slightly greater than the highest accession number in the current dataset.
 
 Other files included in the repository are:
 
