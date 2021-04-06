@@ -1,7 +1,7 @@
 # vdb
 A SARS-CoV-2 Mutation Pattern Query Tool
 
-1. VDB PROGRAM DESIGN GOALS
+## 1. Purpose
 
 Use **vdb** to query the spike mutational landscape.
 
@@ -18,7 +18,9 @@ Clusters can be filtered by date, number of mutations, country, and Pango lineag
             b = us w/ E484K N501Y
             patterns b
 
-2. INSTALLATION
+Additional commands can be found by entering 'help'.
+
+## 2. Installation
 
 There are two programs:
 
@@ -36,7 +38,7 @@ Then to compile the programs, run these commands (these take < 1 minute):
             swiftc -O vdbCreate.swift
             swiftc -O vdb.swift
 
-3. DATA FILES
+## 3. Data files
 
 The sequence alignment of viral genomes can be downloaded from GISAID (this requires registration with GISAID and an account). On the “Downloads” window, select “MSA full0405 (64MB)” or the latest file in the "Alignment and proteins" section.
 Also download the “metadata” file in the "Download packages" section or in the "Genomic epidemiology" section. Uncompress the files and place the FASTA file and the metadata file in the same directory that will be used to run vdb. One can also downloaded selected sequences from GISAID, add the WIV04 reference sequence, and align these with MAFFT. It is possible to load both the large dataset from the main MSA and a more local, manually aligned set. The FASTA sequence identifier lines must have the same format as used by GISAID:
@@ -51,7 +53,7 @@ nuclref.wiv04  This is the SARS-CoV-2 genomic sequence reference, which is used 
 
 ref_wiv04      This is the same reference in fasta format, to be used for manual alignments of GISAID sequences
 
-4. RUNNING THE PROGRAMS
+## 4. Running the programs
 
 To run **vdbCreate** to create the mutations list (this takes 5-10 minutes):
 
