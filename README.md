@@ -41,7 +41,7 @@ Then to compile the programs, run these commands (these take < 1 minute):
 ## 3. Data files
 
 The sequence alignment of viral genomes can be downloaded from GISAID (this requires registration with GISAID and an account). On the “Downloads” window, select “MSA full0405 (64MB)” or the latest file in the "Alignment and proteins" section.
-Also download the “metadata” file in the "Download packages" section or in the "Genomic epidemiology" section. Uncompress the files and place the FASTA file and the metadata file in the same directory that will be used to run vdb. One can also downloaded selected sequences from GISAID, add the WIV04 reference sequence, and align these with MAFFT. It is possible to load both the large dataset from the main MSA and a more local, manually aligned set. The FASTA sequence identifier lines must have the same format as used by GISAID:
+Also download the “metadata” file in the "Download packages" section or in the "Genomic epidemiology" section. Uncompress the files and place the FASTA file and the metadata file in the same directory that will be used to run **vdb**. One can also downloaded selected sequences from GISAID, add the WIV04 reference sequence, and align these with MAFFT. It is possible to load both the large dataset from the main MSA and a more local, manually aligned set. The FASTA sequence identifier lines must have the same format as used by GISAID:
 
 \>hCoV-19/Wuhan/WIV04/2019|EPI_ISL_402124|2019-12-30|China
 
@@ -49,7 +49,7 @@ Manually added sequences without GISAID-assigned accession numbers should use a 
 
 Other files included in the repository are:
 
-nuclref.wiv04  This is the SARS-CoV-2 genomic sequence reference, which is used when vdb is run in nucleotide mode
+nuclref.wiv04  This is the SARS-CoV-2 genomic sequence reference, which is used when **vdb** is run in nucleotide mode
 
 ref_wiv04      This is the same reference in fasta format, to be used for manual alignments of GISAID sequences
 
