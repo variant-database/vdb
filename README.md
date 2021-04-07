@@ -13,14 +13,8 @@ To search for all viruses from the United States, enter `from US` or just `us`. 
 Clusters can be filtered by date, number of mutations, country, and Pango lineage. For example, to find all viruses collected in the US containing both mutations E484K and D614G, and then to see what mutations patterns this set has, use the following two commands:
 
             VDB> a = us w/ E484K D614G
-            Number of isolates containing E484K D614G  = 4904
-            Cluster a assigned to 4904 isolates
 
             VDB> patterns a
-            Number of mutation patterns: 518
-            1 : L5F T95I D253G E484K D614G A701V    1943
-            2 : W152L E484K D614G G769V    403
-            ...
 
 Additional commands are described [here](Query_Commands.md) and can be listed by entering `help` or `?` in **vdb**.
 
