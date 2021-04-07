@@ -49,9 +49,9 @@ Manually added sequences without GISAID-assigned accession numbers should use a 
 
 Other files included in the repository are:
 
-nuclref.wiv04  This is the SARS-CoV-2 genomic sequence reference, which is used when **vdb** is run in nucleotide mode
+nuclref.wiv04    This is the SARS-CoV-2 genomic sequence reference, which is used when **vdb** is run in nucleotide mode
 
-ref_wiv04      This is the same reference in fasta format, to be used for manual alignments of GISAID sequences
+ref_wiv04      This is the same reference in fasta format, to be used for manual alignments of GISAID sequences
 
 ## 4. Running the programs
 
