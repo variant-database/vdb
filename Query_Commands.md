@@ -22,27 +22,27 @@ If no cluster is entered, all viruses will be used ("world")
 \<cluster> lineage \<Pango lineage>    → cluster  
 
 ## Commands to find mutation patterns
-consensus [for] \<cluster or country or state>  → pattern  
-patterns [in] [\<n>] \<cluster>                  → pattern  
+consensus [for] \<cluster or country or state>    → pattern  
+patterns [in] [\<n>] \<cluster>        → pattern  
 
 ## Listing commands
 list [\<n>] \<cluster>  
 [list] countries [for] \<cluster>  
 [list] states [for] \<cluster>  
 [list] lineages [for] \<cluster>  
-[list] frequencies [for] \<cluster>          alias freq  
+[list] frequencies [for] \<cluster>        alias freq  
 [list] monthly [for] \<cluster> [\<cluster2>]  
 [list] weekly [for] \<cluster> [\<cluster2>]  
-[list] patterns         lists built-in and user defined patterns  
-[list] clusters         lists built-in and user defined clusters  
+[list] patterns        lists built-in and user defined patterns  
+[list] clusters        lists built-in and user defined clusters  
 
 ## Other commands
-sort \<cluster>  (by date)  
+sort \<cluster>    (by date)  
 help  
 license  
 history  
 load \<vdb database file>  
-char \<Pango lineage>    prints characteristics of lineage  
+char \<Pango lineage>        prints characteristics of lineage  
 quit  
 
 ## Program switches
