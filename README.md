@@ -18,7 +18,7 @@ Clusters can be filtered by date, number of mutations, country, and Pango lineag
             b = us w/ E484K N501Y
             patterns b
 
-Additional commands can be found by entering 'help'.
+Additional commands can be found by entering `help`.
 
 ## 2. Installation
 
@@ -55,7 +55,7 @@ ref_wiv04      This is the same reference in fasta format, to be used for manual
 
 ## 4. Running the programs
 
-To run **vdbCreate** to create the mutations list (this takes 5-10 minutes):
+To run **vdbCreate** to create the mutations list (this takes about 10 minutes for a million sequences):
 
             ./vdbCreate msa_0405.fasta
 
