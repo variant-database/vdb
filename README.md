@@ -3,7 +3,7 @@ A SARS-CoV-2 Mutation Pattern Query Tool
 
 ## 1. Purpose
 
-The **vdb** program is designed to query the SARS-CoV-2 mutational landscape. It runs as a command shell in a terminal, and it allows customized searches for mutation patterns over the entire SARS-CoV-2 genome dataset. These patttern searches can be for spike protein mutations or nucleotide mutations over the whole genome.
+The **vdb** program is designed to query the SARS-CoV-2 mutational landscape. It runs as a command shell in a terminal, and it allows customized searches for mutation patterns over the entire SARS-CoV-2 genome dataset of subsets thereof. These patttern searches can be for spike protein mutations or nucleotide mutations over the whole genome.
 
 The **vdb** tool uses a natural syntax, permitting quick searches over various subsets of the data. The two main types of objects in **vdb** are groups of viruses (“clusters”) and groups of mutations (“patterns”). Clusters can be obtained by searching for patterns, and patterns can be obtained by examining clusters. The program does NOT automatically scan for some pre-defined pattern. Instead, the goal of the program is to make it very easy to look around the spike mutational landscape and see what’s there. The **vdb** program can be thought of as a “viewer” (a device for looking), even though it's entirely text-based.
 
