@@ -22,6 +22,8 @@ Additional commands are described [here](Query_Commands.md) and can be listed by
 
 **vdb** is described in the bioRxiv manuscript [SARS-CoV-2 lineage B.1.526 emerging in the New York region detected by software utility created to query the spike mutational landscape](https://www.biorxiv.org/content/10.1101/2021.02.14.431043v2).
 
+Questions about **vdb** can be sent to vdb_support@icloud.com.
+
 ## 2. Installation
 
 There are two programs:
