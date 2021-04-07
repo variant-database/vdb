@@ -3,20 +3,17 @@ A SARS-CoV-2 Mutation Pattern Query Tool
 
 ## 1. Purpose
 
-Use **vdb** to query the spike mutational landscape.
+The **vdb** program is designed to query the SARS-CoV-2 mutational landscape. It runs as a command shell in a terminal, and it allows customized searches for mutation patterns over the entire SARS-CoV-2 genome dataset. These patttern searches can be for spike protein mutations or nucleotide mutations over the whole genome.
 
-The program **vdb** allows one to search an entire SARS-CoV-2 dataset for spike mutation patterns using a natural syntax. The two main types of objects are groups of viruses (“clusters”) and groups of mutations (“patterns”). Clusters can be obtained by searching for patterns, and patterns can be obtained by examining clusters. The program does NOT automatically scan for some pre-defined bad pattern. Instead, the goal of the program is to make it very easy to look around the spike mutational landscape and see what’s there. The **vdb** program can be thought of as a “viewer” (a device for looking), even though it's entirely text-based.
+The **vdb** tool uses a natural syntax, permitting quick searches over various subsets of the data. The two main types of objects in **vdb** are groups of viruses (“clusters”) and groups of mutations (“patterns”). Clusters can be obtained by searching for patterns, and patterns can be obtained by examining clusters. The program does NOT automatically scan for some pre-defined pattern. Instead, the goal of the program is to make it very easy to look around the spike mutational landscape and see what’s there. The **vdb** program can be thought of as a “viewer” (a device for looking), even though it's entirely text-based.
 
-The default cluster to search is the collection of all sequenced SARS-CoV-2 viruses (“world”).
-To search for all viruses from the United States, enter “from US” or just “us”.
-A cluster or pattern can be assigned to a variable:
-
-            a = us
+The default cluster to search is the collection of all sequenced SARS-CoV-2 viruses (“world”). Alternatively, a country or a US state can be specified.
+To search for all viruses from the United States, enter `from US` or just `us`. A cluster or pattern can be assigned to a variable using an equal sign, `=`.
             
 Clusters can be filtered by date, number of mutations, country, and Pango lineage. For example, to find all viruses collected in the US containing both mutations E484K and N501Y, and then to see what mutations patterns this set has, use the following two commands:
 
-            b = us w/ E484K N501Y
-            patterns b
+            a = us w/ E484K N501Y
+            patterns a
 
 Additional commands are described [here](Query_Commands.md) and can be listed by entering `help` or `?` in **vdb**.
 
