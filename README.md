@@ -20,6 +20,8 @@ Clusters can be filtered by date, number of mutations, country, and Pango lineag
 
 Additional commands are described [here](Query_Commands.md) and can be listed by entering `help` or `?` in **vdb**.
 
+**vdb** is described in the bioRxiv manuscript [SARS-CoV-2 lineage B.1.526 emerging in the New York region detected by software utility created to query the spike mutational landscape](https://www.biorxiv.org/content/10.1101/2021.02.14.431043v2).
+
 ## 2. Installation
 
 There are two programs:
