@@ -1,4 +1,4 @@
-# Commands to query SARS-CoV-2 variant database
+# Commands to query the SARS-CoV-2 variant database
 
 The commands below define a Variant Query Language that can be used to search the mutational landscape of SARS-CoV-2 genomes.
 
