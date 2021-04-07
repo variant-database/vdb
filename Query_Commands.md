@@ -23,7 +23,7 @@ If no cluster is entered, all viruses will be used ("world")
 
 ## Commands to find mutation patterns
 consensus [for] \<cluster or country or state>   → pattern  
-patterns [in] [\<n>] \<cluster>         → pattern  
+patterns [in] [\<n>] \<cluster>           → pattern  
 
 ## Listing commands
 list [\<n>] \<cluster>  
