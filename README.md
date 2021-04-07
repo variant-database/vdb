@@ -49,7 +49,7 @@ Also download the “metadata” file in the "Download packages" section or in t
 
 Manually added sequences without GISAID-assigned accession numbers should use a provisional number slightly greater than the highest accession number in the current dataset.
 
-Other files included in the repository are:
+Other files included in this repository are:
 
 nuclref.wiv04    This is the SARS-CoV-2 genomic sequence reference, which is used when **vdb** is run in nucleotide mode
 
