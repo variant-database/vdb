@@ -70,11 +70,11 @@ For the **vdb** program, you can either tell the program what file(s) to load on
 
 The **vdb** programs can also be used to examine nucleotide mutations. To produce the nucleotide mutation list file, use the -n or -N flag:
 
-            ./vdbCreate -N msa_0302.fasta
+            ./vdbCreate -N msa_0405.fasta
 The -n excludes ambiguous bases, while the -N flag includes these (the -N flag is necessary to have protein mutations match what is listed in GISAID).
 
 Then to read the resulting file into **vdb** and thereby analyze mutations in nucleotide mode:
 
-            ./vdb vdb_030221_nucl.txt 
+            ./vdb vdb_040521_nucl.txt 
 
 
