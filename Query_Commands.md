@@ -2,16 +2,17 @@
 
 The commands below define a Variant Query Language that can be used to search the mutational landscape of SARS-CoV-2 genomes.
 
-Notation:  
+## Notation
 cluster = group of viruses        < > = user input        n = an integer  
 pattern = group of mutations        \[ ] = optional  
 "world"  = all viruses in database        → result  
-
-To define a variable for a cluster or pattern:  \<name> = cluster or pattern  
-Set operations +, -, and * (intersection) can be applied to clusters or patterns  
 If no cluster is entered, all viruses will be used ("world")  
 
-## Filter commands
+## Variables
+To define a variable for a cluster or pattern:  \<name> = cluster or pattern  
+Set operations +, -, and * (intersection) can be applied to clusters or patterns  
+
+## Filtering commands
 \<cluster> from \<country or state>    → cluster  
 \<cluster> containing [\<n>] \<pattern>  → cluster  alias with, w/  
 \<cluster> not containing \<pattern>   → cluster  alias without, w/o (full pattern)  
