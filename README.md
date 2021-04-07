@@ -18,7 +18,7 @@ Clusters can be filtered by date, number of mutations, country, and Pango lineag
             b = us w/ E484K N501Y
             patterns b
 
-Additional commands can be found by entering `help`.
+Additional commands are described [here](Query_Commands.md) and can be listed by entering `help` or `?` in **vdb**.
 
 ## 2. Installation
 
