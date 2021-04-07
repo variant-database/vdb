@@ -8,7 +8,7 @@ The **vdb** program is designed to query the SARS-CoV-2 mutational landscape. It
 The **vdb** tool uses a natural syntax, permitting quick searches over various subsets of the data. The two main types of objects in **vdb** are groups of viruses (“clusters”) and groups of mutations (“patterns”). Clusters can be obtained by searching for patterns, and patterns can be obtained by examining clusters. The program does NOT automatically scan for some pre-defined pattern. Instead, the goal of the program is to make it very easy to look around the spike mutational landscape and see what’s there. The **vdb** program can be thought of as a “viewer” (a device for looking), even though it's entirely text-based.
 
 The default cluster to search is the collection of all sequenced SARS-CoV-2 viruses (“world”). Alternatively, a country or a US state can be specified.
-To search for all viruses from the United States, enter `from US` or just `us`. A cluster or pattern can be assigned to a variable using an equal sign, `=`.
+To search for all viruses from the United States, enter `from US` or just `us` as part of the search command. A cluster or pattern can be assigned to a variable using an equal sign, `=`.
             
 Clusters can be filtered by date, number of mutations, country, and Pango lineage. For example, to find all viruses collected in the US containing both mutations E484K and D614G, and then to see what mutations patterns this set has, use the following two commands:
 
@@ -16,7 +16,7 @@ Clusters can be filtered by date, number of mutations, country, and Pango lineag
 
             VDB> patterns a
 
-Additional commands are described [here](Query_Commands.md) and can be listed by entering `help` or `?` in **vdb**.
+Additional commands are listed [here](Query_Commands.md) and can be listed by entering `help` or `?` in **vdb**.
 
 **vdb** is described in the bioRxiv manuscript [SARS-CoV-2 lineage B.1.526 emerging in the New York region detected by software utility created to query the spike mutational landscape](https://www.biorxiv.org/content/10.1101/2021.02.14.431043v2).
 
