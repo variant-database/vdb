@@ -19,7 +19,7 @@ Set operations `+`, `-`, and `*` (intersection) can be applied to clusters or pa
 \<cluster>`before`\<date>        → cluster  
 \<cluster>`after`\<date>         → cluster  
 \<cluster>`>` or `<` \<n>          → cluster    filter by # of mutations  
-\<cluster>`named`\<state_id or EPI_ISL>  → cluster  
+\<cluster>`named`\<state_id or EPI_ISL#>  → cluster  
 \<cluster>`lineage`\<Pango lineage>   → cluster  
 
 ## Commands to find mutation patterns
