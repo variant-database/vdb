@@ -5,7 +5,7 @@ The commands below define a Variant Query Language that can be used to search th
 Notation:  
 cluster = group of viruses             < > = user input     n = an integer  
 pattern = group of mutations            [ ] = optional  
-"world"  = all viruses in database        -> result  
+"world"  = all viruses in database        → result  
 
 To define a variable for a cluster or pattern:  \<name> = cluster or pattern  
 Set operations +, -, and * (intersection) can be applied to clusters or patterns  
@@ -13,17 +13,17 @@ If no cluster is entered, all viruses will be used ("world")
 
 ## Filter commands
 \<cluster> from \<country or state>               → cluster  
-\<cluster> containing [\<n>] \<pattern>           -> cluster  alias with, w/  
-\<cluster> not containing \<pattern>              -> cluster  alias without, w/o (full pattern)  
-\<cluster> before \<date>                         -> cluster  
-\<cluster> after \<date>                          -> cluster  
-\<cluster> > or < \<n>                            -> cluster     filter by # of mutations  
-\<cluster> named \<state_id or EPI_ISL>           -> cluster  
-\<cluster> lineage \<Pango lineage>               -> cluster  
+\<cluster> containing [\<n>] \<pattern>           → cluster  alias with, w/  
+\<cluster> not containing \<pattern>              → cluster  alias without, w/o (full pattern)  
+\<cluster> before \<date>                         → cluster  
+\<cluster> after \<date>                          → cluster  
+\<cluster> > or < \<n>                            → cluster     filter by # of mutations  
+\<cluster> named \<state_id or EPI_ISL>           → cluster  
+\<cluster> lineage \<Pango lineage>               → cluster  
 
 ## Commands to find mutation patterns
-consensus [for] \<cluster or country or state>  -> pattern  
-patterns [in] [\<n>] \<cluster>                  -> pattern  
+consensus [for] \<cluster or country or state>  → pattern  
+patterns [in] [\<n>] \<cluster>                  → pattern  
 
 ## Listing commands
 list [\<n>] \<cluster>  
