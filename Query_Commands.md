@@ -14,11 +14,11 @@ Set operations `+`, `-`, and `*` (intersection) can be applied to clusters or pa
 
 ## Filtering commands
 \<cluster>`from`\<country or state>    → cluster  
-\<cluster>`containing`[\<n>] \<pattern>  → cluster  alias `with`, `w/`  
-\<cluster>`not containing`\<pattern>   → cluster  alias `without`, `w/o` (full pattern)  
+\<cluster>`containing`[\<n>] \<pattern>  → cluster    alias `with`, `w/`  
+\<cluster>`not containing`\<pattern>   → cluster    alias `without`, `w/o` (full pattern)  
 \<cluster>`before`\<date>        → cluster  
 \<cluster>`after`\<date>         → cluster  
-\<cluster>`>` or `<` \<n>          → cluster     filter by # of mutations  
+\<cluster>`>` or `<` \<n>          → cluster    filter by # of mutations  
 \<cluster>`named`\<state_id or EPI_ISL>  → cluster  
 \<cluster>`lineage`\<Pango lineage>   → cluster  
 
