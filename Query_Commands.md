@@ -22,8 +22,8 @@ If no cluster is entered, all viruses will be used ("world")
 \<cluster> lineage \<Pango lineage>   → cluster  
 
 ## Commands to find mutation patterns
-consensus [for] \<cluster or country or state>    → pattern  
-patterns [in] [\<n>] \<cluster>        → pattern  
+consensus [for] \<cluster or country or state>   → pattern  
+patterns [in] [\<n>] \<cluster>         → pattern  
 
 ## Listing commands
 list [\<n>] \<cluster>  
