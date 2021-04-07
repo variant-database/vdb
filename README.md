@@ -10,10 +10,18 @@ The **vdb** tool uses a natural syntax, permitting quick searches over various s
 The default cluster to search is the collection of all sequenced SARS-CoV-2 viruses (“world”). Alternatively, a country or a US state can be specified.
 To search for all viruses from the United States, enter `from US` or just `us`. A cluster or pattern can be assigned to a variable using an equal sign, `=`.
             
-Clusters can be filtered by date, number of mutations, country, and Pango lineage. For example, to find all viruses collected in the US containing both mutations E484K and N501Y, and then to see what mutations patterns this set has, use the following two commands:
+Clusters can be filtered by date, number of mutations, country, and Pango lineage. For example, to find all viruses collected in the US containing both mutations E484K and D614G, and then to see what mutations patterns this set has, use the following two commands:
 
-            a = us w/ E484K N501Y
-            patterns a
+            VDB> a = us w/ E484K D614G
+            209497 isolates from USA in set of size 922291
+            Number of isolates containing E484K D614G  = 4904
+            Cluster a assigned to 4904 isolates
+
+            VDB> patterns a
+            Number of mutation patterns: 518
+            1 : L5F T95I D253G E484K D614G A701V    1943   B.1.526 99.3%
+            2 : W152L E484K D614G G769V    403   R.1 98.8%
+
 
 Additional commands are described [here](Query_Commands.md) and can be listed by entering `help` or `?` in **vdb**.
 
