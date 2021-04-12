@@ -1,6 +1,7 @@
 # Commands to query the SARS-CoV-2 variant database
 
-The commands below define a Variant Query Language that can be used to search the mutational landscape of SARS-CoV-2 genomes.
+The commands below define a Variant Query Language that can be used to search the mutational landscape of SARS-CoV-2 genomes.  
+Many commands have a both a verbose form (`list countries for cluster1`) and a short form (`countries cluster1`).
 
 ## Notation
 cluster = group of viruses        < > = user input        n = an integer  
@@ -12,12 +13,30 @@ If no cluster is entered, all viruses will be used ("world")
 To define a variable for a cluster or pattern:  \<name> `=` cluster or pattern  
 Set operations `+`, `-`, and `*` (intersection) can be applied to clusters or patterns  
 
+Variable names are case sensitive and can included letters or numbers.  
+Commands are not case sensitive.
+
 ## Filtering commands
 \<cluster>`from`\<country or state>    → cluster  
+
+Searches the specified cluster (or all viruses if no cluster is given) for viruses from the specified country or US state.  
+
 \<cluster>`containing`[\<n>] \<pattern>  → cluster    alias `with`, `w/`  
+
+Searches the specified cluster (or all viruses if no cluster is given) for viruses with the specified mutation pattern. By default only viruses with all the mutations of the specified pattern are returned. If an integer \<n> is specified in the search command, then viruses are returned only if they have at least \<n> of the mutations in the pattern.  
+
 \<cluster>`not containing`\<pattern>   → cluster    alias `without`, `w/o` (full pattern)  
+
+Searches the specified cluster (or all viruses if no cluster is given) for viruses without the specified mutation pattern. All viruses are returned unless they have the complete mutation pattern.  
+
 \<cluster>`before`\<date>        → cluster  
+
+Searches the specified cluster (or all viruses if no cluster is given) for viruses with collection date before the specified date.  
+
 \<cluster>`after`\<date>         → cluster  
+
+Searches the specified cluster (or all viruses if no cluster is given) for viruses with collection date after the specified date.  
+
 \<cluster>`>` or `<` \<n>          → cluster    filter by # of mutations  
 \<cluster>`named`\<state_id or EPI_ISL#>  → cluster  
 \<cluster>`lineage`\<Pango lineage>   → cluster  
