@@ -16,33 +16,43 @@ Set operations `+`, `-`, and `*` (intersection) can be applied to clusters or pa
 Variable names are case sensitive and can included letters or numbers.  
 Commands are not case sensitive.
 
+## Mutation patterns and nucleotide mode
+If the loaded mutation list file contains spike protein mutations, then mutation patterns should be spike protein mutations. For example, `E484K D614G`.  
+If the loaded mutation list file contains nucleotide mutations, then mutation patterns can be either spike protein mutations (`E484K`), nucleotide mutations (`G23012A`), or a specified protein mutation (`NSP12:P323L`).
+
 ## Filtering commands
 #### \<cluster>`from`\<country or state>    → cluster  
 
 Searches the specified cluster (or all viruses if no cluster is given) for viruses from the specified country or US state.  
-
+<br />
 #### \<cluster>`containing`[\<n>] \<pattern>  → cluster    alias `with`, `w/`  
 
 Searches the specified cluster (or all viruses if no cluster is given) for viruses with the specified mutation pattern. By default only viruses with all the mutations of the specified pattern are returned. If an integer \<n> is specified in the search command, then viruses are returned only if they have at least \<n> of the mutations in the pattern.  
-
+<br />
 #### \<cluster>`not containing`\<pattern>   → cluster    alias `without`, `w/o` (full pattern)  
 
 Searches the specified cluster (or all viruses if no cluster is given) for viruses without the specified mutation pattern. All viruses are returned unless they have the complete mutation pattern.  
-
+<br />
 #### \<cluster>`before`\<date>        → cluster  
 
 Searches the specified cluster (or all viruses if no cluster is given) for viruses with collection date before the specified date.  
-
+<br />
 #### \<cluster>`after`\<date>         → cluster  
 
 Searches the specified cluster (or all viruses if no cluster is given) for viruses with collection date after the specified date.  
-
+<br />
 #### \<cluster>`>` or `<` \<n>          → cluster    filter by # of mutations  
 
+Searches the specified cluster (or all viruses if no cluster is given) for viruses with greater than (or less than) the specified number of mutations.  
+<br />
 #### \<cluster>`named`\<state_id or EPI_ISL#>  → cluster  
 
+Searches the specified cluster (or all viruses if no cluster is given) for viruses with the specified text string in their virus name field. Or, if a number is specified, returns the virus with that accession number.  
+<br />
 #### \<cluster>`lineage`\<Pango lineage>   → cluster  
 
+Searches the specified cluster (or all viruses if no cluster is given) for viruses belonging to the specified Pango lineage. A program switch determines whether viruses in sublineages are returned (by default sublineages are included).  
+<br />
 
 ## Commands to find mutation patterns
 `consensus` [`for`] \<cluster or country or state>   → pattern  
