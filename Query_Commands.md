@@ -132,7 +132,7 @@ Loads the specified **vdb** database file.
 
 Prints characteristic (consensus) mutations of the specified lineage. Mutations are shown in bold if they are not present in the parent lineage consensus pattern.  
 <br />
-#### `quit`        alias `exit` control-C control-D  
+#### `quit`        alias `exit`, control-C, control-D  
 
 Ends the current **vdb** session.  
 <br />
