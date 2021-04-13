@@ -3022,12 +3022,16 @@ final class VDB {
     
     // returns isolates with collection dates before the given date
     class func isolatesBefore(_ date: Date, inCluster isolates:[Isolate]) -> [Isolate] {
-        return isolates.filter { $0.date < date }
+        let filteredIsolates : [Isolate] = isolates.filter { $0.date < date }
+        print("\(filteredIsolates.count) isolates before \(dateFormatter.string(from: date)) in set of size \(isolates.count)")
+        return filteredIsolates
     }
 
     // returns isolates with collection dates after the given date
     class func isolatesAfter(_ date: Date, inCluster isolates:[Isolate]) -> [Isolate] {
-        return isolates.filter { $0.date > date }
+        let filteredIsolates : [Isolate] = isolates.filter { $0.date > date }
+        print("\(filteredIsolates.count) isolates after \(dateFormatter.string(from: date)) in set of size \(isolates.count)")
+        return filteredIsolates
     }
     
     // returns isolates whose state field contains the string name
