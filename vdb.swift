@@ -4914,6 +4914,19 @@ AS.2,B.1.1.317.2
                         }
                     }
                 }
+                else {
+                    // assume all isolates
+                    if tokens.count > i+1 {
+                        switch tokens[i+1] {
+                        case let .textBlock(identifier):
+                            if let value = Int(identifier) {
+                                return ([],Expr.GreaterThan(allIsolates, value))
+                            }
+                        default:
+                            break
+                        }
+                    }
+                }
             case .lessThan:
                 if let precedingExpr = precedingExpr {
                     if tokens.count > i+1 {
@@ -4921,6 +4934,19 @@ AS.2,B.1.1.317.2
                         case let .textBlock(identifier):
                             if let value = Int(identifier) {
                                 return ([],Expr.LessThan(precedingExpr, value))
+                            }
+                        default:
+                            break
+                        }
+                    }
+                }
+                else {
+                    // assume all isolates
+                    if tokens.count > i+1 {
+                        switch tokens[i+1] {
+                        case let .textBlock(identifier):
+                            if let value = Int(identifier) {
+                                return ([],Expr.LessThan(allIsolates, value))
                             }
                         default:
                             break
