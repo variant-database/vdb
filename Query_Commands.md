@@ -23,6 +23,7 @@ Set operations `+`, `-`, and `*` (intersection) can be applied to clusters or pa
 ## Mutation patterns and nucleotide mode
 If the loaded mutation list file contains spike protein mutations, then mutation patterns should be spike protein mutations. For example, `E484K D614G`.  
 If the loaded mutation list file contains nucleotide mutations, then mutation patterns can be either spike protein mutations (`E484K`), nucleotide mutations (`G23012A`), or a specified protein mutation (`NSP12:P323L`).
+Mutations can be separated by either a space or a comma.  
 
 ## Filtering commands
 #### \<cluster>`from`\<country or state>    → cluster  
@@ -91,11 +92,11 @@ Lists the frequencies of individual mutations among the viruses belonging to the
 <br />
 #### [`list`] `monthly` [`for`] \<cluster> [\<cluster2>]  
 
-Lists by month the number of viruses belonging to the specified cluster with a collection date within that month. If a second cluster is specified, then the monthly numbers for that cluster are also listed along with the percentage of the first cluster count vs. the second cluster count.  
+Lists by month the number of viruses belonging to the specified cluster with a collection date within that month. If a second cluster is specified, then the monthly numbers for that cluster are also listed along with the percentage of the first cluster count vs. the second cluster count. The first cluster should generally be a subset of the second cluster, if present.  
 <br />
 #### [`list`] `weekly` [`for`] \<cluster> [\<cluster2>]  
 
-Lists by week the number of viruses belonging to the specified cluster with a collection date within that week. If a second cluster is specified, then the weekly numbers for that cluster are also listed along with the percentage of the first cluster count vs. the second cluster count.  
+Lists by week the number of viruses belonging to the specified cluster with a collection date within that week. If a second cluster is specified, then the weekly numbers for that cluster are also listed along with the percentage of the first cluster count vs. the second cluster count. The first cluster should generally be a subset of the second cluster, if present.  
 <br />
 #### [`list`] `patterns`  
 
@@ -107,13 +108,34 @@ Lists the built-in and user defined clusters.
 <br />
 
 ## Other commands
-`sort` \<cluster>    (by date)  
-`help`  
-`license`  
-`history`  
-`load` \<vdb database file>  
-`char` \<Pango lineage>        prints characteristics of lineage  
-`quit`  
+#### `sort` \<cluster>  
+
+Sorts the specified cluster by sample collection date.  
+<br />
+#### `help`  
+
+Prints a list of **vdb** commands.  
+<br />
+#### `license`  
+
+Prints the license information for **vdb**.  
+<br />
+#### `history`  
+
+Lists the user-entered commands for the current **vdb** session.  
+<br />
+#### `load` \<vdb database file>  
+
+Loads the specified **vdb** database file.  
+<br />
+#### `char` \<Pango lineage>  
+
+Prints characteristic (consensus) mutations of the specified lineage. Mutations are shown in bold if they are not present in the parent lineage consensus pattern.  
+<br />
+#### `quit`  
+
+Ends the current **vdb** session.  
+<br />
 
 ## Program switches
 `debug`/`debug off`  
