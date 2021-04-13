@@ -100,11 +100,11 @@ Lists by week the number of viruses belonging to the specified cluster with a co
 <br />
 #### [`list`] `patterns`  
 
-Lists the built-in and user defined patterns.  
+Lists the built-in and user-defined patterns.  
 <br />
 #### [`list`] `clusters`  
 
-Lists the built-in and user defined clusters.  
+Lists the built-in and user-defined clusters.  
 <br />
 
 ## Other commands
