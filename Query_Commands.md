@@ -138,10 +138,27 @@ Ends the current **vdb** session.
 <br />
 
 ## Program switches
-`debug`/`debug off`  
-`listAccession`/`listAccession off`  
-`listAverageMutations`/`listAverageMutations off`  
-`includeSublineages`/`includeSublineages off`  
-`simpleNuclPatterns`/`simpleNuclPatterns off`  
+#### `debug`/`debug off`  
 
-`minimumPatternsCount = `\<n>  
+Controls whether debug information regarding tokenizing, parsing, and evaluating commands is printed. By default debug printing is off.  
+<br />
+#### `listAccession`/`listAccession off`  
+
+Controls whether accession numbers are printed by the `list` command. By default printing of accession numbers is off.  
+<br />
+#### `listAverageMutations`/`listAverageMutations off`  
+
+Controls whether the average number of mutations is listed for the `monthly` and `weekly` commands. By default this is off.  
+<br />
+#### `includeSublineages`/`includeSublineages off`  
+
+Controls whether sublineages are included in the `lineage` search command. By default sublineages are included (the switch is on).  
+<br />
+#### `simpleNuclPatterns`/`simpleNuclPatterns off`  
+
+Controls whether ambiguous base calls ("N") are ignored for the `patterns` command when in nucleotide mode. By default this is off.
+<br />
+#### `minimumPatternsCount = `\<n>  
+
+Sets the minimum number of mutations for the `patterns` command. The default value is 0.  
+<br />
