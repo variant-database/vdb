@@ -56,7 +56,7 @@ Searches the specified cluster (or all viruses if no cluster is given) for virus
 <br />
 #### \<cluster>`lineage`\<Pango lineage>   → cluster  
 
-Searches the specified cluster (or all viruses if no cluster is given) for viruses belonging to the specified Pango lineage. A program switch determines whether viruses in sublineages are returned (by default sublineages are included).  
+Searches the specified cluster (or all viruses if no cluster is given) for viruses belonging to the specified Pango lineage. A program switch determines whether viruses in sublineages are returned (by default sublineages are included). Lineage names with periods are autodetected, so the keyword `lineage` can be omitted in combined commands.  
 <br />
 
 ## Commands to find mutation patterns
@@ -152,7 +152,7 @@ Controls whether the average number of mutations is listed for the `monthly` and
 <br />
 #### `includeSublineages`/`includeSublineages off`  
 
-Controls whether sublineages are included in the `lineage` search command. By default sublineages are included (the switch is on).  
+Controls whether sublineages are included in the `lineage` search command. By default sublineages are included - the switch is on.  
 <br />
 #### `simpleNuclPatterns`/`simpleNuclPatterns off`  
 
