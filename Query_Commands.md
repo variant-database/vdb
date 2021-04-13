@@ -156,7 +156,7 @@ Controls whether sublineages are included in the `lineage` search command. By de
 <br />
 #### `simpleNuclPatterns`/`simpleNuclPatterns off`  
 
-Controls whether ambiguous base calls ("N") are ignored for the `patterns` command when in nucleotide mode. By default this is off.
+Controls whether ambiguous base calls ("N") are ignored for the `patterns` command when in nucleotide mode. By default this is off.  
 <br />
 #### `minimumPatternsCount = `\<n>  
 
