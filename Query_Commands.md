@@ -7,7 +7,7 @@ Many commands have a both a verbose form (`list countries for cluster1`) and a s
 A cluster is a group of viruses, usually obtained as the result of a search command.  
 A pattern is a list of one or more mutations, user-specified or the result of a `consensus` or `patterns` command.  
 In the command descriptions below, items to be specified by the user are indicated with angle brackets, < >.  
-Optional items are indicated with square brackets, \[ ]  
+Optional items are indicated with square brackets, \[ ].  
 If a command returns a cluster or pattern, this is indicated following an arrow: → result  
 If no cluster is entered for a search command, all loaded viruses will be searched.  
 The set of all viruses loaded into the program is specified by the pre-defined cluster named "world".  
