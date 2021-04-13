@@ -22,7 +22,7 @@ Set operations `+`, `-`, and `*` (intersection) can be applied to clusters or pa
 
 ## Mutation patterns and nucleotide mode
 If the loaded mutation list file contains spike protein mutations, then mutation patterns should be spike protein mutations. For example, `E484K D614G`.  
-If the loaded mutation list file contains nucleotide mutations, then mutation patterns can be either spike protein mutations (`E484K`), nucleotide mutations (`G23012A`), or a specified protein mutation (`NSP12:P323L`).
+If the loaded mutation list file contains nucleotide mutations, then mutation patterns can be either spike protein mutations (`E484K`), nucleotide mutations (`G23012A`), or a specified protein mutation (`NSP12:P323L`).  
 Mutations can be separated by either a space or a comma.  
 
 ## Filtering commands
