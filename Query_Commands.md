@@ -25,6 +25,9 @@ If the loaded mutation list file contains spike protein mutations, then mutation
 If the loaded mutation list file contains nucleotide mutations, then mutation patterns can be either spike protein mutations (`E484K`), nucleotide mutations (`G23012A`), or a specified protein mutation (`NSP12:P323L`).  
 Mutations can be separated by either a space or a comma.  
 
+## Combining commands
+The command parser of **vdb** is still under development, so combinations of commands will work in some cases but not others. Complex queries can nevertheless be performed with **vdb**: variables can be used to save the results of single commands, and these can be used as input to further search commands.  
+
 ## Filtering commands
 #### \<cluster>`from`\<country or state>    → cluster  
 
