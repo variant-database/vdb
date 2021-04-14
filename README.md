@@ -38,7 +38,7 @@ To compile the programs, first check that the Swift compiler (`swiftc`) is part 
 
             export PATH=/data/username/swift-5.3.3-RELEASE-ubuntu16.04/usr/bin:$PATH
 
-Then to compile the programs, run these commands (these take < 1 minute):
+Next, download the **vdb** repository (using the "Code" button above). Then to compile the programs, run these commands (these take < 1 minute):
 
             swiftc -O vdbCreate.swift
             swiftc -O vdb.swift
