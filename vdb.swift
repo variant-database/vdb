@@ -1342,6 +1342,38 @@ enum Protein : Int, CaseIterable, Equatable, Comparable {
         }
     }
     
+    var note : String {
+        get {
+            switch self {
+            case .Spike: return "Spike   RBD domain aa 328-533"
+            case .N:     return "Nucleocapsid"
+            case .E:     return "Envelope protein"
+            case .M:     return "Membrane protein"
+            case .NS3:   return "ORF3a protein"
+            case .NS6:   return "OF6 protein"
+            case .NS7a:  return "OR7a protein"
+            case .NS7b:  return "OR7b"
+            case .NS8:   return "ORF8 protein"
+            case .NSP1:  return ""
+            case .NSP2:  return ""
+            case .NSP3:  return ""
+            case .NSP4:  return ""
+            case .NSP5:  return "3C-like proteinase 3CLpro"
+            case .NSP6:  return ""
+            case .NSP7:  return ""
+            case .NSP8:  return "Primase ORF8"
+            case .NSP9:  return ""
+            case .NSP10: return ""
+            case .NSP11: return ""
+            case .NSP12: return "RdRp   frameshift at 13468"
+            case .NSP13: return "helicase"
+            case .NSP14: return "3′-to-5′ exonuclease"
+            case .NSP15: return "endoRNAse"
+            case .NSP16: return "2′-O-ribose methyltransferase"
+            }
+        }
+    }
+    
     // convert protein name to Enum value
     init?(pName: String) {
         for protein in Protein.allCases {
@@ -2806,6 +2838,33 @@ final class VDB {
 //        if cluster.count > 0 {
 //            VDB.metadataForIsolate(cluster[0], vdb: vdb)
 //        }
+    }
+    
+    class func listProteins(vdb: VDB) {
+        print("SARS-CoV-2 proteins:\n")
+        print("\(TColor.underline)name    gene range      len.   note                         \(TColor.reset)")
+        for protein in Protein.allCases {
+            let name : String = "\(protein)"
+            let rangeString : String = "\(protein.range)"
+            let proteinLength : String = "\(protein.length)"
+            var spacer1 : String = "   "
+            let nameCount : Int = name.count
+            while spacer1.count + nameCount < 5 + 3 {
+                spacer1 += " "
+            }
+            var spacer2 : String = "   "
+            let rangeCount : Int = rangeString.count
+            while spacer2.count + rangeCount < 13 + 3 {
+                spacer2 += " "
+            }
+            var spacer3 : String = "   "
+            let proteinLengthCount : Int = proteinLength.count
+            while spacer3.count + proteinLengthCount < 4 + 3 {
+                spacer3 += " "
+            }
+            print("\(name)\(spacer1)\(rangeString)\(spacer2)\(proteinLength)\(spacer3)\(protein.note)")
+        }
+        print("")
     }
     
     // returns isolates from a specified country
@@ -5228,6 +5287,7 @@ list [<n>] <cluster>
 [list] weekly [for] <cluster> [<cluster2>]
 [list] patterns         lists built-in and user defined patterns
 [list] clusters         lists built-in and user defined clusters
+[list] proteins
 
 sort <cluster>  (by date)
 help
@@ -5309,6 +5369,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
             simpleNuclPatterns = true
         case "simplenuclpatterns off":
             simpleNuclPatterns = false
+        case "list proteins", "proteins":
+            VDB.listProteins(vdb: self)   
         case "history":
             return (true,true)
         case "clear":
