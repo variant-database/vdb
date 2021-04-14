@@ -43,7 +43,9 @@ Then to compile the programs, run these commands (these take < 1 minute):
 
 ## 3. Data files
 
-The sequence alignment of viral genomes can be downloaded from [GISAID](https://www.gisaid.org). This requires registration with GISAID, agreeing to GISAID terms of use, and an account. On the GISAID EpiCov “Downloads” window, select “MSA full0405 (64MB)” or the latest version in the "Alignment and proteins" section.
+The sequence alignment of viral genomes can be downloaded from [GISAID](https://www.gisaid.org). This requires registration with GISAID, agreeing to GISAID terms of use, and an account. Note that among these terms of use are the following requirements: (1) to not share or re-distribute the data to any third party, (2) to make best efforts to collaborate with the originating laboratories who provided the data to GISAID, and (3) to acknowledge the originating and submitting laboratories in any publication with results obtained by analyzing this data.  
+
+On the GISAID EpiCov “Downloads” window, select “MSA full0405 (64MB)” or the latest version in the "Alignment and proteins" section.
 Also download the “metadata” file in the "Download packages" section or in the "Genomic epidemiology" section. Uncompress the files and place the FASTA file and the metadata file in the same directory that will be used to run **vdb**. One can also download selected sequences from GISAID, add the WIV04 reference sequence, and align these with MAFFT. It is possible to load both the large dataset from the main MSA and a local, manually aligned set. The FASTA sequence identifier lines must have the same format as used by GISAID:
 
 \>hCoV-19/Wuhan/WIV04/2019|EPI_ISL_402124|2019-12-30|China
@@ -76,4 +78,6 @@ Then to read the resulting file into **vdb** and thereby analyze mutations in nu
 
             ./vdb vdb_040521_nucl.txt 
 
+## 5. Usage notes
 
+One should be aware that the SARS-CoV-2 genome dataset has some artefacts in the sequences and some errors in the metadata. Obvious examples include viruses with incorrect or partial collection date information. Anomalies in the sequences are less obvious, but there is a way to guard against this problem. Unusual sequences are less likely to be an artefact if they have been deposited by multiple laboratories. The virus names often give an indication of the organization which deposited the sequence.
