@@ -33,12 +33,12 @@ There are two programs:
 
 **vdb** - this is the query tool
 
-These programs are written in Swift and are run in a terminal. Swift is available at https://swift.org/download/ or as part of Xcode. To simplify installation each program is distributed as a single, stand-alone source file. If **vdb** is run with a nucleotide mutation data, then the file "nuclref.wiv04" should be in the working directory.
+These programs are written in Swift and are run in a terminal. Swift is available at https://swift.org/download/ or as part of Xcode. To simplify installation each program is distributed as a single, stand-alone source file. If **vdb** is run with nucleotide mutation data, then the file "nuclref.wiv04" should be in the working directory.
 To compile the programs, first check that the Swift compiler (`swiftc`) is part of your path. On an Ubuntu system, a command similar to the following (adjusting the path as necessary) is appropriate for a bash shell:
 
             export PATH=/data/username/swift-5.3.3-RELEASE-ubuntu16.04/usr/bin:$PATH
 
-Next, download the **vdb** repository (using the "Code" button above). Then to compile the programs, run these commands (these take < 1 minute):
+Next, download the **vdb** repository ("Download ZIP" under the "Code" button on the top level **vdb** page). Unzip the file. Then to compile the programs, run these commands (these take < 1 minute):
 
             swiftc -O vdbCreate.swift
             swiftc -O vdb.swift
