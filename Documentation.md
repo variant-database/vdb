@@ -134,9 +134,9 @@ Lists the user-entered commands for the current **vdb** session.
 
 Loads the specified **vdb** database file.  
 <br />
-#### `char` \<Pango lineage>  
+#### `char` \<Pango lineage>        alias `characteristics`  
 
-Prints characteristic (consensus) mutations of the specified lineage. Mutations are shown in bold if they are not present in the parent lineage consensus pattern.  
+Prints characteristic (consensus) mutations of the specified lineage. Mutations are shown in bold if they are not present in the parent lineage consensus pattern. This command does not include sublineages in its analysis.  
 <br />
 #### `quit`        alias `exit`, control-C, control-D  
 
