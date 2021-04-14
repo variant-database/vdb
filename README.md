@@ -80,4 +80,4 @@ Then to read the resulting file into **vdb** and thereby analyze mutations in nu
 
 ## 5. Usage notes
 
-One should be aware that the SARS-CoV-2 genome dataset has some artefacts in the sequences and some errors in the metadata. Obvious examples include viruses with incorrect or partial collection date information. Anomalies in the sequences are less obvious, but there is a way to guard against this problem. Unusual sequences are less likely to be an artefact if they have been deposited by multiple laboratories. The virus names often give an indication of the organization which deposited the sequence.
+One should be aware that the SARS-CoV-2 genome dataset has some artefacts in the sequences and some errors in the metadata. Obvious examples include viruses with incorrect or partial collection date information. Anomalies in the sequences are less obvious, but there is a way to guard against this problem. Unusual sequences are less likely to be an artefact if they have been deposited by multiple laboratories. A virus name often gives an indication of the organization which deposited the sequence.
