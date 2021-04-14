@@ -16,14 +16,16 @@ Clusters can be filtered by date, number of mutations, country, and Pango lineag
 
             VDB> patterns a
 
-Additional commands are listed [here](Quick_Reference.md) and can be listed by entering `help` or `?` in **vdb**.  
+## 2. Documentation and reference
+
 A full description of commands is given [here](Documentation.md).  
+A quick reference listing all commands is [here](Quick_Reference.md). This information can also be listed by entering `help` or `?` in **vdb**.  
 
 **vdb** is described in the bioRxiv manuscript [SARS-CoV-2 lineage B.1.526 emerging in the New York region detected by software utility created to query the spike mutational landscape](https://www.biorxiv.org/content/10.1101/2021.02.14.431043v2).
 
 Questions about **vdb** can be sent to vdb_support@icloud.com.
 
-## 2. Installation
+## 3. Installation
 
 There are two programs:
 
@@ -41,7 +43,7 @@ Then to compile the programs, run these commands (these take < 1 minute):
             swiftc -O vdbCreate.swift
             swiftc -O vdb.swift
 
-## 3. Data files
+## 4. Data files
 
 The sequence alignment of viral genomes can be downloaded from [GISAID](https://www.gisaid.org). This requires registration with GISAID, agreeing to GISAID terms of use, and an account. Note that among these terms of use are the following requirements: (1) to not share or re-distribute the data to any third party, (2) to make best efforts to collaborate with the originating laboratories who provided the data to GISAID, and (3) to acknowledge the originating and submitting laboratories in any publication with results obtained by analyzing this data.  
 
@@ -58,7 +60,7 @@ nuclref.wiv04    This is the SARS-CoV-2 genomic sequence reference, whic
 
 ref_wiv04      This is the same reference in fasta format, to be used for manual alignments of GISAID sequences
 
-## 4. Running the programs
+## 5. Running the programs
 
 To run **vdbCreate** to create the mutations list (this takes about 10 minutes for a million sequences):
 
@@ -78,6 +80,6 @@ Then to read the resulting file into **vdb** and thereby analyze mutations in nu
 
             ./vdb vdb_040521_nucl.txt 
 
-## 5. Usage notes
+## 6. Usage notes
 
 One should be aware that the SARS-CoV-2 genome dataset has some artefacts in the sequences and some errors in the metadata. Obvious examples include viruses with incorrect or partial collection date information. Anomalies in the sequences are less obvious, but there is a way to guard against this problem. Unusual sequences are less likely to be an artefact if they have been deposited by multiple laboratories. A virus name often gives an indication of the organization which deposited the sequence.
