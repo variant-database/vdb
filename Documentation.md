@@ -13,6 +13,9 @@ If no cluster is entered for a search command, all loaded viruses will be search
 The set of all viruses loaded into the program is specified by the pre-defined cluster named "world".  
 Command keywords are not case sensitive.
 
+## Installation
+Installation instructions are given [here](https://github.com/variant-database/vdb#3-installation).
+
 ## Variables
 To define a variable for a cluster or pattern:  \<name> `=` cluster or pattern  
 Variable names are case sensitive and can included letters or numbers.  
