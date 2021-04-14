@@ -112,6 +112,10 @@ Lists the built-in and user-defined patterns.
 
 Lists the built-in and user-defined clusters.  
 <br />
+#### [`list`] `proteins`
+
+Lists the SARS-CoV-2 proteins and their gene positions.  
+<br />
 
 ## Other commands
 #### `sort` \<cluster>  
