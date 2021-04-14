@@ -36,6 +36,7 @@ Set operations `+`, `-`, and `*` (intersection) can be applied to clusters or pa
 [`list`] `weekly` [`for`] \<cluster> [\<cluster2>]  
 [`list`] `patterns`        lists built-in and user defined patterns  
 [`list`] `clusters`        lists built-in and user defined clusters  
+[`list`] `proteins`
 
 ## Other commands
 `sort` \<cluster>    (by date)  
