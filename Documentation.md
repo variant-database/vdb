@@ -29,7 +29,7 @@ If the loaded mutation list file contains nucleotide mutations, then mutation pa
 Mutations can be separated by either a space or a comma.  
 
 ## Position and mutation information
-If an integer by itself is entered into **vdb**, the residue/nucleotide at that reference location will be printed along with the number of occurences and frequencies of mutations at that position. In nucleotide mode, if a single protein (nucleotide) mutation is entered, then the corresponding nucleotide (protein) mutation will be printed.   
+If an integer by itself is entered into **vdb**, the residue/nucleotide at that reference location will be printed along with the number of occurrences and frequencies of mutations at that position. In nucleotide mode, if a single protein (nucleotide) mutation is entered, then the corresponding nucleotide (protein) mutation will be printed.   
 
 ## Combining commands
 The command parser of **vdb** is still under development, so combinations of commands will work in some cases but not others. Complex queries can nevertheless be performed with **vdb**: variables can be used to save the results of single commands, and these can be used as input to further search commands.  
@@ -75,7 +75,7 @@ Returns the consensus mutation pattern for the specified cluster. Any mutation p
 <br />
 #### `patterns` [`in`] [\<n>] \<cluster>           → pattern  
 
-Prints a list of the most frequent mutation patterns (indicating number of occurances) in the specified cluster, and returns the most frequent pattern for assignment to a variable.  If Pango lineage metadata has been loaded, then for each pattern, the most frequent lineage of viruses with that pattern is listed along with the percentage belonging to that lineage.
+Prints a list of the most frequent mutation patterns (indicating number of occurrences) in the specified cluster, and returns the most frequent pattern for assignment to a variable.  If Pango lineage metadata has been loaded, then for each pattern, the most frequent lineage of viruses with that pattern is listed along with the percentage belonging to that lineage.
 <br />
 
 ## Listing commands
