@@ -6,11 +6,11 @@
 //
 //  Created by Anthony West on 1/31/21.
 //  Copyright (c) 2021  Anthony West, Caltech
-//  Last modified 4/4/21
+//  Last modified 4/22/21
 
 import Foundation
 
-let version : String = "1.0"
+let version : String = "1.1"
 print("SARS-CoV-2 Variant Database  Version \(version)              Bjorkman Lab/Caltech")
 
 // MARK: - VDB Command line arguments
@@ -1518,6 +1518,15 @@ struct Isolate : Equatable, Hashable {
         }
         return "\(country)/\(state)/\(dateString) : \(mutationsString)"
     }
+
+    func vdbString(_ dateFormatter: DateFormatter) -> String {
+        let dateString : String = dateFormatter.string(from: date)
+        var mutationsString : String = ""
+        for mutation in mutations {
+            mutationsString += mutation.string + " "
+        }
+        return ">\(country)/\(state)/\(dateString.prefix(4))|EPI_ISL_\(epiIslNumber)|\(dateString)|,\(mutationsString)\n"
+    }
     
     // whether the isolate contains at least n of the mutations in mutationsArray
     func containsMutations(_ mutationsArray : [Mutation], _ n: Int) -> Bool {
@@ -2839,7 +2848,7 @@ final class VDB {
 //            VDB.metadataForIsolate(cluster[0], vdb: vdb)
 //        }
     }
-    
+
     class func listProteins(vdb: VDB) {
         print("SARS-CoV-2 proteins:\n")
         print("\(TColor.underline)name    gene range      len.   note                         \(TColor.reset)")
@@ -2867,13 +2876,14 @@ final class VDB {
         print("")
     }
     
+    static let stateAb : [String:String] = ["Alabama": "AL","Alaska": "AK","Arizona": "AZ","Arkansas": "AR","California": "CA","Colorado": "CO","Connecticut": "CT","Delaware": "DE","Florida": "FL","Georgia": "GA","Hawaii": "HI","Idaho": "ID","Illinois": "IL","Indiana": "IN","Iowa": "IA","Kansas": "KS","Kentucky": "KY","Louisiana": "LA","Maine": "ME","Maryland": "MD","Massachusetts": "MA","Michigan": "MI","Minnesota": "MN","Mississippi": "MS","Missouri": "MO","Montana": "MT","Nebraska": "NE","Nevada": "NV","New Hampshire": "NH","New Jersey": "NJ","New Mexico": "NM","New York": "NY","North Carolina": "NC","North Dakota": "ND","Ohio": "OH","Oklahoma": "OK","Oregon": "OR","Pennsylvania": "PA","Rhode Island": "RI","South Carolina": "SC","South Dakota": "SD","Tennessee": "TN","Texas": "TX","Utah": "UT","Vermont": "VT","Virginia": "VA","Washington": "WA","West Virginia": "WV","Wisconsin": "WI","Wyoming": "WY"]
+    
     // returns isolates from a specified country
     class func isolatesFromCountry(_ country: String, inCluster isolates:[Isolate], vdb: VDB) -> [Isolate] {
         var country = country
         if country.lowercased() == "us" {
             country = "USA"
         }
-        let stateAb : [String:String] = ["Alabama": "AL","Alaska": "AK","Arizona": "AZ","Arkansas": "AR","California": "CA","Colorado": "CO","Connecticut": "CT","Delaware": "DE","Florida": "FL","Georgia": "GA","Hawaii": "HI","Idaho": "ID","Illinois": "IL","Indiana": "IN","Iowa": "IA","Kansas": "KS","Kentucky": "KY","Louisiana": "LA","Maine": "ME","Maryland": "MD","Massachusetts": "MA","Michigan": "MI","Minnesota": "MN","Mississippi": "MS","Missouri": "MO","Montana": "MT","Nebraska": "NE","Nevada": "NV","New Hampshire": "NH","New Jersey": "NJ","New Mexico": "NM","New York": "NY","North Carolina": "NC","North Dakota": "ND","Ohio": "OH","Oklahoma": "OK","Oregon": "OR","Pennsylvania": "PA","Rhode Island": "RI","South Carolina": "SC","South Dakota": "SD","Tennessee": "TN","Texas": "TX","Utah": "UT","Vermont": "VT","Virginia": "VA","Washington": "WA","West Virginia": "WV","Wisconsin": "WI","Wyoming": "WY"]
         var states : [String] = Array(stateAb.keys)
         states.append(contentsOf: Array(stateAb.values))
         states = states.map { $0.lowercased() }
@@ -3979,6 +3989,65 @@ AS.2,B.1.1.317.2
         print("Mutation \(mutationString):", terminator:"")
         proteinMutationsForIsolate(tmpIsolate,true)
     }
+    
+    class func loadCluster(_ clusterName: String, fromFile fileName: String, vdb: VDB) {
+        var loadedCluster : [Isolate] = VDB.loadMutationDB(fileName)
+        
+        // handle nucl/protein transformation
+        var clusterNuclMode : Bool = false
+        iLoop: for i in 0..<min(1000,loadedCluster.count) {
+            for mutation in loadedCluster[i].mutations {
+                if mutation.pos > 2000 {
+                    clusterNuclMode = true
+                    break iLoop
+                }
+            }
+        }
+        var nuclConvMessage : String = ""
+        if clusterNuclMode != vdb.nucleotideMode {
+            let accNumbers : [Int] = loadedCluster.map { $0.epiIslNumber }.sorted { $0 < $1 }
+            let worldSorted : [Isolate] = vdb.isolates.sorted { $0.epiIslNumber < $1.epiIslNumber }
+            loadedCluster = []
+            var wPos : Int = 0
+            let wMax : Int = worldSorted.count
+            var missing : Int = 0
+            accLoop: for accNumber in accNumbers {
+                while worldSorted[wPos].epiIslNumber < accNumber {
+                    wPos += 1
+                    if wPos == wMax {
+                        break accLoop
+                    }
+                }
+                if worldSorted[wPos].epiIslNumber == accNumber {
+                    loadedCluster.append(worldSorted[wPos])
+                }
+                else {
+                    missing += 1
+                }
+            }
+            nuclConvMessage = "Nucleotide/Protein mutation switch. \(missing) missing isolates."
+        }
+        
+        vdb.clusters[clusterName] = loadedCluster
+        print("  \(nf(loadedCluster.count)) isolates loaded into cluster \(clusterName)")
+        if !nuclConvMessage.isEmpty {
+            print(nuclConvMessage)
+        }
+    }
+    
+    class func saveCluster(_ cluster: [Isolate], toFile fileName: String, vdb: VDB) {
+        var outString : String = ""
+        for isolate in cluster {
+            outString += isolate.vdbString(dateFormatter)
+        }
+        do {
+            try outString.write(toFile: fileName, atomically: true, encoding: .ascii)
+            print("Cluster with \(cluster.count) isolates saved to \(fileName)")
+        }
+        catch {
+            print("Error writing cluster to file \(fileName)")
+        }
+    }
 
     // MARK: - Utility methods
     
@@ -4070,7 +4139,8 @@ AS.2,B.1.1.317.2
     var clusters : [String:[Isolate]] = [:]     // cluster = group of isolates
     var patterns : [String:[Mutation]] = [:]    // pattern = group of mutations
     var patternNotes : [String:String] = [:]
-    var countries : [String] = []               // should this include states?
+    var countries : [String] = []
+    var stateNamesPlus : [String] = []
     var minimumPatternsCount : Int = 0
     var nucleotideMode : Bool = false           // set when data is loaded
     
@@ -4119,6 +4189,21 @@ AS.2,B.1.1.317.2
         }
         else {
             return true
+        }
+    }
+    
+    func isCountryOrState(_ name: String) -> Bool {
+        if stateNamesPlus.isEmpty {
+            var states : [String] = Array(VDB.stateAb.keys)
+            states.append(contentsOf: Array(VDB.stateAb.values))
+            states.append("us")
+            stateNamesPlus = states.map { $0.lowercased() }
+        }
+        if stateNamesPlus.contains(name.lowercased()) {
+            return true
+        }
+        else {
+            return isCountry(name)
         }
     }
     
@@ -4324,10 +4409,23 @@ AS.2,B.1.1.317.2
     // cleans up whitespace - removes extra whitespace and adds whitespace around operators
     func preprocessLine(_ line: String) -> String {
         var line : String = line
+        
+        // compound assignment operators
+        let eqParts : [String] = line.components(separatedBy: "=")
+        if eqParts.count == 2 {
+            if let lastChar = eqParts[0].last {
+                if ["*","+","-"].contains(lastChar) {
+                    let varName : String = String(eqParts[0].dropLast(1))
+                    line = "\(varName) = \(varName) \(lastChar) \(eqParts[1])"
+                }
+            }
+        }
+        
         line = line.replacingOccurrences(of: ",", with: " ")
         for op in ["=","+",">","<"] {
             line = line.replacingOccurrences(of: op, with: " "+op+" ")
         }
+        line = line.replacingOccurrences(of: " =  = ", with: " == ")
         if line.contains("-") {
             var changed : Bool = true
             while changed {
@@ -4645,19 +4743,23 @@ AS.2,B.1.1.317.2
                 }
             }
         } while changed
-        for i in 0..<parts.count {
-            if parts[i].contains(".") && (i == 0 || (!(parts[i-1] ~~ lineageKeyword) && !(parts[i-1] ~~ namedKeyword)) ) {
-                if clusters[parts[i]] != nil || patterns[parts[i]] != nil {
-                    continue
-                }
-                if i < parts.count-1 {
-                    if parts[i+1] == "=" {
+        repeat {
+            changed = false
+            for i in 0..<parts.count {
+                if parts[i].contains(".") && (i == 0 || (!(parts[i-1] ~~ lineageKeyword) && !(parts[i-1] ~~ namedKeyword)) ) {
+                    if clusters[parts[i]] != nil || patterns[parts[i]] != nil {
                         continue
                     }
+                    if i < parts.count-1 {
+                        if parts[i+1] == "=" {
+                            continue
+                        }
+                    }
+                    parts.insert(lineageKeyword, at: i)
+                    changed = true
                 }
-                parts.insert(lineageKeyword, at: i)
             }
-        }
+        } while changed
         if debug {
             print(" parts = \(parts)")
         }
@@ -4671,6 +4773,8 @@ AS.2,B.1.1.317.2
             switch parts[i] {
             case "=":
                 tokens.append(.equal)
+            case "==":
+                tokens.append(.equality)
             case "+":
                 tokens.append(.plus)
             case "-":
@@ -4754,6 +4858,7 @@ AS.2,B.1.1.317.2
 //            var node = node
         let allIsolates = Expr.Identifier(isolatesKeyword)
         
+        // parse assignment command
         if topLevel && tokens.count > 2 {
             switch tokens[1] {
             case .equal:
@@ -4775,12 +4880,36 @@ AS.2,B.1.1.317.2
             default:
                 break
             }
+            for i in 0..<tokens.count {
+                switch tokens[i] {
+                case .equality:
+                    if i > 0 && i < tokens.count - 1 {
+                        let (_,lhs) = parse(Array(tokens[0..<i]),node: nil)
+                        let (_,rhs) = parse(Array(tokens[i+1..<tokens.count]),node: nil)
+                        if let lhs = lhs, let rhs = rhs {
+                            let expr : Expr = Expr.Equality(lhs, rhs)
+                            return ([],expr)
+                        }
+                    }
+                    else {
+                        print("Syntax error - equality operator missing operands")
+                    }
+                default:
+                    break
+                }
+            }
         }
         
+        // parse list commands
         if topLevel {
             var exprCluster : Expr?
             if tokens.count > 1 {
-                (_,exprCluster) = parse(Array(tokens[1..<tokens.count]),node: nil)
+                switch tokens[0] {
+                case .listFrequenciesFor, .listCountriesFor, .listStatesFor, .listLineagesFor, .listMonthlyFor, .listWeeklyFor, .list:
+                    (_,exprCluster) = parse(Array(tokens[1..<tokens.count]),node: nil)
+                default:
+                    break
+                }
             }
             else {
                 exprCluster = allIsolates
@@ -4894,6 +5023,7 @@ AS.2,B.1.1.317.2
             }
         }
         
+        // parse special single token commands
         if topLevel && tokens.count == 1 {
             switch tokens[0] {
             case let .textBlock(identifier):
@@ -4931,6 +5061,8 @@ AS.2,B.1.1.317.2
             }
         }
         
+        // MARK:  main parsing loop
+        
         var i = 0
         var precedingExpr : Expr? = nil
         if tokens.isEmpty {
@@ -4939,38 +5071,57 @@ AS.2,B.1.1.317.2
         repeat {
             let t = tokens[i]
             
-            switch t {
+            tSwitch: switch t {
             case .equal:
-                print("Syntax error - extraneous assignment")
+                print("Syntax error - extraneous assignment operator")
                 return ([],nil)
             case .plus:
-                if let precedingExpr = precedingExpr {
+                if let precedingExprTmp = precedingExpr {
                     let (_,expr) = parse(Array(tokens[i+1..<tokens.count]),node: nil)
                     if let expr = expr {
-                        return ([],Expr.Plus(precedingExpr, expr))
+                        precedingExpr = Expr.Plus(precedingExprTmp, expr)
+                        i = tokens.count
+                        break tSwitch
                     }
                 }
             case .minus:
-                if let precedingExpr = precedingExpr {
-                    let (_,expr) = parse(Array(tokens[i+1..<tokens.count]),node: nil)
+                if let precedingExprTmp = precedingExpr {
+                    // minus needs to be greedy and take next tokens up to next operator
+                    var nextOp : Int = i+1
+                    nextOpLoop: while nextOp < tokens.count {
+                        switch tokens[nextOp] {
+                        case .plus, .minus, .multiply:
+                            break nextOpLoop
+                        default:
+                            break
+                        }
+                        nextOp += 1
+                    }
+                    let (_,expr) = parse(Array(tokens[i+1..<nextOp]),node: nil)
                     if let expr = expr {
-                        return ([],Expr.Minus(precedingExpr, expr))
+                        precedingExpr = Expr.Minus(precedingExprTmp, expr)
+                        i = nextOp - 1
+                        break tSwitch
                     }
                 }
             case .multiply:
-                if let precedingExpr = precedingExpr {
+                if let precedingExprTmp = precedingExpr {
                     let (_,expr) = parse(Array(tokens[i+1..<tokens.count]),node: nil)
                     if let expr = expr {
-                        return ([],Expr.Multiply(precedingExpr, expr))
+                        precedingExpr = Expr.Multiply(precedingExprTmp, expr)
+                        i = tokens.count
+                        break tSwitch
                     }
                 }
             case .greaterThan:
-                if let precedingExpr = precedingExpr {
+                if let precedingExprTmp = precedingExpr {
                     if tokens.count > i+1 {
                         switch tokens[i+1] {
                         case let .textBlock(identifier):
                             if let value = Int(identifier) {
-                                return ([],Expr.GreaterThan(precedingExpr, value))
+                                precedingExpr = Expr.GreaterThan(precedingExprTmp, value)
+                                i += 1
+                                break tSwitch
                             }
                         default:
                             break
@@ -4983,7 +5134,9 @@ AS.2,B.1.1.317.2
                         switch tokens[i+1] {
                         case let .textBlock(identifier):
                             if let value = Int(identifier) {
-                                return ([],Expr.GreaterThan(allIsolates, value))
+                                precedingExpr = Expr.GreaterThan(allIsolates, value)
+                                i += 1
+                                break tSwitch
                             }
                         default:
                             break
@@ -4991,12 +5144,14 @@ AS.2,B.1.1.317.2
                     }
                 }
             case .lessThan:
-                if let precedingExpr = precedingExpr {
+                if let precedingExprTmp = precedingExpr {
                     if tokens.count > i+1 {
                         switch tokens[i+1] {
                         case let .textBlock(identifier):
                             if let value = Int(identifier) {
-                                return ([],Expr.LessThan(precedingExpr, value))
+                                precedingExpr = Expr.LessThan(precedingExprTmp, value)
+                                i += 1
+                                break tSwitch
                             }
                         default:
                             break
@@ -5009,7 +5164,9 @@ AS.2,B.1.1.317.2
                         switch tokens[i+1] {
                         case let .textBlock(identifier):
                             if let value = Int(identifier) {
-                                return ([],Expr.LessThan(allIsolates, value))
+                                precedingExpr = Expr.LessThan(allIsolates, value)
+                                i += 1
+                                break tSwitch
                             }
                         default:
                             break
@@ -5019,27 +5176,78 @@ AS.2,B.1.1.317.2
             case .listFrequenciesFor, .listCountriesFor, .listStatesFor, .listLineagesFor, .listMonthlyFor, .listWeeklyFor, .list:
                 print("Syntax error - extraneous list command")
                 return ([],nil)
+            case .equality:
+                print("Syntax error - extraneous equality operator")
+                return ([],nil)
             case .isolates:
                 if tokens.count == 1 {
-                    return ([],allIsolates)
+                    precedingExpr = allIsolates
+                    break tSwitch
                 }
                 else {
                     precedingExpr = allIsolates
+                    break tSwitch
                 }
             case let .textBlock(identifier):
                 if tokens.count == 1 {
                     if identifier == isolatesKeyword {
-                        return ([],Expr.Cluster(isolates))
+                        precedingExpr = Expr.Cluster(isolates)
+                        break tSwitch
                     }
-                    return ([],Expr.Identifier(identifier))
+                    precedingExpr = Expr.Identifier(identifier)
+                    break tSwitch
                 }
                 else {
                     precedingExpr = Expr.Identifier(identifier)
+                    break tSwitch
                 }
             case .consensusFor:
-                let (_,expr) = parse(Array(tokens[i+1..<tokens.count]),node: nil)
+                // check for operator
+                // consensus x * pattern/consensus/pattern: parse to operator
+                // consensus x * cluster, other: parse to end
+                var nextOp : Int = i+1
+                nextOpLoop: while nextOp < tokens.count {
+                    switch tokens[nextOp] {
+                    case .plus, .minus, .multiply:
+                        break nextOpLoop
+                    default:
+                        break
+                    }
+                    nextOp += 1
+                }
+                if nextOp < tokens.count - 1 {
+                    switch tokens[nextOp+1] {
+                    case let .textBlock(identifier):
+                        if clusters[identifier] != nil {
+                            nextOp = tokens.count
+                        }
+                        else if patterns[identifier] != nil {
+                            // parse to op
+                        }
+                        else if VDB.isPattern(identifier, vdb: self) {
+                            // parse to op
+                        }
+                        else {
+                            nextOp = tokens.count
+                        }
+                    case .consensusFor:
+                        // parse to op
+                        break
+                    case .patternsIn:
+                        // parse to op
+                        break
+                    default:
+                        nextOp = tokens.count
+                    }
+                }
+                else {
+                    nextOp = tokens.count
+                }
+                let (_,expr) = parse(Array(tokens[i+1..<nextOp]),node: nil)
                 if let expr = expr {
-                    return ([],Expr.ConsensusFor(expr))
+                    precedingExpr = Expr.ConsensusFor(expr)
+                    i = nextOp - 1
+                    break tSwitch
                 }
                 else {
                     print("Syntax error - consensus for nil")
@@ -5058,19 +5266,65 @@ AS.2,B.1.1.317.2
                         break
                     }
                 }
-                let (_,expr) = parse(Array(tokens[next..<tokens.count]),node: nil)
+                
+                // check for operator
+                // pattern x * pattern/consensus: parse to operator
+                // pattern x * cluster, other: parse to end
+                var nextOp : Int = next
+                nextOpLoop: while nextOp < tokens.count {
+                    switch tokens[nextOp] {
+                    case .plus, .minus, .multiply:
+                        break nextOpLoop
+                    default:
+                        break
+                    }
+                    nextOp += 1
+                }
+                if nextOp < tokens.count - 1 {
+                    switch tokens[nextOp+1] {
+                    case let .textBlock(identifier):
+                        if clusters[identifier] != nil {
+                            nextOp = tokens.count
+                        }
+                        else if patterns[identifier] != nil {
+                            // parse to op
+                        }
+                        else if VDB.isPattern(identifier, vdb: self) {
+                            // parse to op
+                        }
+                        else {
+                            nextOp = tokens.count
+                        }
+                    case .consensusFor:
+                        // parse to op
+                        break
+                    case .patternsIn:
+                        // parse to op
+                        break
+                    default:
+                        nextOp = tokens.count
+                    }
+                }
+                else {
+                    nextOp = tokens.count
+                }
+                let (_,expr) = parse(Array(tokens[next..<nextOp]),node: nil)
                 if let expr = expr {
-                    return ([],Expr.PatternsIn(expr,listSize))
+                    precedingExpr = Expr.PatternsIn(expr,listSize)
+                    i = nextOp - 1
+                    break tSwitch
                 }
                 else {
                     print("Syntax error - patterns in nil")
                 }
             case .from:
-                if let precedingExpr = precedingExpr {
+                if let precedingExprTmp = precedingExpr {
                     if i+1 < tokens.count {
                         switch tokens[i+1] {
                         case let .textBlock(identifier):
-                            return ([],Expr.From(precedingExpr, Expr.Identifier(identifier)))
+                            precedingExpr = Expr.From(precedingExprTmp, Expr.Identifier(identifier))
+                            i += 1
+                            break tSwitch
                         default:
                         break
                         }
@@ -5081,7 +5335,9 @@ AS.2,B.1.1.317.2
                     if i+1 < tokens.count {
                         switch tokens[i+1] {
                         case let .textBlock(identifier):
-                            return ([],Expr.From(allIsolates, Expr.Identifier(identifier)))
+                            precedingExpr = Expr.From(allIsolates, Expr.Identifier(identifier))
+                            i += 1
+                            break tSwitch
                         default:
                         break
                         }
@@ -5089,7 +5345,14 @@ AS.2,B.1.1.317.2
                 }
                 print("Syntax error - from command")
                 return ([],nil)
-            case .containing:
+            case .containing, .notContaining:
+                let isContainingCmd : Bool
+                switch t {
+                case .containing:
+                    isContainingCmd = true
+                default:
+                    isContainingCmd = false
+                }
                 var n : Int = 0
                 var shift : Int = 0
                 if tokens.count > i+2 {
@@ -5103,7 +5366,27 @@ AS.2,B.1.1.317.2
                         break
                     }
                 }
-                let (_,expr) = parse(Array(tokens[i+1+shift..<tokens.count]),node: nil)
+                var newi : Int = tokens.count-1
+                if i+1+shift < newi+1 {
+                    switch tokens[i+1+shift] {
+                    case .textBlock:
+                        var operatorFollowing : Bool = false
+                        if i+2+shift < newi+1 {
+                            switch tokens[i+2+shift] {
+                            case .plus, .minus, .multiply:
+                                operatorFollowing =  true
+                            default:
+                                break
+                            }
+                        }
+                        if !operatorFollowing {
+                            newi = i+1+shift
+                        }
+                    default:
+                        break
+                    }
+                }
+                let (_,expr) = parse(Array(tokens[i+1+shift..<newi+1]),node: nil)
                 if let expr = expr {
                     // check if expr is a valid pattern
                     var precheckOkay : Bool = true
@@ -5118,52 +5401,85 @@ AS.2,B.1.1.317.2
                         break
                     }
                     if precheckOkay == true {
-                        if let precedingExpr = precedingExpr {
-                            return ([],Expr.Containing(precedingExpr, expr, n))
+                        if let precedingExprTmp = precedingExpr {
+                            if isContainingCmd {
+                                precedingExpr = Expr.Containing(precedingExprTmp, expr, n)
+                            }
+                            else {
+                                precedingExpr = Expr.NotContaining(precedingExprTmp, expr, n)
+                            }
+                            i = newi
+                            break tSwitch
                         }
                         else {
-                            return ([],Expr.Containing(allIsolates, expr, n))
+                            if isContainingCmd {
+                                precedingExpr = Expr.Containing(allIsolates, expr, n)
+                            }
+                            else {
+                                precedingExpr = Expr.NotContaining(allIsolates, expr, n)
+                            }
+                            i = newi
+                            break tSwitch
                         }
                     }
                 }
-                print("Syntax error - containing command")
+                if isContainingCmd {
+                    print("Syntax error - containing command")
+                }
+                else {
+                    print("Syntax error - not containing command")
+                }
                 return([],nil)
+/*
             case .notContaining:
-                if let precedingExpr = precedingExpr {
+                if let precedingExprTmp = precedingExpr {
                     let (_,expr) = parse(Array(tokens[i+1..<tokens.count]),node: nil)
                     if let expr = expr {
-                        return ([],Expr.NotContaining(precedingExpr, expr))
+                        precedingExpr = Expr.NotContaining(precedingExprTmp, expr, 0)
+                        i = tokens.count
+                        break tSwitch
                     }
                 }
                 else {
                     // assume all isolates
                     let (_,expr) = parse(Array(tokens[i+1..<tokens.count]),node: nil)
                     if let expr = expr {
-                        return ([],Expr.NotContaining(allIsolates, expr))
+                        precedingExpr = Expr.NotContaining(allIsolates, expr, 0)
+                        i = tokens.count
+                        break tSwitch
                     }
                 }
                 print("Syntax error - not containing command")
                 return([],nil)
+*/
             case .before:
                 if let date = tokens[i+1].dateFromToken(vdb: self) {
-                    if let precedingExpr = precedingExpr {
-                        return ([],Expr.Before(precedingExpr, date))
+                    if let precedingExprTmp = precedingExpr {
+                        precedingExpr = Expr.Before(precedingExprTmp, date)
+                        i += 1
+                        break tSwitch
                     }
                     else {
                         // assume all isolates
-                        return ([],Expr.Before(allIsolates, date))
+                        precedingExpr = Expr.Before(allIsolates, date)
+                        i += 1
+                        break tSwitch
                     }
                 }
                 print("Syntax error - before command")
                 return([],nil)
             case .after:
                 if let date = tokens[i+1].dateFromToken(vdb: self) {
-                    if let precedingExpr = precedingExpr {
-                        return ([],Expr.After(precedingExpr, date))
+                    if let precedingExprTmp = precedingExpr {
+                        precedingExpr = Expr.After(precedingExprTmp, date)
+                        i += 1
+                        break tSwitch
                     }
                     else {
                         // assume all isolates
-                        return ([],Expr.After(allIsolates, date))
+                        precedingExpr = Expr.After(allIsolates, date)
+                        i += 1
+                        break tSwitch
                     }
                 }
                 print("Syntax error - after command")
@@ -5172,12 +5488,16 @@ AS.2,B.1.1.317.2
                 if tokens.count > i+1 {
                     switch tokens[i+1] {
                     case let .textBlock(identifier):
-                        if let precedingExpr = precedingExpr {
-                            return ([],Expr.Named(precedingExpr, identifier))
+                        if let precedingExprTmp = precedingExpr {
+                            precedingExpr = Expr.Named(precedingExprTmp, identifier)
+                            i += 1
+                            break tSwitch
                         }
                         else {
                             // assume all isolates
-                            return ([],Expr.Named(allIsolates, identifier))
+                            precedingExpr = Expr.Named(allIsolates, identifier)
+                            i += 1
+                            break tSwitch
                         }
                     default:
                         break
@@ -5189,12 +5509,16 @@ AS.2,B.1.1.317.2
                 if tokens.count > i+1 {
                     switch tokens[i+1] {
                     case let .textBlock(identifier):
-                        if let precedingExpr = precedingExpr {
-                            return ([],Expr.Lineage(precedingExpr, identifier))
+                        if let precedingExprTmp = precedingExpr {
+                            precedingExpr = Expr.Lineage(precedingExprTmp, identifier)
+                            i += 1
+                            break tSwitch
                         }
                         else {
                             // assume all isolates
-                            return ([],Expr.Lineage(allIsolates, identifier))
+                            precedingExpr = Expr.Lineage(allIsolates, identifier)
+                            i += 1
+                            break tSwitch
                         }
                     default:
                         break
@@ -5207,13 +5531,17 @@ AS.2,B.1.1.317.2
             i += 1
         } while (tokens.count > 0) && tokens.count > i
         
+        if let precedingExpr = precedingExpr {
+            return ([],precedingExpr)
+        }
+        
         return ([],node)
     }
     
     // interprets a line of input entered by user:
     //    preprocess line, handle direct commands, process line, tokenize, parse, evaluate
     // returns (shouldContinue,printHistory)
-    func interpretInput(_ input: String) -> (Bool,Bool) {
+    func interpretInput(_ input: String) -> (Bool,Bool,Int?) {
         let line : String = preprocessLine(input)
         let lowercaseLine : String = line.lowercased()
         
@@ -5236,14 +5564,21 @@ AS.2,B.1.1.317.2
                 }
                 task.waitUntilExit()
                 print()
-                return (true,false) // continue mainRunLoop
+                return (true,false,nil) // continue mainRunLoop
             }
         }
-                
+        
+        func printSwitch(_ switchCommand: String, _ value: Bool) {
+            let switchName : String = switchCommand.components(separatedBy: " ")[0]
+            let state : String = value ? "on" : "off"
+            print("\(switchName) is \(state)")
+        }
+        
+        var returnInt : Int? = nil
         switch lowercaseLine {
         case "quit", "exit", controlD, controlC:
             print("")
-            return (false,false) // break mainRunLoop
+            return (false,false,nil) // break mainRunLoop
         case "":
             break
         case "list clusters", "clusters":
@@ -5260,6 +5595,8 @@ pattern = group of mutations            [ ] = optional
 "world"  = all viruses in database        -> result
 
 To define a variable for a cluster or pattern:  <name> = cluster or pattern
+To compare two clusters or patterns: <item1> == <item2>
+To count a cluster or pattern in a variable: count <variable name>
 Set operations +, -, and * (intersection) can be applied to clusters or patterns
 If no cluster is entered, all viruses will be used ("world")
 
@@ -5295,6 +5632,9 @@ license
 history
 load <vdb database file>
 char <Pango lineage>    prints characteristics of lineage
+testvdb
+save <cluster name> <file name>
+load <cluster name> <file name>
 quit
 
 Program switches:
@@ -5351,28 +5691,38 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
         case "debug", "debug on":
             debug = true
+            printSwitch(lowercaseLine,debug)
         case "debug off":
             debug = false
+            printSwitch(lowercaseLine,debug)
         case "listaccession":
             printISL = true
+            printSwitch(lowercaseLine,printISL)
         case "listaccession off":
             printISL = false
+            printSwitch(lowercaseLine,printISL)
         case "listaveragemutations":
             printAvgMut = true
+            printSwitch(lowercaseLine,printAvgMut)
         case "listaveragemutations off":
             printAvgMut = false
+            printSwitch(lowercaseLine,printAvgMut)
         case "includesublineages":
             includeSublineages = true
+            printSwitch(lowercaseLine,includeSublineages)
         case "includesublineages off":
             includeSublineages = false
+            printSwitch(lowercaseLine,includeSublineages)
         case "simplenuclpatterns":
             simpleNuclPatterns = true
+            printSwitch(lowercaseLine,simpleNuclPatterns)
         case "simplenuclpatterns off":
             simpleNuclPatterns = false
+            printSwitch(lowercaseLine,simpleNuclPatterns)
         case "list proteins", "proteins":
-            VDB.listProteins(vdb: self)   
+            VDB.listProteins(vdb: self)
         case "history":
-            return (true,true)
+            return (true,true,nil)
         case "clear":
             let cls = Process()
             let out = Pipe()
@@ -5387,19 +5737,85 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
             cls.waitUntilExit()
             print (String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: String.Encoding.utf8) ?? "")
 //                print("\u{001B}[2J")
+        case _ where lowercaseLine.hasPrefix("clear "):
+            let variableNameString : String = line.replacingOccurrences(of: "clear ", with: "", options: .caseInsensitive, range: nil)
+            let variableNames : [String] = variableNameString.components(separatedBy: " ")
+            for variableName in variableNames {
+                if clusters[variableName] != nil {
+                    clusters[variableName] = nil
+                    print("Cluster \(variableName) cleared")
+                }
+                else if patterns[variableName] != nil {
+                    patterns[variableName] = nil
+                    print("Pattern \(variableName) cleared")
+                }
+                else {
+                    print("Error - no variable with name \(variableName)")
+                }
+            }
         case _ where lowercaseLine.hasPrefix("sort "):
             let clusterName : String = line.replacingOccurrences(of: "sort ", with: "", options: .caseInsensitive, range: nil)
             if var cluster = clusters[clusterName] {
                 cluster.sort { $0.date < $1.date }
                 clusters[clusterName] = cluster
+                print("\(clusterName) sorted by date")
             }
         case _ where lowercaseLine.hasPrefix("load "):
             let dbFileName : String = line.replacingOccurrences(of: "load ", with: "", options: .caseInsensitive, range: nil)
-            isolates = VDB.loadMutationDB(dbFileName)
-            clusters[isolatesKeyword] = isolates
+            let loadCmdParts : [String] = dbFileName.components(separatedBy: " ")
+            switch loadCmdParts.count {
+            case 1:
+                isolates = VDB.loadMutationDB(dbFileName)
+                clusters[isolatesKeyword] = isolates
+            case 2:
+                let clusterName : String = loadCmdParts[0]
+                let fileName : String = loadCmdParts[1]
+                if patterns[clusterName] == nil {
+                    VDB.loadCluster(clusterName, fromFile: fileName, vdb: self)
+                }
+            default:
+                break
+            }
+        case _ where lowercaseLine.hasPrefix("save "):
+            let names : String = line.replacingOccurrences(of: "save ", with: "", options: .caseInsensitive, range: nil)
+            let saveCmdParts : [String] = names.components(separatedBy: " ")
+            switch saveCmdParts.count {
+            case 2:
+                let clusterName : String = saveCmdParts[0]
+                let fileName : String = "\(basePath)/\(saveCmdParts[1])"
+                if let cluster = clusters[clusterName] {
+                    if !cluster.isEmpty {
+                        VDB.saveCluster(cluster, toFile: fileName, vdb:self)
+                    }
+                }
+            default:
+                break
+            }
+
         case _ where (lowercaseLine.hasPrefix("char ") || lowercaseLine.hasPrefix("characteristics ")):
             let lineageName : String = line.replacingOccurrences(of: "char ", with: "", options: .caseInsensitive, range: nil).replacingOccurrences(of: "characteristics ", with: "", options: .caseInsensitive, range: nil).replacingOccurrences(of: "lineage ", with: "", options: .caseInsensitive, range: nil)
             VDB.characteristicsOfLineage(lineageName, inCluster:isolates, vdb: self)
+        case "testvdb":
+            testvdb()
+        case _ where lowercaseLine.hasPrefix("count "):
+            let clusterName : String = line.replacingOccurrences(of: "count ", with: "", options: .caseInsensitive, range: nil)
+            if let cluster = clusters[clusterName] {
+                let clusterCount : Int = cluster.count
+                returnInt = clusterCount
+                print("\(clusterName) count = \(clusterCount) viruses")
+            }
+            else if let pattern = patterns[clusterName] {
+                let patternCount : Int = pattern.count
+                returnInt = patternCount
+                print("\(clusterName) count = \(patternCount) mutations")
+            }
+        case "mode":
+            if nucleotideMode {
+                print("Nucleotide mode")
+            }
+            else {
+                print("Protein mode")
+            }
         default:
             let parts : [String] = processLine(line)
             
@@ -5413,7 +5829,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
                         else {
                             resType = "Nucleotide"
                         }
-                        print("\(resType) \(VDB.refAtPosition(pos)) at position \(pos) in WH-01 SARS-CoV-2 reference")
+                        print("\(resType) \(VDB.refAtPosition(pos)) at position \(pos) in SARS-CoV-2 reference sequence")
                         VDB.infoForPosition(pos, inCluster: isolates)
                     }
                 }
@@ -5429,15 +5845,17 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
             }
             let result : (remaining:[Token], subexpr:Expr?) = parse(tokens, topLevel: true)
             if debug {
+                print("AST = \(result.subexpr ?? Expr.Nil)")
                 print("starting evaluation")
             }
             let returnValue : Expr? = result.subexpr?.eval(caller: nil, vdb: self)
             if let value = returnValue?.number() {
                 print("\(value)")
+                returnInt = value
             }
             print("")
         }
-        return (true,false)
+        return (true,false,returnInt)
     }
     
     // MARK: - main run loop
@@ -5467,7 +5885,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
                     print(error)
                 }
             }
-            let (shouldContinue,printHistory) : (Bool,Bool) = interpretInput(input)
+            let (shouldContinue,printHistory,_) : (Bool,Bool,Int?) = interpretInput(input)
             if printHistory {
                 let historyList : [String] = ln.historyList()
                 for historyItem in historyList {
@@ -5481,12 +5899,158 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
         
     }
     
+    // MARK: - testing vdb
+    
+    func testvdb() {
+        print("Testing vdb program ...")
+        var testsPassed : Int = 0
+        var testsRun : Int = 0
+        let sortCmds : [String] = ["> 5","from ny","after 2/1/21","w/ E484K","w/o D253G"]
+        var prevCluster : String = ""
+        for i in 0..<sortCmds.count {
+            let newClusterName : String =  "s\(i+1)"
+            let cmdString : String  = "\(newClusterName) = \(prevCluster) \(sortCmds[i])"
+            print("VDB> \(cmdString)")
+            _ = interpretInput(cmdString)
+            prevCluster = newClusterName
+        }
+        
+        func permutations<T>(_ a: [T], _ n: Int, _ running: inout [[T]]) {
+            // recursive algorithm for permutations bbby Niklaus Wirth
+            if n == 0 {
+                running.append(a)
+            }
+            else {
+                var a = a
+                permutations(a, n - 1, &running)
+                for i in 0..<n {
+                    a.swapAt(i, n)
+                    permutations(a, n - 1, &running)
+                    a.swapAt(i, n)
+                }
+            }
+        }
+        
+        var cmdPerms : [[String]] = []
+        permutations(sortCmds, sortCmds.count-1, &cmdPerms)
+        print("cmdPerms.count = \(cmdPerms.count)")
+        for i in 0..<cmdPerms.count {
+            let clusterName : String = "q\(i+1)"
+            let cmdString : String = clusterName + " = " + cmdPerms[i].joined(separator: " ")
+            print("VDB> \(cmdString)")
+            _ = interpretInput(cmdString)
+            let cmdString2 : String = clusterName + " == " + prevCluster
+            print("VDB> \(cmdString2)")
+            let (_,_,returnInt) = interpretInput(cmdString2)
+            testsRun += 1
+            if let returnInt = returnInt {
+                testsPassed += returnInt
+            }
+        }
+        // complementation tests
+        
+        func compTest(_ comp1: String, _ comp2: String) {
+            let clusterName1 : String = "c1_\(testsRun)"
+            let clusterName2 : String = "c2_\(testsRun)"
+            let clusterName3 : String = "c3_\(testsRun)"
+            let cmd1 : String = "\(clusterName1) = \(comp1)"
+            let cmd2 : String = "\(clusterName2) = \(comp2)"
+            print("VDB> \(cmd1)")
+            _ = interpretInput(cmd1)
+            print("VDB> \(cmd2)")
+            _ = interpretInput(cmd2)
+            let cmd11 : String = "count \(clusterName1)"
+            let cmd22 : String = "count \(clusterName2)"
+            print("VDB> \(cmd11)")
+            let (_,_,count1) = interpretInput(cmd11)
+            print("VDB> \(cmd22)")
+            let (_,_,count2) = interpretInput(cmd22)
+            let cmd3 : String = "\(clusterName3) = \(clusterName1) * \(clusterName2)"
+            print("VDB> \(cmd3)")
+            _ = interpretInput(cmd3)
+            let cmd33 : String = "count \(clusterName3)"
+            print("VDB> \(cmd33)")
+            let (_,_,count3) = interpretInput(cmd33)
+            var passesTest : Bool = false
+            if let count1 = count1, let count2 = count2, let count3 = count3 {
+                passesTest = count1 != 0 && count2 != 0 && (count1+count2) == isolates.count && count3 == 0
+            }
+            testsRun += 1
+            if passesTest {
+                testsPassed += 1
+            }
+            print("Comp. test \(comp1) \(comp2) result: \(passesTest)")
+        }
+        let compPairs : [[String]] = [["w/ E484K","w/o E484K"],["before 2/15/21","after 2/14/21"],["> 4","< 5"],["lineage B.1.526","world - b.1.526"],["named NYC","world - named NYC"]]
+        for pair in compPairs {
+            compTest(pair[0],pair[1])
+        }
+        
+        let multSets : [String] = ["L5F T95I D253G D614G A701V","H69- V70- Y144- N501Y A570D D614G P681H T716I S982A D1118H"]
+        for mult in multSets {
+            let multParts : [String] = mult.components(separatedBy: " ")
+            prevCluster = ""
+            for i in 0..<multParts.count {
+                let newClusterName : String =  "m\(i+1)_\(testsRun)"
+                let cmdString : String  = "\(newClusterName) = \(prevCluster) w/ \(multParts[i])"
+                print("VDB> \(cmdString)")
+                _ = interpretInput(cmdString)
+                prevCluster = newClusterName
+            }
+            let clusterName : String = "mm_\(testsRun)"
+            let cmdString : String = clusterName + " = w/ " + mult
+            print("VDB> \(cmdString)")
+            _ = interpretInput(cmdString)
+            let cmdString2 : String = clusterName + " == " + prevCluster
+            print("VDB> \(cmdString2)")
+            let (_,_,returnInt) = interpretInput(cmdString2)
+            testsRun += 1
+            if let returnInt = returnInt {
+                testsPassed += returnInt
+            }
+        }
+        
+        // equality tests
+        func equalityTest(_ cmds1: String, _ cmds2: String) {
+            let cmds1 : String = cmds1.replacingOccurrences(of: "_X", with: "_\(testsRun)")
+            let cmds2 : String = cmds2.replacingOccurrences(of: "_X", with: "_\(testsRun)")
+            let cmd1Array : [String] = cmds1.components(separatedBy: ";")
+            let cmd2Array : [String] = cmds2.components(separatedBy: ";")
+            let clusterName1 : String = cmd1Array[cmd1Array.count-1].components(separatedBy: " ")[0]
+            let clusterName2 : String = cmd2Array[cmd2Array.count-1].components(separatedBy: " ")[0]
+            for cmd in cmd1Array {
+                print("VDB> \(cmd)")
+                _ = interpretInput(cmd)
+            }
+            for cmd in cmd2Array {
+                print("VDB> \(cmd)")
+                _ = interpretInput(cmd)
+            }
+            let cmdString : String = clusterName1 + " == " + clusterName2
+            print("VDB> \(cmdString)")
+            let (_,_,returnInt) = interpretInput(cmdString)
+            testsRun += 1
+            if let returnInt = returnInt {
+                testsPassed += returnInt
+            }
+            let passesTest : Bool = returnInt == 1
+            print("Equality test \(cmds1) \(cmds2) result: \(passesTest)")
+        }
+        let eqTests : [(String,String)] = [("a_X = w/ E484K","b_X = with e484k"),("a_X = b.1.526.1","b_X = lineage b.1.526;includeSublineages off;c_X = b.1.526;d_X = b.1.526.2;e_X = b_X - c_X - d_X")]
+        for eqTest in eqTests {
+            equalityTest(eqTest.0,eqTest.1)
+        }
+        
+        print("Tests complete: \(testsPassed)/\(testsRun) passed")
+    }
+    
 }
 
 // MARK: - Tokenizing and parsing types
 
 enum Token {
     case equal
+    case equality
     case plus
     case minus
     case multiply
@@ -5516,6 +6080,8 @@ enum Token {
                 switch self {
                 case .equal:
                     return "_=_"
+                case .equality:
+                    return "_==_"
                 case .plus:
                     return "_+_"
                 case .minus:
@@ -5586,6 +6152,7 @@ indirect enum Expr {
     case Cluster([Isolate])            //  --> Cluster
     case Pattern([Mutation])           //  --> Pattern
     case Assignment(Expr,Expr)         // Identifier, Cluster or Pattern   --> nil
+    case Equality(Expr,Expr)           // Identifier, Cluster or Pattern   --> Expr(Identifier(0 or 1))
     case Plus(Expr,Expr)               // Cluster or Pattern x2            --> Expr(Cluster or Pattern)
     case Minus(Expr,Expr)              // Cluster or Pattern x2            --> Expr(Cluster or Pattern)
     case Multiply(Expr,Expr)           // Cluster or Pattern x2            --> Expr(Cluster or Pattern)
@@ -5595,7 +6162,7 @@ indirect enum Expr {
     case PatternsIn(Expr,Int)          // Cluster                          --> Pattern
     case From(Expr,Expr)               // Cluster, Identifier(country)     --> Cluster
     case Containing(Expr,Expr,Int)     // Cluster, Pattern                 --> Cluster
-    case NotContaining(Expr,Expr)      // Cluster, Pattern                 --> Cluster
+    case NotContaining(Expr,Expr,Int)  // Cluster, Pattern                 --> Cluster
     case Before(Expr,Date)             // Cluster                          --> Cluster
     case After(Expr,Date)              // Cluster                          --> Cluster
     case Named(Expr,String)            // Cluster                          --> Cluster
@@ -5617,6 +6184,23 @@ indirect enum Expr {
         case let .Assignment(identifierExpr, expr2):
             switch identifierExpr {
             case let .Identifier(identifier):
+                // validate identifier - disallow countries, states, lineages, and integers
+                if identifier.isEmpty {
+                    print("Error - no variable name for assignment statement")
+                    break
+                }
+                else if vdb.isNumber(identifier) {
+                    print("Error - numbers are not valid variable names")
+                    break
+                }
+                else if vdb.isCountryOrState(identifier) {
+                    print("Error - country/state names are not valid variable names")
+                    break
+                }
+                else if identifier.contains(".") {
+                    print("Error - variable names cannot contain periods")
+                    break
+                }
                 let expr3 = expr2.eval(caller: self, vdb: vdb)
                 switch expr3 {
                 case let .Cluster(cluster):
@@ -5640,6 +6224,7 @@ indirect enum Expr {
                 case let .Identifier(identifier2):
                     if identifier ~~ "minimumPatternsCount" && vdb.isNumber(identifier2) {
                         vdb.minimumPatternsCount = Int(identifier2) ?? 0
+                        print("minimumPatternsCount set to \(vdb.minimumPatternsCount)")
                         break
                     }
                     if VDB.isPattern(identifier2, vdb: vdb) {
@@ -5679,84 +6264,174 @@ indirect enum Expr {
                 break
             }
             return nil
+        case let .Equality(expr1, expr2):
+            var equal : Bool = false
+            let evalExp1 : Expr? = expr1.eval(caller: nil, vdb: vdb)
+            let evalExp2 : Expr? = expr2.eval(caller: nil, vdb: vdb)
+            if var evalExp1 = evalExp1, var evalExp2 = evalExp2 {
+                switch evalExp1 {
+                case let .Identifier(identifier):
+                    if let cluster = vdb.clusters[identifier] {
+                        evalExp1 = Expr.Cluster(cluster)
+                    }
+                    else if let pattern = vdb.patterns[identifier] {
+                        evalExp1 = Expr.Pattern(pattern)
+                    }
+                default:
+                    break
+                }
+                switch evalExp2 {
+                case let .Identifier(identifier):
+                    if let cluster = vdb.clusters[identifier] {
+                        evalExp2 = Expr.Cluster(cluster)
+                    }
+                    else if let pattern = vdb.patterns[identifier] {
+                        evalExp2 = Expr.Pattern(pattern)
+                    }
+                default:
+                    break
+                }
+                switch evalExp1 {
+                case let .Cluster(cluster1):
+                    switch evalExp2 {
+                    case let .Cluster(cluster2):
+                        if cluster1.count == cluster2.count {
+                            let c1sort : [Isolate] = cluster1.sorted { $0.epiIslNumber < $1.epiIslNumber }
+                            let c2sort : [Isolate] = cluster2.sorted { $0.epiIslNumber < $1.epiIslNumber }
+                            equal = c1sort == c2sort
+                        }
+                    default:
+                        break
+                    }
+                case let .Pattern(pattern1):
+                    switch evalExp2 {
+                    case let .Pattern(pattern2):
+                        if pattern1.count == pattern2.count {
+                            let p1sort : [Mutation] = pattern1.sorted { $0.pos < $1.pos }
+                            let p2sort : [Mutation] = pattern2.sorted { $0.pos < $1.pos }
+                            equal = p1sort == p2sort
+                        }
+                    default:
+                        break
+                    }
+                case .Identifier:
+                    if let value1 = evalExp1.number(), let value2 = evalExp2.number() {
+                        equal = value1 == value2
+                    }
+                default:
+                    break
+                }
+            }
+            print("Equality result: ", terminator:"")
+            let  returnValue :  Expr
+            if equal {
+                returnValue = Expr.Identifier("1")
+            }
+            else {
+                returnValue = Expr.Identifier("0")
+            }
+            return returnValue
         case let .Plus(expr1,expr2):
-            let cluster1 : [Isolate] = expr1.clusterFromExpr(vdb: vdb)
-            let cluster2 : [Isolate] = expr2.clusterFromExpr(vdb: vdb)
-            if cluster1.count != 0 || cluster2.count != 0 {
-                var plusCluster : Set<Isolate> = Set(cluster1)
-                plusCluster.formUnion(cluster2)
-                print("Sum of clusters has \(plusCluster.count) isolates")
-                return Expr.Cluster(Array(plusCluster))
-            }
-            let pattern1 : [Mutation] = expr1.patternFromExpr(vdb: vdb)
-            let pattern2 : [Mutation] = expr2.patternFromExpr(vdb: vdb)
-            if pattern1.count != 0 || pattern2.count != 0 {
-                var plusPatternSet : Set<Mutation> = Set(pattern1)
-                for mut in pattern2 {
-                    plusPatternSet.insert(mut)
+            let evalExp1 : Expr? = expr1.eval(caller: nil, vdb: vdb)
+            let evalExp2 : Expr? = expr2.eval(caller: nil, vdb: vdb)
+            if let evalExp1 = evalExp1, let evalExp2 = evalExp2 {
+                let cluster1 : [Isolate] = evalExp1.clusterFromExpr(vdb: vdb)
+                let cluster2 : [Isolate] = evalExp2.clusterFromExpr(vdb: vdb)
+                if cluster1.count != 0 || cluster2.count != 0 {
+                    var plusCluster : Set<Isolate> = Set(cluster1)
+                    plusCluster.formUnion(cluster2)
+                    print("Sum of clusters has \(plusCluster.count) isolates")
+                    return Expr.Cluster(Array(plusCluster))
                 }
-                var plusPattern : [Mutation] = Array(plusPatternSet)
-                plusPattern.sort  { $0.pos < $1.pos }
-                print("Sum of patterns has \(plusPattern.count) mutations")
-                return Expr.Pattern(plusPattern)
+                let pattern1 : [Mutation] = evalExp1.patternFromExpr(vdb: vdb)
+                let pattern2 : [Mutation] = evalExp2.patternFromExpr(vdb: vdb)
+                if pattern1.count != 0 || pattern2.count != 0 {
+                    var plusPatternSet : Set<Mutation> = Set(pattern1)
+                    for mut in pattern2 {
+                        plusPatternSet.insert(mut)
+                    }
+                    var plusPattern : [Mutation] = Array(plusPatternSet)
+                    plusPattern.sort  { $0.pos < $1.pos }
+                    print("Sum of patterns has \(plusPattern.count) mutations")
+                    return Expr.Pattern(plusPattern)
+                }
+                if let value1 = evalExp1.number(), let value2 = evalExp2.number() {
+                    return Expr.Identifier("\(value1 + value2)")
+                }
+                return nil
             }
-            if let value1 = expr1.number(), let value2 = expr2.number() {
-                return Expr.Identifier("\(value1 + value2)")
+            else {
+                print("Error in addition operator - nil value")
+                return nil
             }
-            return nil
-
         case let .Minus(expr1,expr2):
-            let cluster1 : [Isolate] = expr1.clusterFromExpr(vdb: vdb)
-            let cluster2 : [Isolate] = expr2.clusterFromExpr(vdb: vdb)
-            if cluster1.count != 0 || cluster2.count != 0 {
-                // this has much higher performance than using firstIndex and removing. but loses order
-                let cluster1Set : Set<Isolate> = Set(cluster1)
-                let minusCluster : [Isolate] = Array(cluster1Set.subtracting(cluster2))
-                print("Difference of clusters has \(minusCluster.count) isolates")
-                return Expr.Cluster(minusCluster)
-            }
-            let pattern1 : [Mutation] = expr1.patternFromExpr(vdb: vdb)
-            let pattern2 : [Mutation] = expr2.patternFromExpr(vdb: vdb)
-            if pattern1.count != 0 || pattern2.count != 0 {
-                var minusPattern : [Mutation] = pattern1
-                for mut in pattern2 {
-                    if let index = minusPattern.firstIndex(of: mut) {
-                        minusPattern.remove(at: index)
-                    }
+            let evalExp1 : Expr? = expr1.eval(caller: nil, vdb: vdb)
+            let evalExp2 : Expr? = expr2.eval(caller: nil, vdb: vdb)
+            if let evalExp1 = evalExp1, let evalExp2 = evalExp2 {
+                let cluster1 : [Isolate] = evalExp1.clusterFromExpr(vdb: vdb)
+                let cluster2 : [Isolate] = evalExp2.clusterFromExpr(vdb: vdb)
+                if cluster1.count != 0 || cluster2.count != 0 {
+                    // this has much higher performance than using firstIndex and removing. but loses order
+                    let cluster1Set : Set<Isolate> = Set(cluster1)
+                    let minusCluster : [Isolate] = Array(cluster1Set.subtracting(cluster2))
+                    print("Difference of clusters has \(minusCluster.count) isolates")
+                    return Expr.Cluster(minusCluster)
                 }
-                print("Difference of patterns has \(minusPattern.count) mutations")
-                return Expr.Pattern(minusPattern)
+                let pattern1 : [Mutation] = evalExp1.patternFromExpr(vdb: vdb)
+                let pattern2 : [Mutation] = evalExp2.patternFromExpr(vdb: vdb)
+                if pattern1.count != 0 || pattern2.count != 0 {
+                    var minusPattern : [Mutation] = pattern1
+                    for mut in pattern2 {
+                        if let index = minusPattern.firstIndex(of: mut) {
+                            minusPattern.remove(at: index)
+                        }
+                    }
+                    print("Difference of patterns has \(minusPattern.count) mutations")
+                    return Expr.Pattern(minusPattern)
+                }
+                if let value1 = evalExp1.number(), let value2 = evalExp2.number() {
+                    return Expr.Identifier("\(value1 - value2)")
+                }
+                return nil
             }
-            if let value1 = expr1.number(), let value2 = expr2.number() {
-                return Expr.Identifier("\(value1 - value2)")
+            else {
+                print("Error in subtraction operator - nil value")
+                return nil
             }
-            return nil
-
         case let .Multiply(expr1,expr2):
-            let cluster1 : [Isolate] = expr1.clusterFromExpr(vdb: vdb)
-            let cluster2 : [Isolate] = expr2.clusterFromExpr(vdb: vdb)
-            if cluster1.count != 0 || cluster2.count != 0 {
-                let cluster1Set : Set<Isolate> = Set(cluster1)
-                let intersectionCluster : [Isolate] = Array(cluster1Set.intersection(cluster2))
-                print("Intersection of clusters has \(intersectionCluster.count) isolates")
-                return Expr.Cluster(intersectionCluster)
-            }
-            let pattern1 : [Mutation] = expr1.patternFromExpr(vdb: vdb)
-            let pattern2 : [Mutation] = expr2.patternFromExpr(vdb: vdb)
-            if pattern1.count != 0 || pattern2.count != 0 {
-                var intersectionPattern : [Mutation] = []
-                for mut in pattern1 {
-                    if pattern2.contains(mut) {
-                        intersectionPattern.append(mut)
-                    }
+            let evalExp1 : Expr? = expr1.eval(caller: nil, vdb: vdb)
+            let evalExp2 : Expr? = expr2.eval(caller: nil, vdb: vdb)
+            if let evalExp1 = evalExp1, let evalExp2 = evalExp2 {
+                
+                let cluster1 : [Isolate] = evalExp1.clusterFromExpr(vdb: vdb)
+                let cluster2 : [Isolate] = evalExp2.clusterFromExpr(vdb: vdb)
+                if cluster1.count != 0 || cluster2.count != 0 {
+                    let cluster1Set : Set<Isolate> = Set(cluster1)
+                    let intersectionCluster : [Isolate] = Array(cluster1Set.intersection(cluster2))
+                    print("Intersection of clusters has \(intersectionCluster.count) isolates")
+                    return Expr.Cluster(intersectionCluster)
                 }
-                 print("Intersection of patterns has \(intersectionPattern.count) mutations")
-                return Expr.Pattern(intersectionPattern)
+                let pattern1 : [Mutation] = evalExp1.patternFromExpr(vdb: vdb)
+                let pattern2 : [Mutation] = evalExp2.patternFromExpr(vdb: vdb)
+                if pattern1.count != 0 || pattern2.count != 0 {
+                    var intersectionPattern : [Mutation] = []
+                    for mut in pattern1 {
+                        if pattern2.contains(mut) {
+                            intersectionPattern.append(mut)
+                        }
+                    }
+                    print("Intersection of patterns has \(intersectionPattern.count) mutations")
+                    return Expr.Pattern(intersectionPattern)
+                }
+                if let value1 = evalExp1.number(), let value2 = evalExp2.number() {
+                    return Expr.Identifier("\(value1 * value2)")
+                }
+                return nil
             }
-            if let value1 = expr1.number(), let value2 = expr2.number() {
-                return Expr.Identifier("\(value1 * value2)")
+            else {
+                print("Error in intersection operator - nil value")
+                return nil
             }
-            return nil
         case let .GreaterThan(exprCluster, n):
             let cluster = exprCluster.clusterFromExpr(vdb: vdb)
             let cluster2 = cluster.filter { $0.mutations.count > n }
@@ -5802,13 +6477,13 @@ indirect enum Expr {
             let patternString = VDB.stringForMutations(pattern)
             let cluster2 = VDB.isolatesContainingMutations(patternString, inCluster: cluster, vdb: vdb, quiet: true, negate: false, n: n)
             return Expr.Cluster(cluster2)
-        case let .NotContaining(exprCluster, exprPattern):
+        case let .NotContaining(exprCluster, exprPattern, n):
             let cluster = exprCluster.clusterFromExpr(vdb: vdb)
             if vdb.nucleotideMode {
                 switch exprPattern {
                 case let .Identifier(identifier):
                     if VDB.isPattern(identifier, vdb: vdb) {
-                        let cluster2 = VDB.isolatesContainingMutations(identifier, inCluster: cluster, vdb: vdb, quiet: true, negate: true)
+                        let cluster2 = VDB.isolatesContainingMutations(identifier, inCluster: cluster, vdb: vdb, quiet: true, negate: true, n: n)
                         return Expr.Cluster(cluster2)
                     }
                 default:
@@ -5817,7 +6492,7 @@ indirect enum Expr {
             }
             let pattern = exprPattern.patternFromExpr(vdb: vdb)
             let patternString = VDB.stringForMutations(pattern)
-            let cluster2 = VDB.isolatesContainingMutations(patternString, inCluster: cluster, vdb: vdb, quiet: true, negate: true)
+            let cluster2 = VDB.isolatesContainingMutations(patternString, inCluster: cluster, vdb: vdb, quiet: true, negate: true, n: n)
             return Expr.Cluster(cluster2)
         case let .Before(exprCluster,date):
             let cluster = exprCluster.clusterFromExpr(vdb: vdb)
@@ -5883,7 +6558,7 @@ indirect enum Expr {
             }
         case let .Cluster(cluster):
             return cluster
-        case .From, .Containing, .NotContaining, .Before, .After, .GreaterThan, .LessThan, .Named,  .Lineage:
+        case .From, .Containing, .NotContaining, .Before, .After, .GreaterThan, .LessThan, .Named, .Lineage, .Minus, .Plus, .Multiply:
             let clusterExpr = self.eval(caller: self, vdb: vdb)
             switch clusterExpr {
             case let .Cluster(cluster):
@@ -5892,7 +6567,9 @@ indirect enum Expr {
                 break
             }
         default:
-            print("Error - not a cluster expression")
+            if vdb.debug {
+                print("Error - not a cluster expression")
+            }
             break
         }
         return []
@@ -5920,8 +6597,22 @@ indirect enum Expr {
             let cluster = exprCluster.clusterFromExpr(vdb: vdb)
             let pattern = VDB.frequentMutationPatternsInCluster(cluster, vdb: vdb, n: n)
             return pattern
+        case .Minus, .Plus, .Multiply:
+            if let patternCalc : Expr = eval(caller: nil, vdb: vdb) {
+                switch patternCalc {
+                case let .Pattern(pattern):
+                    return pattern
+                default:
+                    if vdb.debug {
+                        print("Error - not a pattern expression")
+                    }
+                    break
+                }
+            }
         default:
-            print("Error - not a pattern expression")
+            if vdb.debug {
+                print("Error - not a pattern expression")
+            }
             break
         }
         return []
