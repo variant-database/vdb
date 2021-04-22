@@ -10,12 +10,14 @@ If no cluster is entered, all viruses will be used ("world")
 
 ## Variables
 To define a variable for a cluster or pattern:  \<name> `=` cluster or pattern  
+To check whether two clusters or patterns are equal: \<item1> `==` \<item2>  
+To count a cluster or pattern in a variable: `count` \<variable name>  
 Set operations `+`, `-`, and `*` (intersection) can be applied to clusters or patterns  
 
 ## Filtering commands
 \<cluster>`from`\<country or state>    → cluster  
 \<cluster>`containing`[\<n>] \<pattern>  → cluster    alias `with`, `w/`  
-\<cluster>`not containing`\<pattern>   → cluster    alias `without`, `w/o` (full pattern)  
+\<cluster>`not containing`[\<n>] \<pattern> → cluster    alias `without`, `w/o` (full pattern)  
 \<cluster>`before`\<date>        → cluster  
 \<cluster>`after`\<date>         → cluster  
 \<cluster>`>` or `<` \<n>          → cluster    filter by # of mutations  
@@ -45,6 +47,9 @@ Set operations `+`, `-`, and `*` (intersection) can be applied to clusters or pa
 `history`  
 `load` \<vdb database file>  
 `char` \<Pango lineage>        prints characteristics of lineage  
+`testvdb`               runs built-in tests of **vdb**  
+`save` \<cluster name> \<file name>  
+`load` \<cluster name> \<file name>  
 `quit`  
 
 ## Program switches
