@@ -19,6 +19,8 @@ Installation instructions are given [here](https://github.com/variant-database/v
 ## Variables
 To define a variable for a cluster or pattern:  \<name> `=` cluster or pattern  
 Variable names are case sensitive and can included letters or numbers.  
+To check whether two clusters or patterns are equal: \<item1> `==` \<item2>  
+To count a cluster or pattern in a variable: `count` \<variable name>  
 
 ## Set operations
 Set operations `+`, `-`, and `*` (intersection) can be applied to clusters or patterns.   
@@ -43,9 +45,9 @@ Searches the specified cluster (or all viruses if no cluster is given) for virus
 
 Searches the specified cluster (or all viruses if no cluster is given) for viruses with the specified mutation pattern. By default only viruses with all the mutations of the specified pattern are returned. If an integer \<n> is specified in the search command, then viruses are returned only if they have at least \<n> of the mutations in the pattern.  
 <br />
-#### \<cluster>`not containing`\<pattern>   → cluster    alias `without`, `w/o` (full pattern)  
+#### \<cluster>`not containing`[\<n>] \<pattern>   → cluster    alias `without`, `w/o` (full pattern)  
 
-Searches the specified cluster (or all viruses if no cluster is given) for viruses without the specified mutation pattern. All viruses are returned except those that contain the complete mutation pattern.  
+Searches the specified cluster (or all viruses if no cluster is given) for viruses without the specified mutation pattern. All viruses are returned except those that contain the complete mutation pattern. If an integer \<n> is specified in the search command, then viruses are returned only if they have less than \<n> of the mutations in the pattern.  
 <br />
 #### \<cluster>`before`\<date>        → cluster  
 
@@ -144,6 +146,20 @@ Loads the specified **vdb** database file.
 #### `char` \<Pango lineage>        alias `characteristics`  
 
 Prints characteristic (consensus) mutations of the specified lineage. Mutations are shown in bold if they are not present in the parent lineage consensus pattern. This command does not include sublineages in its analysis.  
+
+<br />
+#### `testvdb` 
+
+Runs built-in tests of **vdb**.  
+<br />
+#### `save` \<cluster name> \<file name>  
+
+Saves a list of the viruses in the given cluster to the specified file.  
+<br />
+#### `load` \<cluster name> \<file name>  
+
+Loads the viruses in a file into a cluster with the specified name. If the mutation type (nucleotide/protein) does not match the program mode, the virus set is transformed to match the program mode.  
+
 <br />
 #### `quit`        alias `exit`, control-C, control-D  
 
