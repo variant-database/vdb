@@ -146,9 +146,8 @@ Loads the specified **vdb** database file.
 #### `char` \<Pango lineage>        alias `characteristics`  
 
 Prints characteristic (consensus) mutations of the specified lineage. Mutations are shown in bold if they are not present in the parent lineage consensus pattern. This command does not include sublineages in its analysis.  
-
 <br />
-#### `testvdb` 
+#### `testvdb`     
 
 Runs built-in tests of **vdb**.  
 <br />
@@ -159,7 +158,6 @@ Saves a list of the viruses in the given cluster to the specified file.
 #### `load` \<cluster name> \<file name>  
 
 Loads the viruses in a file into a cluster with the specified name. If the mutation type (nucleotide/protein) does not match the program mode, the virus set is transformed to match the program mode.  
-
 <br />
 #### `quit`        alias `exit`, control-C, control-D  
 
