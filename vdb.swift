@@ -1329,7 +1329,7 @@ enum Protein : Int, CaseIterable, Equatable, Comparable {
             case .NSP5:  return 10055...10972    // 3C-like proteinase 3CLpro
             case .NSP6:  return 10973...11842
             case .NSP7:  return 11843...12091
-            case .NSP8:  return 12092...12685    // Primase ORF8
+            case .NSP8:  return 12092...12685    // Primase
             case .NSP9:  return 12686...13024
             case .NSP10: return 13025...13441
             case .NSP11: return 13442...13480
@@ -1361,7 +1361,7 @@ enum Protein : Int, CaseIterable, Equatable, Comparable {
             case .NSP5:  return "3C-like proteinase 3CLpro"
             case .NSP6:  return ""
             case .NSP7:  return ""
-            case .NSP8:  return "Primase ORF8"
+            case .NSP8:  return "Primase"
             case .NSP9:  return ""
             case .NSP10: return ""
             case .NSP11: return ""
@@ -2919,7 +2919,7 @@ final class VDB {
     // returns isolates containing the mutations in the mutationPatternString
     // for non-zero n, returns isolates that have at least n of the mutations
     // if negate is true, returns isolates not having the mutation pattern
-    class func isolatesContainingMutations(_ mutationPatternString: String, inCluster isolates:[Isolate], vdb: VDB, quiet: Bool = false, negate: Bool = false, n: Int = 0) -> [Isolate] {
+    class func isolatesContainingMutations(_ mutationPatternString: String, inCluster isolates:[Isolate], vdb: VDB, quiet: Bool = false, negate: Bool = false, n: Int = 0, coercePMutationString: Bool = false) -> [Isolate] {
         let mutationsStrings : [String] = mutationPatternString.components(separatedBy: CharacterSet(charactersIn: " ,")).filter { $0.count > 0}
         var mutationPs : [MutationProtocol] = mutationsStrings.map { mutString in //Mutation(mutString: $0) }
             let mutParts = mutString.components(separatedBy: CharacterSet(charactersIn: pMutationSeparator))
@@ -3041,7 +3041,7 @@ final class VDB {
                 proteinMutationsForNuclPattern(mutations)
                 vdb.printProteinMutations = false
             }
-            else if vdb.printProteinMutations && mutationPs.count == 1 && !mut_isolates.isEmpty {
+            else if (vdb.printProteinMutations || coercePMutationString) && mutationPs.count == 1 && !mut_isolates.isEmpty {
                 var pMutationString : String = ""
                 if let pMutation = mutationPs[0] as? PMutation {
                     pMutationString = pMutation.string
@@ -3051,21 +3051,32 @@ final class VDB {
                         pMutationString = "Spike:\(plainMutation.string)"
                     }
                 }
+                var bestSet : [Mutation] = []
+                var bestFrac : Double = 0
                 for nMutations in nMutationSets[0] {
                     let subCount : Int = mut_isolates.filter { $0.containsMutations(nMutations, 0) }.count
                     if subCount == 0 {
                         continue
+                    }
+                    let frac : Double = Double(subCount)/Double(mut_isolates.count)
+                    if frac > bestFrac || (frac == bestFrac && bestSet.count > nMutations.count) {
+                        bestFrac = frac
+                        bestSet = nMutations
                     }
                     let fracString : String
                     if subCount == mut_isolates.count {
                         fracString = "100"
                     }
                     else {
-                        let frac : Double = Double(subCount)/Double(mut_isolates.count)
                         fracString = String(format: "%6.4f", frac*100.0)
                     }
                     let mutationString = stringForMutations(nMutations)
                     print("\(pMutationString)   \(mutationString)  \(fracString)%")
+                }
+                if coercePMutationString {
+                    print("Mutation \(mutationPatternString) converted to \(stringForMutations(bestSet))   fraction: \(String(format: "%6.4f", bestFrac*100.0))")
+                    let tmpIsolate : Isolate = Isolate(country: "", state: "", date: Date(), epiIslNumber: 0, mutations: bestSet)
+                    return [tmpIsolate]
                 }
             }
         }
@@ -3982,6 +3993,15 @@ AS.2,B.1.1.317.2
         }
     }
     
+    class func coercePMutationStringToMutations(_ pMutationString: String, vdb: VDB) -> [Mutation] {
+        let tmpCluster : [Isolate] = VDB.isolatesContainingMutations(pMutationString, inCluster: vdb.isolates, vdb: vdb, quiet: true, negate: false, n: 0, coercePMutationString: true)
+        if tmpCluster.isEmpty  {
+            print("Error - failed to convert \(pMutationString) to nucleotide mutation(s)")
+            return []
+        }
+        return tmpCluster[0].mutations
+    }
+    
     // prints protein mutations for a given mutation pattern
     class func proteinMutationsForNuclPattern(_ mutations: [Mutation]) {
         let tmpIsolate : Isolate = Isolate(country: "tmp", state: "tmp", date: Date(), epiIslNumber: 0, mutations: mutations)
@@ -4076,7 +4096,30 @@ AS.2,B.1.1.317.2
         mutations.sort { $0.pos < $1.pos }
         return mutations
     }
-        
+
+    // converts a string to a mutation pattern
+    class func mutationsFromStringCoercing(_ mutationPatternString: String, vdb: VDB) -> [Mutation] {
+        let mutationStrings : [String] = mutationPatternString.components(separatedBy: CharacterSet(charactersIn: " ,")).filter { $0.count > 0}
+        var mutations : [Mutation] = []
+        for mutationString in mutationStrings {
+            var coercePMutation : Bool = false
+                for sepChar in pMutationSeparator {
+                    if mutationString.contains(sepChar) {
+                        coercePMutation = true
+                        break
+                    }
+                }
+            if !coercePMutation {
+                mutations.append(Mutation(mutString: mutationString))
+            }
+            else {
+                mutations.append(contentsOf: coercePMutationStringToMutations(mutationString, vdb: vdb))
+            }
+        }
+        mutations.sort { $0.pos < $1.pos }
+        return mutations
+    }
+    
     // returns whether a given string is valid mutation pattern
     class func isPattern(_ string: String, vdb:VDB) -> Bool {
         let parts : [String] = string.uppercased().components(separatedBy: " ")
@@ -4141,15 +4184,23 @@ AS.2,B.1.1.317.2
     var patternNotes : [String:String] = [:]
     var countries : [String] = []
     var stateNamesPlus : [String] = []
-    var minimumPatternsCount : Int = 0
     var nucleotideMode : Bool = false           // set when data is loaded
+        
+    // switch defaults
+    static let defaultDebug : Bool = false
+    static let defaultPrintISL : Bool = false
+    static let defaultPrintAvgMut : Bool = false
+    static let defaultIncludeSublineages : Bool = true
+    static let defaultSimpleNuclPatterns : Bool = false
+    static let defaultMinimumPatternsCount : Int = 0
     
     // user adjustable switches:
-    var debug : Bool = false                    // print debug messages
-    var printISL : Bool = false                 // print GISAID accesion number
-    var printAvgMut : Bool = false              // print average number of mutations
-    var includeSublineages : Bool = true        // whether a lineage should include sublineages
-    var simpleNuclPatterns : Bool = false       // print simplified patterns for nucleotide mode
+    var debug : Bool = defaultDebug                               // print debug messages
+    var printISL : Bool = defaultPrintISL                         // print GISAID accesion number
+    var printAvgMut : Bool = defaultPrintAvgMut                   // print average number of mutations
+    var includeSublineages : Bool = defaultIncludeSublineages     // whether a lineage should include sublineages
+    var simpleNuclPatterns : Bool = defaultSimpleNuclPatterns     // print simplified patterns for nucleotide mode
+    var minimumPatternsCount : Int = defaultMinimumPatternsCount  // excludes smaller patterns from list
 
     // metadata information
     var metadata : [UInt8] = []
@@ -4311,6 +4362,34 @@ AS.2,B.1.1.317.2
                 print("\(patternName): \(mutationsString)  (\(value.count))")
             }
         }
+    }
+    
+    // reset user adjustable switches
+    func reset() {
+        debug = VDB.defaultDebug
+        printISL = VDB.defaultPrintISL
+        printAvgMut = VDB.defaultPrintAvgMut
+        includeSublineages = VDB.defaultIncludeSublineages
+        simpleNuclPatterns = VDB.defaultSimpleNuclPatterns
+        minimumPatternsCount = VDB.defaultMinimumPatternsCount
+    }
+    
+    // prints the current state of a switch
+    func printSwitch(_ switchCommand: String, _ value: Bool) {
+        let switchName : String = switchCommand.components(separatedBy: " ")[0]
+        let state : String = value ? "on" : "off"
+        print("\(switchName) is \(state)")
+    }
+    
+    // prints current switch settings
+    func settings() {
+        print("Settings for SARS-CoV-2 Variant Database  Version \(version)")
+        printSwitch("debug",debug)
+        printSwitch("listAccession",printISL)
+        printSwitch("listAverageMutations",printAvgMut)
+        printSwitch("includeSublineages",includeSublineages)
+        printSwitch("simpleNuclPatterns",simpleNuclPatterns)
+        print("minimumPatternsCount = \(minimumPatternsCount)")
     }
     
     // MARK: - main VDB methods
@@ -5567,13 +5646,7 @@ AS.2,B.1.1.317.2
                 return (true,false,nil) // continue mainRunLoop
             }
         }
-        
-        func printSwitch(_ switchCommand: String, _ value: Bool) {
-            let switchName : String = switchCommand.components(separatedBy: " ")[0]
-            let state : String = value ? "on" : "off"
-            print("\(switchName) is \(state)")
-        }
-        
+                
         var returnInt : Int? = nil
         switch lowercaseLine {
         case "quit", "exit", controlD, controlC:
@@ -5635,6 +5708,8 @@ char <Pango lineage>    prints characteristics of lineage
 testvdb
 save <cluster name> <file name>
 load <cluster name> <file name>
+reset
+settings
 quit
 
 Program switches:
@@ -5695,25 +5770,25 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
         case "debug off":
             debug = false
             printSwitch(lowercaseLine,debug)
-        case "listaccession":
+        case "listaccession", "listaccession on":
             printISL = true
             printSwitch(lowercaseLine,printISL)
         case "listaccession off":
             printISL = false
             printSwitch(lowercaseLine,printISL)
-        case "listaveragemutations":
+        case "listaveragemutations", "listaveragemutations on":
             printAvgMut = true
             printSwitch(lowercaseLine,printAvgMut)
         case "listaveragemutations off":
             printAvgMut = false
             printSwitch(lowercaseLine,printAvgMut)
-        case "includesublineages":
+        case "includesublineages", "includesublineages on":
             includeSublineages = true
             printSwitch(lowercaseLine,includeSublineages)
         case "includesublineages off":
             includeSublineages = false
             printSwitch(lowercaseLine,includeSublineages)
-        case "simplenuclpatterns":
+        case "simplenuclpatterns", "simplenuclpatterns on":
             simpleNuclPatterns = true
             printSwitch(lowercaseLine,simpleNuclPatterns)
         case "simplenuclpatterns off":
@@ -5816,6 +5891,11 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
             else {
                 print("Protein mode")
             }
+        case "reset":
+            reset()
+            print("Program switches reset to default values")
+        case "settings":
+            settings()
         default:
             let parts : [String] = processLine(line)
             
@@ -5905,6 +5985,18 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
         print("Testing vdb program ...")
         var testsPassed : Int = 0
         var testsRun : Int = 0
+        
+        // save program settings
+        let debugSetting : Bool = debug
+        let printISLSetting : Bool = printISL
+        let printAvgMutSetting : Bool = printAvgMut
+        let includeSublineagesSetting : Bool = includeSublineages
+        let simpleNuclPatternsSetting : Bool = simpleNuclPatterns
+        let minimumPatternsCountSetting : Int = minimumPatternsCount
+
+        reset()
+        let startTime : DispatchTime = DispatchTime.now()
+                
         let sortCmds : [String] = ["> 5","from ny","after 2/1/21","w/ E484K","w/o D253G"]
         var prevCluster : String = ""
         for i in 0..<sortCmds.count {
@@ -6041,7 +6133,20 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
             equalityTest(eqTest.0,eqTest.1)
         }
         
-        print("Tests complete: \(testsPassed)/\(testsRun) passed")
+        let endTime : DispatchTime = DispatchTime.now()
+        let nanoTime : UInt64 = endTime.uptimeNanoseconds - startTime.uptimeNanoseconds
+        let timeInterval : Double = Double(nanoTime) / 1_000_000_000
+        let timeString : String = String(format: "%4.2f seconds", timeInterval)
+        print("Tests complete: \(testsPassed)/\(testsRun) passed     Time: \(timeString)")
+        
+        //  restore program settings
+        debug = debugSetting
+        printISL = printISLSetting
+        printAvgMut = printAvgMutSetting
+        includeSublineages = includeSublineagesSetting
+        simpleNuclPatterns = simpleNuclPatternsSetting
+        minimumPatternsCount = minimumPatternsCountSetting
+        
     }
     
 }
@@ -6228,8 +6333,23 @@ indirect enum Expr {
                         break
                     }
                     if VDB.isPattern(identifier2, vdb: vdb) {
-                        let mutList = VDB.mutationsFromString(identifier2)
-                        if mutList.count == identifier2.components(separatedBy: " ").count && mutList.count > 0 {
+                        var coercePMutation : Bool = false
+                        if vdb.nucleotideMode {
+                            for sepChar in pMutationSeparator {
+                                if identifier2.contains(sepChar) {
+                                    coercePMutation = true
+                                    break
+                                }
+                            }
+                        }
+                        let mutList : [Mutation]
+                        if !coercePMutation {
+                            mutList = VDB.mutationsFromString(identifier2)
+                        }
+                        else {
+                            mutList = VDB.mutationsFromStringCoercing(identifier2, vdb: vdb)
+                        }
+                        if (mutList.count == identifier2.components(separatedBy: " ").count || coercePMutation) && mutList.count > 0 {
                             if vdb.clusters[identifier] == nil {
                                 vdb.patterns[identifier] = mutList
                                 print("Pattern \(identifier) defined as \(VDB.stringForMutations(mutList))")
