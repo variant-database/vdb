@@ -159,6 +159,14 @@ Saves a list of the viruses in the given cluster to the specified file.
 
 Loads the viruses in a file into a cluster with the specified name. If the mutation type (nucleotide/protein) does not match the program mode, the virus set is transformed to match the program mode.  
 <br />
+#### `reset`     
+
+Reset program switches to default settings.  
+<br />
+#### `settings`    
+
+Prints the current state of program settings.  
+<br />
 #### `quit`        alias `exit`, control-C, control-D  
 
 Ends the current **vdb** session.  
