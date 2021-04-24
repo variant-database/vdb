@@ -50,6 +50,8 @@ Set operations `+`, `-`, and `*` (intersection) can be applied to clusters or pa
 `testvdb`               runs built-in tests of **vdb**  
 `save` \<cluster name> \<file name>  
 `load` \<cluster name> \<file name>  
+`reset`  
+`settings`  
 `quit`  
 
 ## Program switches
