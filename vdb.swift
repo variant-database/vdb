@@ -6,7 +6,7 @@
 //
 //  Created by Anthony West on 1/31/21.
 //  Copyright (c) 2021  Anthony West, Caltech
-//  Last modified 4/28/21
+//  Last modified 4/29/21
 
 import Foundation
 
@@ -4191,9 +4191,10 @@ AS.2,B.1.1.317.2
             var mutations : [Mutation] = []
             for mutation in iso.mutations {
                 if mutation.aa != nuclN {
-                    keep[mutation.pos] = true
-                    keep[mutation.pos+1] = true
-                    keep[mutation.pos+2] = true
+                    let cStart : Int = codonStart[mutation.pos]
+                    keep[cStart] = true
+                    keep[cStart+1] = true
+                    keep[cStart+2] = true
                 }
             }
             for mutation in iso.mutations {
@@ -4539,7 +4540,7 @@ AS.2,B.1.1.317.2
         isolates = VDB.loadMutationDB(fileName)
         clusters[isolatesKeyword] = isolates
         var notProtein : Bool = false
-        checkMutations: for _ in 0..<10 {
+        checkMutations: for _ in 0..<min(10,isolates.count) {
             let rand : Int = Int.random(in: 0..<isolates.count)
             for mut in isolates[rand].mutations {
                 if mut.pos > VDB.refLength {
