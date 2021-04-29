@@ -7,7 +7,7 @@
 
 import Foundation
 
-let version : String = "1.0"
+let version : String = "1.1"
 print("SARS-CoV-2 Variant Database Creator  Version \(version)      Bjorkman Lab/Caltech")
 
 let basePath : String = FileManager.default.currentDirectoryPath
@@ -313,7 +313,12 @@ final class VDBCreate {
         var checkCountTotal : Int = 0
         
         lastBufferSize = 0
+        var shouldRead : Bool = true
         while fileStream2.hasBytesAvailable {
+            if !shouldRead {
+                break
+            }
+            shouldRead = false
             let bytesRead : Int = fileStream2.read(&lineN[lastBufferSize], maxLength: blockBufferSize)
             let bytesReadAdj : Int = bytesRead + lastBufferSize
             pos2Loop: for pos in 0..<bytesReadAdj {
@@ -353,6 +358,7 @@ final class VDBCreate {
                     lineCount += 1
                     if lineN[pos+1] == greaterChar && bytesReadAdj-pos < lastMaxSize && fileStream2.hasBytesAvailable {
                         // stop read and start next block
+                        shouldRead = true
                         lastBufferSize = bytesReadAdj-pos-1
                         
                         var counter : Int = 0

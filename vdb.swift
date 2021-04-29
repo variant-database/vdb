@@ -1,16 +1,16 @@
 //
-//  main.swift
+//  vdb.swift
 //  VDB
 //
 //  VDB implements a read–eval–print loop (REPL) for a SARS-CoV-2 variant query language
 //
 //  Created by Anthony West on 1/31/21.
 //  Copyright (c) 2021  Anthony West, Caltech
-//  Last modified 4/22/21
+//  Last modified 4/28/21
 
 import Foundation
 
-let version : String = "1.1"
+let version : String = "1.2"
 print("SARS-CoV-2 Variant Database  Version \(version)              Bjorkman Lab/Caltech")
 
 // MARK: - VDB Command line arguments
@@ -1257,14 +1257,17 @@ let namedKeyword : String = "named"
 let lineageKeyword : String = "lineage"
 let lineagesKeyword : String = "lineages"
 let listLineagesForKeyword : String = "listLineagesFor"
+let lastResultKeyword : String = "last"
 let controlC : String = "\(Character(UnicodeScalar(UInt8(3))))"
 let controlD : String = "\(Character(UnicodeScalar(UInt8(4))))"
 
 let metaOffset : Int = 400000
-let metaMaxSize : Int = 2000000
+let metaMaxSize : Int = 3000000
 let maxMutationsInFreqList : Int = 50
 let pMutationSeparator : String = ":_"
 let altMetadataFileName : String = "metadata.tsv"
+let nuclN : UInt8 = 78
+let joinString : String = "JOIN"
 
 // MARK: - VDBCore
 
@@ -1426,7 +1429,7 @@ struct Mutation : Equatable, Hashable, MutationProtocol {
         self.aa = aa
         self.pos = pos
     }
-    
+
     var string : String {
         get {
             let aaChar : Character = Character(UnicodeScalar(aa))
@@ -1519,6 +1522,7 @@ struct Isolate : Equatable, Hashable {
         return "\(country)/\(state)/\(dateString) : \(mutationsString)"
     }
 
+    // string description for writing cluster to a file
     func vdbString(_ dateFormatter: DateFormatter) -> String {
         let dateString : String = dateFormatter.string(from: date)
         var mutationsString : String = ""
@@ -1592,10 +1596,12 @@ struct Isolate : Equatable, Hashable {
         }
     }
 
+    // determine whether two isolates are identical
     static func == (lhs: Self, rhs: Self) -> Bool {
         return lhs.epiIslNumber == rhs.epiIslNumber
     }
     
+    // hash function used for dictionaries
     func hash(into hasher: inout Hasher) {
         hasher.combine(epiIslNumber)
     }
@@ -1616,16 +1622,54 @@ struct Isolate : Equatable, Hashable {
         return pos.count
     }
     
+    // exclude N from mutations - to be called only when in nucleotide mode
+    var mutationsExcludingN : [Mutation] {
+        get {
+            return mutations.filter { $0.aa != nuclN }
+        }
+    }
+    
 }
 
 // MARK: - Autorelease Pool for Linux
 
 #if os(Linux)
+// autorelease call used to minimize memory footprint
 func autoreleasepool<Result>(invoking body: () throws -> Result) rethrows -> Result {
      return try body()
 }
 #endif
 
+// override to either print normally or via the pager
+func print(_ string: String) {
+    var string : String = string
+    if string.contains("Error") || string.contains("error") {
+        string = TColor.red + TColor.bold + string + TColor.reset
+    }
+    if !VDB.printToPager {
+        Swift.print(string, terminator:"\n")
+    }
+    else {
+        VDB.pPrint(string)
+    }
+}
+
+// print(terminator:) substitute to either print normally or via the pager
+func printJoin(_ string: String, terminator: String) {
+    if !VDB.printToPager {
+        Swift.print(string, terminator:terminator)
+    }
+    else {
+        let jString : String
+        if terminator == "\n" {
+            jString = string
+        }
+        else {
+            jString = string + terminator + joinString
+        }
+        VDB.pPrint(jString)
+    }
+}
 
 // MARK: - Extensions
 
@@ -1647,6 +1691,7 @@ extension Date {
     }
 }
 
+// for printing numbers with thousands separator
 func nf(_ value: Int) -> String {
     return numberFormatter.string(from: NSNumber(value: value)) ?? ""
 }
@@ -1655,6 +1700,7 @@ infix operator ~~: ComparisonPrecedence
 
 extension String {
 
+    // case insensitive equality
     static func ~~(lhs: Self, rhs: Self) -> Bool {
         return lhs.caseInsensitiveCompare(rhs) == .orderedSame
     }
@@ -1722,11 +1768,13 @@ final class VDB {
         }
         catch {
             print("Error reading vdb file \(filePath)")
+            return []
         }
         
         var buf : UnsafeMutablePointer<CChar>? = nil
         buf = UnsafeMutablePointer<CChar>.allocate(capacity: 100000)
-                        
+         
+        // extract string from byte stream
         func stringA(_ range : CountableRange<Int>) -> String {
             var counter : Int = 0
             for i in range {
@@ -1738,6 +1786,7 @@ final class VDB {
             return s
         }
         
+        // extract integer from byte stream
         func intA(_ range : CountableRange<Int>) -> Int {
             var counter : Int = 0
             for i in range {
@@ -1769,6 +1818,7 @@ final class VDB {
         let yearBase : Int = 2019
         let yearsMax : Int = 4
         var dateCache : [[[Date?]]] = Array(repeating: Array(repeating: Array(repeating: nil, count: 32), count: 13), count: yearsMax)
+        // create Date objects faster using a cache
         func getDateFor(year: Int, month: Int, day: Int) -> Date {
             let y : Int = year - yearBase
             if y >= 0 && y < yearsMax, let cachedDate = dateCache[y][month][day] {
@@ -2024,6 +2074,7 @@ final class VDB {
         var buf : UnsafeMutablePointer<CChar>? = nil
         buf = UnsafeMutablePointer<CChar>.allocate(capacity: 1000)
 
+        // extract integer from byte stream
         func intA(_ range : CountableRange<Int>) -> Int {
             var counter : Int = 0
             for i in range {
@@ -2034,6 +2085,7 @@ final class VDB {
             return strtol(buf!,nil,10)
         }
         
+        // extract string from byte stream
         func stringA(_ range : CountableRange<Int>) -> String {
             var counter : Int = 0
             for i in range {
@@ -2049,6 +2101,7 @@ final class VDB {
         var firstLine : Bool = true
         var lastTabPos : Int = -1
         var lastLf : Int = -1
+        var warningGiven : Bool = false
         for pos in 0..<vdb.metadata.count {
             switch vdb.metadata[pos] {
             case lf:
@@ -2066,8 +2119,21 @@ final class VDB {
                     vdb.metaFields.append(fieldName)
                 }
                 else if tabCount == 2 {
-                    let epiIsl : Int = intA(lastTabPos+1+8..<pos)
-                    vdb.metaPos[epiIsl-metaOffset] = lastLf+1
+                    let epiIslAdjusted : Int = intA(lastTabPos+1+8..<pos) - metaOffset
+                    if epiIslAdjusted > 0 && epiIslAdjusted < metaMaxSize {
+                        vdb.metaPos[epiIslAdjusted] = lastLf+1
+                    }
+                    else {
+                        if !warningGiven {
+                            if epiIslAdjusted >= metaMaxSize {
+                                print("Warning - skipping some metadata; recompile with larger metaMaxSize")
+                            }
+                            else {
+                                print("Warning - skipping some metadata; accession number below minimum of \(metaOffset)")
+                            }
+                            warningGiven = true
+                        }
+                    }
                 }
                 lastTabPos = pos
                 tabCount += 1
@@ -2093,6 +2159,7 @@ final class VDB {
         var buf : UnsafeMutablePointer<CChar>? = nil
         buf = UnsafeMutablePointer<CChar>.allocate(capacity: 1000)
         
+        // extract string from byte stream
         func stringA(_ range : CountableRange<Int>) -> String {
             // cString method  4.28 sec  but requires conversion beforehand
             // iconv -f utf-8 -t ascii -c metadata_2021-02-22_10-00.tsv > metadata_2021-02-22_10-00a.tsv
@@ -2180,6 +2247,7 @@ final class VDB {
         var tabCount : Int = 0
         var lastTabPos : Int = 0
         
+        // extract string from byte stream
         func stringA(_ range : CountableRange<Int>) -> String {
             var counter : Int = 0
             for i in range {
@@ -2191,6 +2259,7 @@ final class VDB {
             return s
         }
         
+        // extract integer from byte stream
         func intA(_ range : CountableRange<Int>) -> Int {
             var counter : Int = 0
             for i in range {
@@ -2206,7 +2275,7 @@ final class VDB {
             let vIndex : Int = vdb.isolates[i].epiIslNumber - metaOffset
             if vIndex < 0 || vIndex >= vdb.metaPos.count {
                 if !warningGiven {
-                    print("   WARNING - skipping some metadata; recompile with larger metaMaxSize")
+                    print("   WARNING - accession number outside of metadata range")
                     warningGiven = true
                 }
                 continue
@@ -2296,6 +2365,7 @@ final class VDB {
         var buf : UnsafeMutablePointer<CChar>? = nil
         buf = UnsafeMutablePointer<CChar>.allocate(capacity: 1000)
 
+        // extract integer from byte stream
         func intA(_ range : CountableRange<Int>) -> Int {
             var counter : Int = 0
             for i in range {
@@ -2306,6 +2376,7 @@ final class VDB {
             return strtol(buf!,nil,10)
         }
         
+        // extract string from byte stream
         func stringA(_ range : CountableRange<Int>) -> String {
             var counter : Int = 0
             for i in range {
@@ -2345,6 +2416,7 @@ final class VDB {
         let yearBase : Int = 2019
         let yearsMax : Int = 4
         var dateCache : [[[Date?]]] = Array(repeating: Array(repeating: Array(repeating: nil, count: 32), count: 13), count: yearsMax)
+        // create Date objects faster using a cache
         func getDateFor(year: Int, month: Int, day: Int) -> Date {
             let y : Int = year - yearBase
             if y >= 0 && y < yearsMax, let cachedDate = dateCache[y][month][day] {
@@ -2604,7 +2676,7 @@ final class VDB {
         var posMutationCounts : [[(Mutation,Int)]] = Array(repeating: [], count: VDB.refLength+1)
         for isolate in cluster {
             for mutation in isolate.mutations {
-                if vdb.nucleotideMode && mutation.aa == 78 {
+                if vdb.nucleotideMode && mutation.aa == nuclN {
                     continue
                 }
                 var found : Bool = false
@@ -2640,7 +2712,7 @@ final class VDB {
                 print("\(i+1) : \(m.0.string)  \(freqString)%")
             }
             else {
-                print("\(i+1) : \(m.0.string)  \(freqString)%     ", terminator:"")
+                printJoin("\(i+1) : \(m.0.string)  \(freqString)%     ", terminator:"")
                 let tmpIsolate : Isolate = Isolate(country: "tmp", state: "tmp", date: Date(), epiIslNumber: 0, mutations: [m.0])
                 proteinMutationsForIsolate(tmpIsolate,true)
             }
@@ -2849,6 +2921,7 @@ final class VDB {
 //        }
     }
 
+    // list the built-in proteins and their coding range
     class func listProteins(vdb: VDB) {
         print("SARS-CoV-2 proteins:\n")
         print("\(TColor.underline)name    gene range      len.   note                         \(TColor.reset)")
@@ -3037,11 +3110,11 @@ final class VDB {
             else {
                 print("Number of isolates containing \(n) of \(mutationPatternString) = \(mut_isolates.count)")
             }
-            if vdb.printProteinMutations && nMutationSets.isEmpty {
+            if printProteinMutations && nMutationSets.isEmpty {
                 proteinMutationsForNuclPattern(mutations)
-                vdb.printProteinMutations = false
+                printProteinMutations = false
             }
-            else if (vdb.printProteinMutations || coercePMutationString) && mutationPs.count == 1 && !mut_isolates.isEmpty {
+            else if (printProteinMutations || coercePMutationString) && mutationPs.count == 1 && !mut_isolates.isEmpty {
                 var pMutationString : String = ""
                 if let pMutation = mutationPs[0] as? PMutation {
                     pMutationString = pMutation.string
@@ -3151,7 +3224,7 @@ final class VDB {
                 isoMuts = isolate.mutations
             }
             else {
-                isoMuts = isolate.mutations.filter { Protein.Spike.range.contains($0.pos) && $0.aa != 78 }
+                isoMuts = isolate.mutations.filter { Protein.Spike.range.contains($0.pos) && $0.aa != nuclN }
             }
             mutationPatterns.insert(isoMuts)
         }
@@ -3197,7 +3270,7 @@ final class VDB {
                 }
             }
             else {
-                let isoMuts : [Mutation] = isolate.mutations.filter { Protein.Spike.range.contains($0.pos) && $0.aa != 78 }
+                let isoMuts : [Mutation] = isolate.mutations.filter { Protein.Spike.range.contains($0.pos) && $0.aa != nuclN }
                 if !isoMuts.isEmpty {
                     pos = isoMuts[0].pos
                 }
@@ -3234,7 +3307,9 @@ final class VDB {
             }
             print("\(i+1) : \(stringForMutations(mutationPatternCounts[i].0))   \(mutationPatternCounts[i].1)\(lineageInfo)")
             if vdb.nucleotideMode {
+                printJoin(TColor.cyan, terminator:"")
                 VDB.proteinMutationsForIsolate(mutationPatternCounts[i].2[0])
+                printJoin(TColor.reset, terminator:"")
             }
         }
         if !mutationPatternCounts.isEmpty {
@@ -3249,21 +3324,24 @@ final class VDB {
     // list number of isolates having differnet number of mutations
     // prints average number of mutatations
     // prints the average age of those from whom the isolates were collected
-    class func infoForCluster(_ cluster: [Isolate]) {
-        var maxMutations : Int = 0
+    class func infoForCluster(_ cluster: [Isolate], vdb:VDB) {
         var totalCount : Int = 0
+        var mutCounts : [Int] = [] // Array(repeating: 0, count: maxMutations+1)
         for iso in cluster {
-            let mc : Int = iso.mutations.count
-            totalCount += mc
-            if mc > maxMutations {
-                maxMutations = mc
+            let mc : Int
+            if !vdb.nucleotideMode || !vdb.excludeNFromCounts {
+                mc = iso.mutations.count
             }
+            else {
+                mc = iso.mutationsExcludingN.count
+            }
+            totalCount += mc
+            while mutCounts.count < (mc+1) {
+                mutCounts.append(0)
+            }
+            mutCounts[mc] += 1
         }
         let averageCount : Double = Double(totalCount)/Double(cluster.count)
-        var mutCounts : [Int] = Array(repeating: 0, count: maxMutations+1)
-        for iso in cluster {
-            mutCounts[iso.mutations.count] += 1
-        }
         var mutCountsArray : [(Int,Int)] = []
         for i in 0..<mutCounts.count {
             if mutCounts[i] > 0 {
@@ -3986,13 +4064,19 @@ AS.2,B.1.1.317.2
             }
         }
         if oldMutations.isEmpty {
-            print("    \(mutLine)")
+            if printProteinMutations {
+                print("    \(mutLine)")
+            }
+            else {
+                print("    \(TColor.cyan)\(mutLine)\(TColor.reset)")
+            }
         }
         if isolate.country == "con" {
             print("\n\(mutSummary)")
         }
     }
-    
+
+    // convert a protein mutation to the most common nucleotide mutation(s)
     class func coercePMutationStringToMutations(_ pMutationString: String, vdb: VDB) -> [Mutation] {
         let tmpCluster : [Isolate] = VDB.isolatesContainingMutations(pMutationString, inCluster: vdb.isolates, vdb: vdb, quiet: true, negate: false, n: 0, coercePMutationString: true)
         if tmpCluster.isEmpty  {
@@ -4006,12 +4090,18 @@ AS.2,B.1.1.317.2
     class func proteinMutationsForNuclPattern(_ mutations: [Mutation]) {
         let tmpIsolate : Isolate = Isolate(country: "tmp", state: "tmp", date: Date(), epiIslNumber: 0, mutations: mutations)
         let mutationString = stringForMutations(mutations)
-        print("Mutation \(mutationString):", terminator:"")
+        printJoin("Mutation \(mutationString):", terminator:"")
         proteinMutationsForIsolate(tmpIsolate,true)
     }
     
+    // load a saved cluster from a file, converting protein/nucl. if necessary
     class func loadCluster(_ clusterName: String, fromFile fileName: String, vdb: VDB) {
         var loadedCluster : [Isolate] = VDB.loadMutationDB(fileName)
+        
+        if loadedCluster.isEmpty {
+            print("Error - no viruses loaded for cluster \(clusterName)")
+            return
+        }
         
         // handle nucl/protein transformation
         var clusterNuclMode : Bool = false
@@ -4055,6 +4145,7 @@ AS.2,B.1.1.317.2
         }
     }
     
+    // save a defined cluster to a file
     class func saveCluster(_ cluster: [Isolate], toFile fileName: String, vdb: VDB) {
         var outString : String = ""
         for isolate in cluster {
@@ -4067,6 +4158,56 @@ AS.2,B.1.1.317.2
         catch {
             print("Error writing cluster to file \(fileName)")
         }
+    }
+    
+    // remove nucleotide "N" mutations from isolate mutations
+    class func trim(vdb: VDB) {
+        if !vdb.nucleotideMode {
+            return
+        }
+        var codonStart : [Int] = Array(repeating: 0, count: refLength+1)
+        for protein in Protein.allCases {
+            for pos in stride(from: protein.range.lowerBound, to: protein.range.upperBound, by: 3) {
+                let frameShift : Bool = protein == .NSP12 // .range.upperBound == 16236
+                if !frameShift || pos < 13468 {
+                    codonStart[pos] = pos
+                    codonStart[pos+1] = pos
+                    codonStart[pos+2] = pos
+
+                }
+                else {
+                    codonStart[pos] = pos-1
+                    codonStart[pos+1] = pos-1
+                    codonStart[pos+2] = pos-1
+                }
+            }
+        }
+        var trimmed : [Isolate] = []
+        var keep : [Bool] = Array(repeating: false, count: refLength+1)
+        for iso in vdb.isolates {
+            for i in 0...refLength {
+                keep[i] = false
+            }
+            var mutations : [Mutation] = []
+            for mutation in iso.mutations {
+                if mutation.aa != nuclN {
+                    keep[mutation.pos] = true
+                    keep[mutation.pos+1] = true
+                    keep[mutation.pos+2] = true
+                }
+            }
+            for mutation in iso.mutations {
+                if keep[mutation.pos] {
+                    mutations.append(mutation)
+                }
+            }
+            var newIsolate = Isolate(country: iso.country, state: iso.state, date: iso.date, epiIslNumber: iso.epiIslNumber, mutations: mutations)
+            newIsolate.pangoLineage = iso.pangoLineage
+            newIsolate.age = iso.age
+            trimmed.append(newIsolate)
+        }
+        vdb.isolates = trimmed
+        vdb.clusters[vdb.isolatesKeyword] = trimmed
     }
 
     // MARK: - Utility methods
@@ -4164,6 +4305,113 @@ AS.2,B.1.1.317.2
         }
         return true
     }
+    
+    // add a line to the pager line array
+    class func pPrint(_ line: String) {
+        pagerLines.append(line)
+    }
+    
+    // add multiple lines to the pager line array
+    class func pPrintMultiline(_ multi: String) {
+        let lines : [String] = multi.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        pagerLines.append(contentsOf: lines)
+    }
+    
+    // print long output by page - a simplified version of more
+    class func pagerPrint() {
+        printToPager = false
+        if pagerLines.isEmpty {
+            return
+        }
+        var pagerLinesLocal : [String] = pagerLines
+        var lineCounter : Int = 0
+        while lineCounter < pagerLinesLocal.count {
+            if pagerLinesLocal[lineCounter].suffix(joinString.count) == joinString {
+                pagerLinesLocal[lineCounter] = String(pagerLinesLocal[lineCounter].prefix(pagerLinesLocal[lineCounter].count - joinString.count))
+                if lineCounter < pagerLinesLocal.count - 1 {
+                    pagerLinesLocal[lineCounter] += pagerLinesLocal[lineCounter+1]
+                    pagerLinesLocal.remove(at: lineCounter+1)
+                }
+            }
+            else {
+                lineCounter += 1
+            }
+        }
+        
+        // read a single character from stardard input
+        func readCharacter() -> UInt8? {
+            var input: [UInt8] = [0,0,0,0]
+            let count = read(STDIN_FILENO, &input, 3)
+            if count == 0 {
+                return nil
+            }
+            if count == 3 && input[0] == 27 && input[1] == 91 && input[2] == 66 {   // "Esc[B" down arrow
+                input[0] = 200
+            }
+            return input[0]
+        }
+        
+        var w : winsize = winsize()
+        let returnCode = ioctl(STDOUT_FILENO,UInt(TIOCGWINSZ),&w)
+        if returnCode == -1 {
+            print("ioctl error")
+        }
+        let rows : Int = Int(w.ws_row)
+        let columns : Int = Int(w.ws_col)
+        var usePaging : Bool = rows > 2 && columns > 2
+        var rowsPerLine : [Int]  = []
+        if usePaging {
+            rowsPerLine = pagerLinesLocal.map { 1 + ($0.count-1)/columns }
+            usePaging = rowsPerLine.reduce(0,+) > rows
+        }
+        if usePaging {
+            var currentLine : Int = 0
+            var printOneLine : Bool = false
+            pagingLoop: while true {
+                var rowsPrinted : Int = 0
+                while rowsPrinted < rows-2 {
+                    print(pagerLinesLocal[currentLine])
+                    rowsPrinted += rowsPerLine[currentLine]
+                    currentLine += 1
+                    if currentLine == pagerLinesLocal.count {
+                        break pagingLoop
+                    }
+                    if printOneLine {
+                        printOneLine = false
+                        break
+                    }
+                }
+                var keyPress : UInt8? = nil
+                do {
+                    print(":",terminator:"")
+                    fflush(stdout)
+                    try Terminal.withRawMode(STDIN_FILENO) {
+                        keyPress = readCharacter()
+                    }
+                    print("\u{8}\u{8}  \u{8}\u{8}",terminator:"")
+                    fflush(stdout)
+                }
+                catch {
+                    print("Error reading character from terminal")
+                    break pagingLoop
+                }
+                switch keyPress {
+                case 81, 113, 27:   // Q, q, Esc
+                    break pagingLoop
+                case 10, 13, 200:   // carriage return, line feed, down arrow
+                    printOneLine = true
+                default:
+                    break
+                }
+            }
+        }
+        else {
+            for line in pagerLinesLocal {
+                print(line)
+            }
+        }
+        pagerLines = []
+    }
 
 // }
 
@@ -4185,6 +4433,7 @@ AS.2,B.1.1.317.2
     var countries : [String] = []
     var stateNamesPlus : [String] = []
     var nucleotideMode : Bool = false           // set when data is loaded
+    var lastExpr : Expr? = nil
         
     // switch defaults
     static let defaultDebug : Bool = false
@@ -4192,6 +4441,7 @@ AS.2,B.1.1.317.2
     static let defaultPrintAvgMut : Bool = false
     static let defaultIncludeSublineages : Bool = true
     static let defaultSimpleNuclPatterns : Bool = false
+    static let defaultExcludeNFromCounts : Bool = true
     static let defaultMinimumPatternsCount : Int = 0
     
     // user adjustable switches:
@@ -4200,6 +4450,7 @@ AS.2,B.1.1.317.2
     var printAvgMut : Bool = defaultPrintAvgMut                   // print average number of mutations
     var includeSublineages : Bool = defaultIncludeSublineages     // whether a lineage should include sublineages
     var simpleNuclPatterns : Bool = defaultSimpleNuclPatterns     // print simplified patterns for nucleotide mode
+    var excludeNFromCounts : Bool = defaultExcludeNFromCounts     // whether to exclude unknown nucleotide N from mutation counts
     var minimumPatternsCount : Int = defaultMinimumPatternsCount  // excludes smaller patterns from list
 
     // metadata information
@@ -4211,7 +4462,9 @@ AS.2,B.1.1.317.2
     let isolatesKeyword : String = "world"
 
     static var refLength : Int = 1273
-    var printProteinMutations : Bool = false    // temporary flag used to control printing
+    static var pagerLines : [String] = []
+    static var printToPager : Bool = false
+    static var printProteinMutations : Bool = false    // temporary flag used to control printing
     
     // MARK: -
     
@@ -4243,6 +4496,7 @@ AS.2,B.1.1.317.2
         }
     }
     
+    // returns true if the given string is a valid country or state name
     func isCountryOrState(_ name: String) -> Bool {
         if stateNamesPlus.isEmpty {
             var states : [String] = Array(VDB.stateAb.keys)
@@ -4278,9 +4532,24 @@ AS.2,B.1.1.317.2
                 }
             }
         }
+        if fileName.isEmpty {
+            print("Error - no database file found")
+            return
+        }
         isolates = VDB.loadMutationDB(fileName)
         clusters[isolatesKeyword] = isolates
-        if fileName.contains("_nucl") {
+        var notProtein : Bool = false
+        checkMutations: for _ in 0..<10 {
+            let rand : Int = Int.random(in: 0..<isolates.count)
+            for mut in isolates[rand].mutations {
+                if mut.pos > VDB.refLength {
+                    notProtein = true
+                    break checkMutations
+                }
+            }
+        }
+        if fileName.contains("nucl") || notProtein {
+            nucleotideMode = true
             VDB.refLength = 29892
         }
     }
@@ -4371,6 +4640,7 @@ AS.2,B.1.1.317.2
         printAvgMut = VDB.defaultPrintAvgMut
         includeSublineages = VDB.defaultIncludeSublineages
         simpleNuclPatterns = VDB.defaultSimpleNuclPatterns
+        excludeNFromCounts = VDB.defaultExcludeNFromCounts
         minimumPatternsCount = VDB.defaultMinimumPatternsCount
     }
     
@@ -4389,6 +4659,7 @@ AS.2,B.1.1.317.2
         printSwitch("listAverageMutations",printAvgMut)
         printSwitch("includeSublineages",includeSublineages)
         printSwitch("simpleNuclPatterns",simpleNuclPatterns)
+        printSwitch("excludeNFromCounts",excludeNFromCounts)
         print("minimumPatternsCount = \(minimumPatternsCount)")
     }
     
@@ -4456,7 +4727,6 @@ AS.2,B.1.1.317.2
                     VDB.readPangoLineages(metadataFileName, vdb: self)
                 }
             }
-            nucleotideMode = dbFileName.contains("nucl")
         }
         
         let tripleMutation : [Mutation] = VDB.mutationsFromString("N501Y E484K K417N")
@@ -4481,6 +4751,7 @@ AS.2,B.1.1.317.2
         patternNotes[brPatternName] = "Br"
         patternNotes[caPatternName] = "Ca"
         patternNotes[nyPatternName] = "NY"
+
         print("   Number of isolates = \(nf(isolates.count))       \(patterns.count) built-in mutation patterns")
         print("   Enter 'help' for a list of commands")
     }
@@ -4501,7 +4772,7 @@ AS.2,B.1.1.317.2
         }
         
         line = line.replacingOccurrences(of: ",", with: " ")
-        for op in ["=","+",">","<"] {
+        for op in ["=","+",">","<","#"] {
             line = line.replacingOccurrences(of: op, with: " "+op+" ")
         }
         line = line.replacingOccurrences(of: " =  = ", with: " == ")
@@ -4864,6 +5135,8 @@ AS.2,B.1.1.317.2
                 tokens.append(.greaterThan)
             case "<":
                 tokens.append(.lessThan)
+            case "#":
+                tokens.append(.equalMutationCount)
             case isolatesKeyword:
                 tokens.append(.isolates)
             case consensusForKeyword:
@@ -4898,6 +5171,14 @@ AS.2,B.1.1.317.2
                 tokens.append(.listWeeklyFor)
             case listKeyword:
                 tokens.append(.list)
+            case lastResultKeyword:
+                if lastExpr != nil {
+                    tokens.append(.lastResult)
+                }
+                else {
+                    print("Error - last result was nil")
+                    tokens.append(.textBlock(parts[i]))
+                }
             default:
                 tokens.append(.textBlock(parts[i]))
             }
@@ -5108,21 +5389,21 @@ AS.2,B.1.1.317.2
             case let .textBlock(identifier):
                 if let cluster = clusters[identifier] {
                     print("\(identifier) = cluster of \(cluster.count) isolates")
-                    VDB.infoForCluster(cluster)
+                    VDB.infoForCluster(cluster, vdb: self)
                     return ([],nil)
                 }
                 else if let pattern = patterns[identifier] {
                     let patternString = VDB.stringForMutations(pattern)
                     print("\(identifier) = mutation pattern \(patternString)")
                     if nucleotideMode {
-                        let tmpIsolate : Isolate = Isolate(country: "con", state: "tmp", date: Date(), epiIslNumber: 0, mutations: pattern)
+                        let tmpIsolate : Isolate = Isolate(country: "con", state: "", date: Date(), epiIslNumber: 0, mutations: pattern)
                         VDB.proteinMutationsForIsolate(tmpIsolate)
                     }
                     return ([],nil)
                 }
                 else if VDB.isPattern(identifier, vdb: self) {
                     if nucleotideMode {
-                        printProteinMutations = true
+                        VDB.printProteinMutations = true
                     }
                     return ([],Expr.Containing(allIsolates, Expr.Identifier(identifier), 0))
                 }
@@ -5132,7 +5413,7 @@ AS.2,B.1.1.317.2
             case .isolates:
                 if let cluster = clusters[isolatesKeyword] {
                     print("\(isolatesKeyword) = cluster of \(cluster.count) isolates")
-                    VDB.infoForCluster(cluster)
+                    VDB.infoForCluster(cluster, vdb: self)
                     return ([],nil)
                 }
             default:
@@ -5252,6 +5533,37 @@ AS.2,B.1.1.317.2
                         }
                     }
                 }
+            case .equalMutationCount:
+                if let precedingExprTmp = precedingExpr {
+                    if tokens.count > i+1 {
+                        switch tokens[i+1] {
+                        case let .textBlock(identifier):
+                            if let value = Int(identifier) {
+                                precedingExpr = Expr.EqualMutationCount(precedingExprTmp, value)
+                                i += 1
+                                break tSwitch
+                            }
+                        default:
+                            break
+                        }
+                    }
+                }
+                else {
+                    // assume all isolates
+                    if tokens.count > i+1 {
+                        switch tokens[i+1] {
+                        case let .textBlock(identifier):
+                            if let value = Int(identifier) {
+                                precedingExpr = Expr.EqualMutationCount(allIsolates, value)
+                                i += 1
+                                break tSwitch
+                            }
+                        default:
+                            break
+                        }
+                    }
+                }
+
             case .listFrequenciesFor, .listCountriesFor, .listStatesFor, .listLineagesFor, .listMonthlyFor, .listWeeklyFor, .list:
                 print("Syntax error - extraneous list command")
                 return ([],nil)
@@ -5605,6 +5917,9 @@ AS.2,B.1.1.317.2
                 }
                 print("Syntax error - named command")
                 return([],nil)
+            case .lastResult:
+                precedingExpr = lastExpr
+                break tSwitch
             }
 
             i += 1
@@ -5659,7 +5974,7 @@ AS.2,B.1.1.317.2
         case "list patterns", "patterns":
             listPatterns()
         case "help", "?":
-            print("""
+            VDB.pPrintMultiline("""
 Commands to query SARS-CoV-2 variant database (Variant Query Language):
 
 Notation:
@@ -5718,10 +6033,12 @@ listAccession/listAccession off
 listAverageMutations/listAverageMutations off
 includeSublineages/includeSublineages off
 simpleNuclPatterns/simpleNuclPatterns off
+excludeNFromCounts/excludeNFromCounts off
 
 minimumPatternsCount = <n>
 
 """)
+            VDB.pagerPrint()
         case "license":
             print("""
          
@@ -5794,6 +6111,12 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
         case "simplenuclpatterns off":
             simpleNuclPatterns = false
             printSwitch(lowercaseLine,simpleNuclPatterns)
+        case "excludenfromcounts", "excludenfromcounts on":
+            excludeNFromCounts = true
+            printSwitch(lowercaseLine, excludeNFromCounts)
+        case "excludenfromcounts off":
+            excludeNFromCounts = false
+            printSwitch(lowercaseLine, excludeNFromCounts)
         case "list proteins", "proteins":
             VDB.listProteins(vdb: self)
         case "history":
@@ -5880,7 +6203,13 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
                 print("\(clusterName) count = \(clusterCount) viruses")
             }
             else if let pattern = patterns[clusterName] {
-                let patternCount : Int = pattern.count
+                let patternCount : Int
+                if !nucleotideMode || !excludeNFromCounts {
+                    patternCount = pattern.count
+                }
+                else {
+                    patternCount = pattern.filter { $0.aa != nuclN }.count
+                }
                 returnInt = patternCount
                 print("\(clusterName) count = \(patternCount) mutations")
             }
@@ -5896,6 +6225,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
             print("Program switches reset to default values")
         case "settings":
             settings()
+        case "trim":
+            VDB.trim(vdb: self)
         default:
             let parts : [String] = processLine(line)
             
@@ -5933,6 +6264,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
                 print("\(value)")
                 returnInt = value
             }
+            lastExpr = returnValue
+            VDB.pagerPrint()
             print("")
         }
         return (true,false,returnInt)
@@ -5981,6 +6314,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
     
     // MARK: - testing vdb
     
+    // run a sequence of built-in tests of vdb
     func testvdb() {
         print("Testing vdb program ...")
         var testsPassed : Int = 0
@@ -5992,9 +6326,12 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
         let printAvgMutSetting : Bool = printAvgMut
         let includeSublineagesSetting : Bool = includeSublineages
         let simpleNuclPatternsSetting : Bool = simpleNuclPatterns
+        let excludeNFromCountsSetting = excludeNFromCounts
         let minimumPatternsCountSetting : Int = minimumPatternsCount
 
         reset()
+        excludeNFromCounts = excludeNFromCountsSetting
+        
         let startTime : DispatchTime = DispatchTime.now()
                 
         let sortCmds : [String] = ["> 5","from ny","after 2/1/21","w/ E484K","w/o D253G"]
@@ -6007,8 +6344,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
             prevCluster = newClusterName
         }
         
+        // recursive algorithm for permutations by Niklaus Wirth
         func permutations<T>(_ a: [T], _ n: Int, _ running: inout [[T]]) {
-            // recursive algorithm for permutations bbby Niklaus Wirth
             if n == 0 {
                 running.append(a)
             }
@@ -6039,8 +6376,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
                 testsPassed += returnInt
             }
         }
-        // complementation tests
         
+        // complementation test routine
         func compTest(_ comp1: String, _ comp2: String) {
             let clusterName1 : String = "c1_\(testsRun)"
             let clusterName2 : String = "c2_\(testsRun)"
@@ -6102,7 +6439,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
             }
         }
         
-        // equality tests
+        // test of two commands that should give equal results
         func equalityTest(_ cmds1: String, _ cmds2: String) {
             let cmds1 : String = cmds1.replacingOccurrences(of: "_X", with: "_\(testsRun)")
             let cmds2 : String = cmds2.replacingOccurrences(of: "_X", with: "_\(testsRun)")
@@ -6145,6 +6482,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
         printAvgMut = printAvgMutSetting
         includeSublineages = includeSublineagesSetting
         simpleNuclPatterns = simpleNuclPatternsSetting
+        excludeNFromCounts = excludeNFromCountsSetting
         minimumPatternsCount = minimumPatternsCountSetting
         
     }
@@ -6161,6 +6499,7 @@ enum Token {
     case multiply
     case greaterThan
     case lessThan
+    case equalMutationCount
     case isolates
     case consensusFor
     case patternsIn
@@ -6178,6 +6517,7 @@ enum Token {
     case listMonthlyFor
     case listWeeklyFor
     case list
+    case lastResult
     case textBlock(String)
     
     var description: String {
@@ -6197,6 +6537,8 @@ enum Token {
                     return "_>_"
                 case .lessThan:
                     return "_<_"
+                case .equalMutationCount:
+                    return "_#_"
                 case .isolates:
                     return "_isolates_"
                 case .consensusFor:
@@ -6231,6 +6573,8 @@ enum Token {
                     return "_listWeeklyFor_"
                 case .list:
                     return "_list_"
+                case .lastResult:
+                    return "_last_"
                 case let .textBlock(value):
                     return value
                 }
@@ -6263,6 +6607,7 @@ indirect enum Expr {
     case Multiply(Expr,Expr)           // Cluster or Pattern x2            --> Expr(Cluster or Pattern)
     case GreaterThan(Expr,Int)         // Cluster                          --> Cluster
     case LessThan(Expr,Int)            // Cluster                          --> Cluster
+    case EqualMutationCount(Expr,Int)  // Cluster                          --> Cluster
     case ConsensusFor(Expr)            // Identifier or Cluster            --> Pattern
     case PatternsIn(Expr,Int)          // Cluster                          --> Pattern
     case From(Expr,Expr)               // Cluster, Identifier(country)     --> Cluster
@@ -6304,6 +6649,14 @@ indirect enum Expr {
                 }
                 else if identifier.contains(".") {
                     print("Error - variable names cannot contain periods")
+                    break
+                }
+                else if identifier ~~ lastResultKeyword {
+                    print("Error - \(lastResultKeyword) is not a valid variable name")
+                    break
+                }
+                else if identifier.contains(" ") {
+                    print("Error - variable names cannot contain spaces")
                     break
                 }
                 let expr3 = expr2.eval(caller: self, vdb: vdb)
@@ -6554,21 +6907,46 @@ indirect enum Expr {
             }
         case let .GreaterThan(exprCluster, n):
             let cluster = exprCluster.clusterFromExpr(vdb: vdb)
-            let cluster2 = cluster.filter { $0.mutations.count > n }
+            let cluster2 : [Isolate]
+            if !vdb.nucleotideMode || !vdb.excludeNFromCounts {
+                cluster2 = cluster.filter { $0.mutations.count > n }
+            }
+            else {
+                cluster2 = cluster.filter { $0.mutationsExcludingN.count > n }
+            }
             print("\(cluster2.count) isolates with > \(n) mutations in set of size \(cluster.count)")
             return Expr.Cluster(cluster2)
         case let .LessThan(exprCluster, n):
             let cluster = exprCluster.clusterFromExpr(vdb: vdb)
-            let cluster2 = cluster.filter { $0.mutations.count < n }
+            let cluster2 : [Isolate]
+            if !vdb.nucleotideMode || !vdb.excludeNFromCounts {
+                cluster2 = cluster.filter { $0.mutations.count < n }
+            }
+            else {
+                cluster2 = cluster.filter { $0.mutationsExcludingN.count < n }
+            }
             print("\(cluster2.count) isolates with < \(n) mutations in set of size \(cluster.count)")
+            return Expr.Cluster(cluster2)
+        case let .EqualMutationCount(exprCluster, n):
+            let cluster = exprCluster.clusterFromExpr(vdb: vdb)
+            let cluster2 : [Isolate]
+            if !vdb.nucleotideMode || !vdb.excludeNFromCounts {
+                cluster2 = cluster.filter { $0.mutations.count == n }
+            }
+            else {
+                cluster2 = cluster.filter { $0.mutationsExcludingN.count == n }
+            }
+            print("\(cluster2.count) isolates with exactly \(n) mutations in set of size \(cluster.count)")
             return Expr.Cluster(cluster2)
         case let .ConsensusFor(exprCluster):
             let cluster = exprCluster.clusterFromExpr(vdb: vdb)
             let pattern = VDB.consensusMutationsFor(cluster, vdb: vdb)
             return Expr.Pattern(pattern)
         case let .PatternsIn(exprCluster,n):
+            VDB.printToPager = true
             let cluster = exprCluster.clusterFromExpr(vdb: vdb)
             let pattern = VDB.frequentMutationPatternsInCluster(cluster, vdb: vdb, n: n)
+            VDB.pagerPrint()
             return Expr.Pattern(pattern)
         case let .From(exprCluster,exprIdentifier):
             let cluster = exprCluster.clusterFromExpr(vdb: vdb)
@@ -6631,18 +7009,22 @@ indirect enum Expr {
             let cluster2 = VDB.isolatesInLineage(name, inCluster: cluster, vdb: vdb)
             return Expr.Cluster(cluster2)
         case let .ListFreq(exprCluster):
+            VDB.printToPager = true
             let cluster = exprCluster.clusterFromExpr(vdb: vdb)
             VDB.mutationFrequenciesInCluster(cluster, vdb: vdb)
             return nil
         case let .ListCountries(exprCluster):
+            VDB.printToPager = true
             let cluster = exprCluster.clusterFromExpr(vdb: vdb)
             VDB.listCountries(cluster)
             return nil
         case let .ListStates(exprCluster):
+            VDB.printToPager = true
             let cluster = exprCluster.clusterFromExpr(vdb: vdb)
             VDB.listStates(cluster)
             return nil
         case let .ListLineages(exprCluster):
+            VDB.printToPager = true
             let cluster = exprCluster.clusterFromExpr(vdb: vdb)
             VDB.listLineages(cluster)
             return nil
@@ -6657,6 +7039,7 @@ indirect enum Expr {
             VDB.listMonthly(cluster, weekly: true, cluster2, vdb.printAvgMut)
             return nil
         case let .List(exprCluster,n):
+            VDB.printToPager = true
             let cluster = exprCluster.clusterFromExpr(vdb: vdb)
             VDB.listIsolates(cluster, vdb: vdb, n: n)
             return nil
