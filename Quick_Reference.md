@@ -20,7 +20,7 @@ Set operations `+`, `-`, and `*` (intersection) can be applied to clusters or pa
 \<cluster>`not containing`[\<n>] \<pattern> → cluster    alias `without`, `w/o` (full pattern)  
 \<cluster>`before`\<date>        → cluster  
 \<cluster>`after`\<date>         → cluster  
-\<cluster>`>` or `<` \<n>          → cluster    filter by # of mutations  
+\<cluster>`>` or `<` or `#` \<n>        → cluster    filter by # of mutations  
 \<cluster>`named`\<state_id or EPI_ISL#>  → cluster  
 \<cluster>`lineage`\<Pango lineage>   → cluster  
 
@@ -33,6 +33,7 @@ Set operations `+`, `-`, and `*` (intersection) can be applied to clusters or pa
 [`list`] `countries` [`for`] \<cluster>  
 [`list`] `states` [`for`] \<cluster>  
 [`list`] `lineages` [`for`] \<cluster>  
+[`list`] `trends` [`for`] \<cluster>  
 [`list`] `frequencies` [`for`] \<cluster>        alias `freq`  
 [`list`] `monthly` [`for`] \<cluster> [\<cluster2>]  
 [`list`] `weekly` [`for`] \<cluster> [\<cluster2>]  
@@ -46,10 +47,12 @@ Set operations `+`, `-`, and `*` (intersection) can be applied to clusters or pa
 `license`  
 `history`  
 `load` \<vdb database file>  
+`trim`               removes extraneous N nucleotides from all viruses  
 `char` \<Pango lineage>        prints characteristics of lineage  
 `testvdb`               runs built-in tests of **vdb**  
 `save` \<cluster name> \<file name>  
 `load` \<cluster name> \<file name>  
+`group lineages` \<lineage names>  
 `reset`  
 `settings`  
 `quit`  
@@ -60,5 +63,12 @@ Set operations `+`, `-`, and `*` (intersection) can be applied to clusters or pa
 `listAverageMutations`/`listAverageMutations off`  
 `includeSublineages`/`includeSublineages off`  
 `simpleNuclPatterns`/`simpleNuclPatterns off`  
+`excludeNFromCounts`/`excludeNFromCounts off`  
+`sixel`/`sixel off`  
+`trendGraphs`/`trendGraphs off`  
+`stackGraphs`/`stackGraphs off`  
+`completions`/`completions off`  
+
 
 `minimumPatternsCount = `\<n>  
+`trendsLineageCount = `\<n>
