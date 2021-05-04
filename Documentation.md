@@ -97,6 +97,10 @@ Lists the states for the viruses belonging to the specified cluster.
 
 Lists the Pango lineages of the viruses belonging to the specified cluster. The number of viruses for each lineage is printed after the lineage name. Sublineages are not included in this count.  
 <br />
+#### [`list`] `trends` [`for`] \<cluster>  
+
+For the Pango lineages with the highest counts in specified cluster, this calculates how the fractions of these lineages have changed over time. This information is given as a table and optionally as a graph. Sublineages are not included in these calculations unless specified by the `group lineages` command.  
+<br />
 #### [`list`] `frequencies` [`for`] \<cluster>        alias `freq`  
 
 Lists the frequencies of individual mutations among the viruses belonging to the specified cluster.  
