@@ -1,5 +1,5 @@
 [![MIT license](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-
+![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux-lightgrey)
 # vdb
 A SARS-CoV-2 Mutation Pattern Query Tool
 
