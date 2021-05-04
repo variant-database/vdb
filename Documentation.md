@@ -57,9 +57,9 @@ Searches the specified cluster (or all viruses if no cluster is given) for virus
 
 Searches the specified cluster (or all viruses if no cluster is given) for viruses with collection date after the specified date.  
 <br />
-#### \<cluster>`>` or `<` \<n>          → cluster    filter by # of mutations  
+#### \<cluster>`>` or `<` or `#`\<n>       → cluster    filter by # of mutations  
 
-Searches the specified cluster (or all viruses if no cluster is given) for viruses with greater than (or less than) the specified number of mutations.  
+Searches the specified cluster (or all viruses if no cluster is given) for viruses with greater than (or less than, or equal to) the specified number of mutations.  
 <br />
 #### \<cluster>`named`\<state_id or EPI_ISL#>  → cluster  
 
@@ -147,6 +147,10 @@ Lists the user-entered commands for the current **vdb** session.
 
 Loads the specified **vdb** database file.  
 <br />
+#### `trim`    
+
+In nucleotide mode this removes extraneous 'N' bases from the mutation list of all viruses in the database. This trimmed version of the database can be saved to a file by the command `save world <filename>`.  
+<br />
 #### `char` \<Pango lineage>        alias `characteristics`  
 
 Prints characteristic (consensus) mutations of the specified lineage. Mutations are shown in bold if they are not present in the parent lineage consensus pattern. This command does not include sublineages in its analysis.  
@@ -162,6 +166,10 @@ Saves a list of the viruses in the given cluster to the specified file.
 #### `load` \<cluster name> \<file name>  
 
 Loads the viruses in a file into a cluster with the specified name. If the mutation type (nucleotide/protein) does not match the program mode, the virus set is transformed to match the program mode.  
+<br />
+#### `group lineages` <lineage name(s) or named cluster>    
+
+Designate which lineages should be grouped and displayed in the `trends` tables and graphs. If a single lineage name is given, then all sublineages will be counted as part of that lineage. If multiple lineages are listed, those will be counted under the first lineage name. If a defined cluster is given, viruses in that cluster will be counted under that cluster's name, not as part of their own lineage.   
 <br />
 #### `reset`     
 
