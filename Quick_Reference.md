@@ -54,7 +54,7 @@ Set operations `+`, `-`, and `*` (intersection) can be applied to clusters or pa
 `load` \<cluster name> \<file name>  
 `group lineages` \<lineage names>    define a lineage group  
 `lineage groups`           lists defined lineages groups  
-`clear` \<cluster name> or \<lineage group>        clears the definition  
+`clear` \<cluster name> or \<lineage group>   clears the definition  
 `reset`  
 `settings`  
 `quit`  
