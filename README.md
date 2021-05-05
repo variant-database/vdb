@@ -77,7 +77,7 @@ The **vdb** programs can also be used to examine nucleotide mutations. To produc
 
             ./vdbCreate -N msa_0405.fasta
 
-The -n excludes ambiguous bases, while the -N flag includes these. The -N flag is necessary to have protein mutations match what is listed in GISAID. The file produced by -N is much larger. This can be useful if one wants to check if a certain region was not resolved in a particular strain. Probably the best option is to generate the -N fasta file, and then trim this file using **vdb**, which keeps a small subset of Ns. This prevents mutation calls at codons such as NNC, which could happen if these Ns are dropped. The suggested workflow is  
+The -n excludes ambiguous bases, while the -N flag includes these. The -N flag is necessary to have protein mutations match what is listed in GISAID. The file produced by -N is much larger. This can be useful if one wants to check if a certain region was not resolved in a particular strain. Probably the best option is to generate the -N fasta file, and then trim this file using **vdb**, which keeps a very small subset of the Ns. This prevents mutation calls at codons such as NNC, which could happen if these Ns are dropped. The `trim` command takes about 30 seconds on a million sequences, and this only needs to be done once since the results can be saved. The suggested workflow is  
 
             ./vdbCreate -N msa_0405.fasta  
             ./vdb vdb_040521_nucl.txt  
