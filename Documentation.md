@@ -36,6 +36,9 @@ If an integer by itself is entered into **vdb**, the residue/nucleotide at that 
 ## Combining commands
 The command parser of **vdb** is still under development, so combinations of commands will work in some cases but not others. Complex queries can nevertheless be performed with **vdb**: variables can be used to save the results of single commands, and these can be used as input to further search commands.  
 
+## Implicit commands  
+In a couple situations, **vdb** interprets input as implying the `from` or `lineage` commands. When the first part of an expression is a country or state, this is treated as an implicit `from` command. When a part of an expression appears to be a Pango lineage name (containing periods), if this is not preceded by the `lineage` command, that command is considered implied.  
+
 ## Filtering commands
 #### \<cluster>`from`\<country or state>    → cluster  
 
