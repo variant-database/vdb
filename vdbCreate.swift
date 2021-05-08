@@ -3,11 +3,16 @@
 //  VDBCreate
 //
 //  Copyright (c) 2021  Anthony West, Caltech
-//  Last modified 4/29/21
+//  Last modified 5/8/21
 
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
-let version : String = "1.1"
+let version : String = "1.4"
+let checkForVDBUpdate : Bool = true
+
 print("SARS-CoV-2 Variant Database Creator  Version \(version)      Bjorkman Lab/Caltech")
 
 let basePath : String = FileManager.default.currentDirectoryPath
@@ -38,10 +43,38 @@ if filteredArguments.count > 1 {
     resultFileName = filteredArguments[1]
 }
 
+// xterm ANSI codes for colored text
+struct TColor {
+    static let reset = "\u{001B}[0;0m"
+    static let red = "\u{001B}[0;31m"
+    static let magenta = "\u{001B}[0;35m"
+    static let bold = "\u{001B}[1m"       // "\u{001B}[22m"
+}
+
 final class VDBCreate {
     
+    static let serialQueue = DispatchQueue(label: "update check")
+    static var latestVersionStringBacking : String = ""
+    static var latestVersionString : String {
+        get {
+            serialQueue.sync {
+                return latestVersionStringBacking
+            }
+        }
+        set {
+            serialQueue.sync {
+                latestVersionStringBacking = newValue
+            }
+        }
+    }
+        
     // reads aligned DNA sequences, removes gaps, translates spike genes, and saves mutation lists
     class func createDatabase(_ fileName: String, _ outputFileName: String = "", _ nucl: Bool = false, _ includeN: Bool = false) {
+        
+        if checkForVDBUpdate {
+            checkForUpdates()
+        }
+        
         let lf : UInt8 = 10     // \n
         let greaterChar : UInt8 = 62
         let dashChar : UInt8 = 45
@@ -98,7 +131,7 @@ final class VDBCreate {
         }
         
         guard let fileStream : InputStream = InputStream(fileAtPath: filePath) else { print("Error reading alignment file \(filePath)"); exit(9) }
-        let blockBufferSize : Int = max(fileSize/20,100_000_000)
+        let blockBufferSize : Int = 1_000_000_000
         
         let lastMaxSize : Int = 50000
         let lineN : UnsafeMutablePointer<UInt8> = UnsafeMutablePointer<UInt8>.allocate(capacity: blockBufferSize + lastMaxSize)
@@ -315,6 +348,7 @@ final class VDBCreate {
         lastBufferSize = 0
         var shouldRead : Bool = true
         while fileStream2.hasBytesAvailable {
+            updateStatusReadout()
             if !shouldRead {
                 break
             }
@@ -775,6 +809,48 @@ final class VDBCreate {
             outBufferPosition += 1
         }
         
+    }
+    
+    class func checkForUpdates() {
+        guard let url = URL(string: "https://api.github.com/repos/variant-database/vdb/releases/latest") else { return }
+        let configuration = URLSessionConfiguration.ephemeral
+        let session = URLSession(configuration: configuration)
+        let task = session.dataTask(with: url) {(data, response, error) in
+            guard let data = data else { return }
+            guard let result =  String(data: data, encoding: .utf8) else { return }
+            let parts = result.components(separatedBy: "tag_name")
+            if parts.count > 1 {
+                let tmpString : String = parts[1].components(separatedBy: ",")[0]
+                let latestVersionString : String = tmpString.replacingOccurrences(of: "\"", with: "").replacingOccurrences(of: ":", with: "").replacingOccurrences(of: "v", with: "").replacingOccurrences(of: " ", with: "")
+                func versionFromString(_ string: String) -> (Int,Int,Int)? {
+                    let vparts : [String] = string.components(separatedBy: ".")
+                    if vparts.count == 2 {
+                        if let v0 = Int(vparts[0]), let v1 = Int(vparts[1]) {
+                            return (v0,v1,0)
+                        }
+                    }
+                    if vparts.count == 3 {
+                        if let v0 = Int(vparts[0]), let v1 = Int(vparts[1]), let v2 = Int(vparts[2]) {
+                            return (v0,v1,v2)
+                        }
+                    }
+                    return nil
+                }
+                if let currentVersion = versionFromString(version), let latestVersion = versionFromString(latestVersionString) {
+                    if latestVersion.0 > currentVersion.0 || ( latestVersion.0 == currentVersion.0 && latestVersion.1 > currentVersion.1) || ( latestVersion.0 == currentVersion.0 && latestVersion.1 == currentVersion.1 && latestVersion.2 > currentVersion.2) {
+                        self.latestVersionString = latestVersionString
+                    }
+                }
+            }
+        }
+        task.resume()
+    }
+    
+    class func updateStatusReadout() {
+        if !latestVersionString.isEmpty {
+            print("\(TColor.magenta)\(TColor.bold)   Note - updated vdbCreate version \(latestVersionString) is available on GitHub\(TColor.reset)")
+            latestVersionString = ""
+        }
     }
     
 }
