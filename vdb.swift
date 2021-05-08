@@ -6,14 +6,14 @@
 //
 //  Created by Anthony West on 1/31/21.
 //  Copyright (c) 2021  Anthony West, Caltech
-//  Last modified 5/3/21
+//  Last modified 5/8/21
 
 import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
 
-let version : String = "1.3"
+let version : String = "1.4"
 let checkForVDBUpdate : Bool = true
 let gnuPlotPath : String = "/usr/local/bin/gnuplot"
 let vdbrcFileName : String = ".vdbrc"
@@ -1841,6 +1841,7 @@ final class VDB {
         let yearBase : Int = 2019
         let yearsMax : Int = 4
         var dateCache : [[[Date?]]] = Array(repeating: Array(repeating: Array(repeating: nil, count: 32), count: 13), count: yearsMax)
+        
         // create Date objects faster using a cache
         func getDateFor(year: Int, month: Int, day: Int) -> Date {
             let y : Int = year - yearBase
@@ -1850,9 +1851,8 @@ final class VDB {
             else {
                 let dateComponents : DateComponents = DateComponents(year:year,month:month,day:day)
                 if let dateFromComp = Calendar.current.date(from: dateComponents) {
-                    date = dateFromComp
                     if y >= 0 && y < yearsMax {
-                        dateCache[year-yearBase][month][day] = date
+                        dateCache[year-yearBase][month][day] = dateFromComp
                     }
                     return dateFromComp
                 }
@@ -2271,7 +2271,7 @@ final class VDB {
             pangoField = pangoField2
         }
         if pangoField == -1 {
-            print("No Pango Lineages available")
+            print("   Warning - no Pango lineages available")
             return
         }
         var ageField : Int = -1
@@ -2426,6 +2426,8 @@ final class VDB {
             return s
         }
         
+        var mutations : [Mutation] = []
+        
         func makeMutation(_ startPos: Int, _ endPos: Int) {
             let wt : UInt8 = metadata[startPos]
             var aa : UInt8 = metadata[endPos-1]
@@ -2463,9 +2465,8 @@ final class VDB {
             else {
                 let dateComponents : DateComponents = DateComponents(year:year,month:month,day:day)
                 if let dateFromComp = Calendar.current.date(from: dateComponents) {
-                    date = dateFromComp
                     if y >= 0 && y < yearsMax {
-                        dateCache[year-yearBase][month][day] = date
+                        dateCache[year-yearBase][month][day] = dateFromComp
                     }
                     return dateFromComp
                 }
@@ -2497,7 +2498,6 @@ final class VDB {
         var state : String = ""
         var date : Date = Date()
         var epiIslNumber : Int = 0
-        var mutations : [Mutation] = []
         var pangoLineage : String = ""
         var age : Int = 0
 
@@ -3642,6 +3642,10 @@ plot
                 mutations.append(mutation)
                 if mutationP.pos <= protein.length {
                     if !(nuclChars.contains(mutation.wt) && nuclChars.contains(mutation.aa)) || isPMutation {
+                        if nuclRef.isEmpty {
+                            print("Error - protein mutations in nucleotide mode require the nucleotide reference file")
+                            return []
+                        }
                         var cdsBuffer: [UInt8] = Array(repeating: 0, count: 3)
                         var possCodons : [[UInt8]] = []
                         if mutation.aa != dashChar {
@@ -4492,7 +4496,7 @@ AS.2,B.1.1.317.2
     }
 
     // returns the SARS-CoV-2 reference nucleotide sequence loaded from external file
-    class func nucleotideReference() -> [UInt8] {
+    class func nucleotideReference(vdb: VDB, firstCall: Bool) -> [UInt8] {
 //        let nuclRefFile : String = "\(basePath)/nuclref.wh-01"
         let nuclRefFile : String = "\(basePath)/nuclref.wiv04"
         var nuclRef : [UInt8] = []
@@ -4502,10 +4506,43 @@ AS.2,B.1.1.317.2
         }
         catch {
             print("Error reading \(nuclRefFile)")
+            if firstCall {
+                downloadNucleotideReferenceToFile(nuclRefFile, vdb: vdb)
+            }
             return []
         }
         nuclRef.insert(0, at: 0) // makes array 1-based
         return nuclRef
+    }
+    
+    class func downloadNucleotideReferenceToFile(_ fileName: String, vdb: VDB) {
+        guard let refName = fileName.components(separatedBy: "/").last else { return }
+        guard let url = URL(string: "https://api.github.com/repos/variant-database/vdb/contents/\(refName)") else { return }
+        let configuration = URLSessionConfiguration.ephemeral
+        let session = URLSession(configuration: configuration)
+        let task = session.dataTask(with: url) {(data, response, error) in
+            guard let data = data else { return }
+            guard let result =  String(data: data, encoding: .utf8) else { return }
+            let parts = result.components(separatedBy: "\"content")
+            if parts.count > 1 {
+                let tmpString : String = parts[1].components(separatedBy: ",")[0]
+                let base64encoded : String = tmpString.replacingOccurrences(of: "\"", with: "").replacingOccurrences(of: ":", with: "").replacingOccurrences(of: " ", with: "").replacingOccurrences(of: "\\n", with: "")
+                if let data2 = Data(base64Encoded: base64encoded, options: .ignoreUnknownCharacters) {
+                    if let refSequence = String(data: data2, encoding: .utf8) {
+                        if refSequence.count == VDB.refLength {
+                            do {
+                                try refSequence.write(toFile: fileName, atomically: true, encoding: .ascii)
+                                vdb.nuclRefDownloaded = true
+                            }
+                            catch {
+                                return
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        task.resume()
     }
     
     // Codon type used for translating nucleotide mutations
@@ -4549,7 +4586,10 @@ AS.2,B.1.1.317.2
     class func proteinMutationsForIsolate(_ isolate: Isolate, _ noteSynonymous: Bool = false, _ oldMutations: [Mutation] = []) {
         
         let nuclRef : [UInt8] = referenceArray // nucleotideReference()
-                
+        if nuclRef.isEmpty {
+            return
+        }
+        
         var codons : [Codon] = []
         for mut in isolate.mutations {
             for protein in Protein.allCases {
@@ -5000,6 +5040,24 @@ AS.2,B.1.1.317.2
         return true
     }
     
+    // returns whether a given string appears to be a single mutation string
+    class func isPatternLike(_ string: String) -> Bool {
+        let part : String = string.uppercased()
+        let firstChar : UInt8 = part.first?.asciiValue ?? 0
+        let lastChar : UInt8 = part.last?.asciiValue ?? 0
+        let middle : String = String(part.dropFirst().dropLast())
+        if let _ = Int(middle) {
+            for c in [firstChar,lastChar] {
+                if (c > 64 && c < 90) || c == 45 || c == 42 {
+                    continue
+                }
+                return false
+            }
+            return true
+        }
+        return false
+    }
+    
     // add a line to the pager line array
     class func pPrint(_ line: String) {
         pagerLines.append(line)
@@ -5179,7 +5237,20 @@ AS.2,B.1.1.317.2
             }
         }
     }
-    
+    var nuclRefDownloadedBacking : Bool = false
+    var nuclRefDownloaded : Bool {
+        get {
+            serialQueue.sync {
+                return nuclRefDownloadedBacking
+            }
+        }
+        set {
+            serialQueue.sync {
+                nuclRefDownloadedBacking = newValue
+            }
+        }
+    }
+
     struct updateStatus {
         
     }
@@ -5249,7 +5320,7 @@ AS.2,B.1.1.317.2
                 let fileArray : [(String,Date)] = urlArray.map { url in
                     (url.lastPathComponent, (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? Date.distantPast) }
                 let filteredFileArray : [(String,Date)] = fileArray.filter { $0.0.prefix(4) == "vdb_" }.sorted(by: { $0.1 > $1.1 })
-                let possibleFileNames : [String] = filteredFileArray.map { $0.0 }.filter { $0.count == 14 && $0.suffix(4) == ".txt" }
+                let possibleFileNames : [String] = filteredFileArray.map { $0.0 }.filter { ($0.count == 14 || $0.contains("nucl")) && $0.suffix(4) == ".txt" }
                 for name in possibleFileNames {
                     if let _ = Int(name.prefix(10).suffix(6)) {
                         fileName = name
@@ -5277,7 +5348,7 @@ AS.2,B.1.1.317.2
         if fileName.contains("nucl") || notProtein {
             nucleotideMode = true
             VDB.refLength = 29892
-            VDB.referenceArray = VDB.nucleotideReference()
+            VDB.referenceArray = VDB.nucleotideReference(vdb: self, firstCall: true)
         }
         else {
             VDB.referenceArray = [UInt8](VDB.ref.utf8)
@@ -6835,12 +6906,10 @@ AS.2,B.1.1.317.2
             if line.hasPrefix(cmd) {
                 let parts : [String] = input.components(separatedBy: " ")
                 let task : Process = Process()
-//                    task.launchPath = "/bin/sh" // + parts[0]  deprecated
                 task.executableURL = URL(fileURLWithPath: "/bin/sh")
                 if parts.count > 1 {
                     task.arguments = ["-c", line] // Array(parts[1..<parts.count])
                 }
-//                    task.launch() // deprecated
                 do {
                     try task.run()
                 }
@@ -7328,6 +7397,13 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
                 print("   Note - updated vdb version \(latestVersionString) is available on GitHub")
                 latestVersionString = ""
             }
+            if nuclRefDownloaded {
+                nuclRefDownloaded = false
+                VDB.referenceArray = VDB.nucleotideReference(vdb: self, firstCall: false)
+                if !VDB.referenceArray.isEmpty {
+                    print("Nucleotide reference file downloaded from GitHub")
+                }
+            }
             var input : String = ""
             do {
                 input = try ln.getLine(prompt: vdbPrompt)
@@ -7724,6 +7800,10 @@ indirect enum Expr {
                 }
                 else if identifier.contains(" ") {
                     print("Error - variable names cannot contain spaces")
+                    break
+                }
+                else if VDB.isPatternLike(identifier) {
+                    print("Error - mutation-like names are not valid variable names")
                     break
                 }
                 let expr3 = expr2.eval(caller: self, vdb: vdb)
