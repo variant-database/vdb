@@ -13,6 +13,7 @@ To define a variable for a cluster or pattern:  \<name> `=` cluster or pattern
 To check whether two clusters or patterns are equal: \<item1> `==` \<item2>  
 To count a cluster or pattern in a variable: `count` \<variable name>  
 Set operations `+`, `-`, and `*` (intersection) can be applied to clusters or patterns  
+The result, if any, of the previous command is available in the variable `last`.  
 
 ## Filtering commands
 \<cluster>`from`\<country or state>    → cluster  
@@ -52,7 +53,7 @@ Set operations `+`, `-`, and `*` (intersection) can be applied to clusters or pa
 `testvdb`               runs built-in tests of **vdb**  
 `save` \<cluster name> \<file name>  
 `load` \<cluster name> \<file name>  
-`group lineages` \<lineage names>    define a lineage group  
+`group lineages` \<lineage names>  define a lineage group  alias `group lineage`, `lineage group`  
 `lineage groups`           lists defined lineages groups  
 `clear` \<cluster name> or \<lineage group>   clears the definition  
 `reset`  
