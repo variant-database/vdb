@@ -190,6 +190,14 @@ Reset program switches to default settings.
 
 Prints the current state of program settings.  
 <br />
+#### `mode`    
+
+Prints the current program mode, either protein or nucleotide.  
+<br />
+#### `count` \<cluster name or pattern name>   
+
+Prints the number of viruses in a named cluster or the number of mutations in a named pattern.  
+<br />
 #### `quit`        alias `exit`, control-C, control-D  
 
 Ends the current **vdb** session.  
@@ -208,7 +216,7 @@ Controls whether accession numbers are printed by the `list` command. By default
 
 Controls whether the average number of mutations is listed for the `monthly` and `weekly` commands. By default this is off.  
 <br />
-#### `includeSublineages`/`includeSublineages off`  
+#### `includeSublineages`/`includeSublineages off`/`excludeSublineages`  
 
 Controls whether sublineages are included in the `lineage` search command. By default sublineages are included - the switch is on.  
 <br />
