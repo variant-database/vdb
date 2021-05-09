@@ -57,13 +57,15 @@ Set operations `+`, `-`, and `*` (intersection) can be applied to clusters or pa
 `clear` \<cluster name> or \<lineage group>   clears the definition  
 `reset`  
 `settings`  
+`mode`    
+`count` \<cluster name or pattern name>   
 `quit`  
 
 ## Program switches
 `debug`/`debug off`  
 `listAccession`/`listAccession off`  
 `listAverageMutations`/`listAverageMutations off`  
-`includeSublineages`/`includeSublineages off`  
+`includeSublineages`/`includeSublineages off`/`excludeSublineages`  
 `simpleNuclPatterns`/`simpleNuclPatterns off`  
 `excludeNFromCounts`/`excludeNFromCounts off`  
 `sixel`/`sixel off`  
