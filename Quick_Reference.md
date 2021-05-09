@@ -59,6 +59,7 @@ Set operations `+`, `-`, and `*` (intersection) can be applied to clusters or pa
 `settings`  
 `mode`    
 `count` \<cluster name or pattern name>   
+`//` [\<comment>]     
 `quit`  
 
 ## Program switches
