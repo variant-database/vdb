@@ -134,9 +134,9 @@ Lists the SARS-CoV-2 proteins and their gene positions.
 
 Sorts the specified cluster by sample collection date.  
 <br />
-#### `help`  
+#### `help` [\<command>]    alias `?`    
 
-Prints a list of **vdb** commands.  
+Prints a list of **vdb** commands or a description of a specific command.  
 <br />
 #### `license`  
 
