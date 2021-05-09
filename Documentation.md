@@ -198,6 +198,10 @@ Prints the current program mode, either protein or nucleotide.
 
 Prints the number of viruses in a named cluster or the number of mutations in a named pattern.  
 <br />
+#### `//` [\<comment>]  
+
+A comment line, which is ignored.  
+<br />
 #### `quit`        alias `exit`, control-C, control-D  
 
 Ends the current **vdb** session.  
