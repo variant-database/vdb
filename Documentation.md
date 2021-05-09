@@ -175,7 +175,7 @@ Saves a list of the viruses in the given cluster to the specified file.
 
 Loads the viruses in a file into a cluster with the specified name. If the mutation type (nucleotide/protein) does not match the program mode, the virus set is transformed to match the program mode.  
 <br />
-#### `group lineages` \<lineage name(s) or named cluster>    
+#### `group lineages` \<lineage name(s) or named cluster>    alias `group lineage`, `lineage group`  
 
 Designate which lineages should be grouped and displayed in the `trends` tables and graphs. If a single lineage name is given, then all sublineages will be counted as part of that lineage. If multiple lineages are listed, those will be counted under the first lineage name. If a defined cluster is given, viruses in that cluster will be counted under that cluster's name, not as part of their own lineage.   
 <br />
