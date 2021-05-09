@@ -43,7 +43,7 @@ Set operations `+`, `-`, and `*` (intersection) can be applied to clusters or pa
 
 ## Other commands
 `sort` \<cluster>    (by date)  
-`help`  
+`help` [\<command>]    alias `?`  
 `license`  
 `history`  
 `load` \<vdb database file>  
