@@ -22,6 +22,11 @@ Variable names are case sensitive and can included letters or numbers.
 To check whether two clusters or patterns are equal: \<item1> `==` \<item2>  
 To count a cluster or pattern in a variable: `count` \<variable name>  
 
+#### `last`    
+
+The result, if any, of the previous command is available in the variable `last`.  
+<br />
+
 ## Set operations
 Set operations `+`, `-`, and `*` (intersection) can be applied to clusters or patterns.   
 
