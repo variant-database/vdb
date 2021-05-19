@@ -74,7 +74,7 @@ The result, if any, of the previous command is available in the variable `last`.
 `trendGraphs`/`trendGraphs off`  
 `stackGraphs`/`stackGraphs off`  
 `completions`/`completions off`  
-
+`displayTextWithColor`/`displayTextWithColor off`  
 
 `minimumPatternsCount = `\<n>  
 `trendsLineageCount = `\<n>
