@@ -6,28 +6,34 @@
 //
 //  Created by Anthony West on 1/31/21.
 //  Copyright (c) 2021  Anthony West, Caltech
-//  Last modified 5/8/21
+//  Last modified 5/19/21
 
 import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
 
-let version : String = "1.4"
-let checkForVDBUpdate : Bool = true
-let gnuPlotPath : String = "/usr/local/bin/gnuplot"
-let vdbrcFileName : String = ".vdbrc"
+let version : String = "1.5"
+let checkForVDBUpdate : Bool = true         // to inform users of updates; the updates are not downloaded
+let allowGitHubDownloads : Bool = true      // to download nucl. ref. and documentation, if missing
 let basePath : String = FileManager.default.currentDirectoryPath
+let gnuPlotPath : String = "/usr/local/bin/gnuplot"
 let gnuplotFontFile : String = "\(basePath)/Arial.ttf"
 let gnuplotFontSize : Int = 26
+let vdbrcFileName : String = ".vdbrc"
 let missingAccessionNumberBase : Int = 1_000_000_001
-
-print("SARS-CoV-2 Variant Database  Version \(version)              Bjorkman Lab/Caltech")
 
 // MARK: - VDB Command line arguments
 
 let clArguments : [String] = CommandLine.arguments
 let clFileNames : [String] = Array(clArguments.dropFirst())
+
+if clFileNames == ["--version"] {
+    print(version)
+    exit(0)
+}
+
+print("SARS-CoV-2 Variant Database  Version \(version)              Bjorkman Lab/Caltech")
 
 // MARK: - Linenoise
 // vdb uses Linenoise to enhance the interactive terminal
@@ -698,7 +704,7 @@ public class LineNoise {
 
         switch mode {
         case .notATTY:
-            return getLineNoTTY(prompt: prompt)
+            return try getLineNoTTY(prompt: prompt)
 
         case .unsupportedTTY:
             return try getLineUnsupportedTTY(prompt: prompt)
@@ -1025,8 +1031,11 @@ public class LineNoise {
     
     // MARK: - Line editing
     
-    internal func getLineNoTTY(prompt: String) -> String {
-        return ""
+    internal func getLineNoTTY(prompt: String) throws -> String {
+//        return ""
+        let line : String = try getLineUnsupportedTTY(prompt: prompt)
+        print(line, terminator: "\n")
+        return line
     }
     
     internal func getLineRaw(prompt: String) throws -> String {
@@ -1298,6 +1307,102 @@ let vdbPrompt : String = "VDB> "
 //
 
 import Foundation
+
+let serialQueue : DispatchQueue = DispatchQueue(label: "vdb.serial")
+
+@propertyWrapper
+public struct Atomic<Value> {
+  private var value: Value
+
+  public init(wrappedValue: Value) {
+    self.value = wrappedValue
+  }
+
+  public var wrappedValue: Value {
+    get {
+      return serialQueue.sync { value }
+    }
+    set {
+        serialQueue.sync { value = newValue }
+    }
+  }
+}
+
+// MARK: - Extensions
+
+extension Date {
+    func addMonth(n: Int) -> Date {
+        let cal = NSCalendar.current
+        guard let newDate = cal.date(byAdding: .month, value: n, to: self) else { print("Error adding month to date"); return Date() }
+        return newDate
+    }
+    func addWeek(n: Int) -> Date {
+        let cal = NSCalendar.current
+        guard let newDate = cal.date(byAdding: .day , value: 7*n, to: self) else { print("Error adding week to date"); return Date() }
+        return newDate
+    }
+    func addDay(n: Int) -> Date {
+        let cal = NSCalendar.current
+        guard let newDate = cal.date(byAdding: .day , value: n, to: self) else { print("Error adding week to date"); return Date() }
+        return newDate
+    }
+}
+
+// for printing numbers with thousands separator
+func nf(_ value: Int) -> String {
+    return numberFormatter.string(from: NSNumber(value: value)) ?? ""
+}
+
+infix operator ~~: ComparisonPrecedence
+
+extension String {
+
+    // case insensitive equality
+    static func ~~(lhs: Self, rhs: Self) -> Bool {
+        return lhs.caseInsensitiveCompare(rhs) == .orderedSame
+    }
+}
+
+// MARK: - Autorelease Pool for Linux
+
+#if os(Linux)
+// autorelease call used to minimize memory footprint
+func autoreleasepool<Result>(invoking body: () throws -> Result) rethrows -> Result {
+     return try body()
+}
+#endif
+
+// xterm ANSI codes for colored text
+struct TColorBase {
+    static let reset = "\u{001B}[0;0m"
+    static let black = "\u{001B}[0;30m"
+    static let red = "\u{001B}[0;31m"
+    static let green = "\u{001B}[0;32m"
+    static let yellow = "\u{001B}[0;33m"
+    static let blue = "\u{001B}[0;34m"
+    static let magenta = "\u{001B}[0;35m"
+    static let cyan = "\u{001B}[0;36m"
+    static let white = "\u{001B}[0;37m"
+    static let gray = "\u{001B}[0;90m"
+    static let bold = "\u{001B}[1m"       // "\u{001B}[22m"
+    static let underline = "\u{001B}[4m"  // "\u{001B}[24m"
+    static let onRed = "\u{001B}[41m"
+    static let onGreen = "\u{001B}[42m"
+    static let onBlue = "\u{001B}[44m"
+    static let onYellow  = "\u{001B}[43m"
+    static let onMagenta = "\u{001B}[45m"
+    static let onCyan = "\u{001B}[46m"
+}
+
+struct TColor {
+    static var reset: String { VDB.displayTextWithColor ? TColorBase.reset : "" }
+    static var red: String { VDB.displayTextWithColor ? TColorBase.red : "" }
+    static var magenta: String { VDB.displayTextWithColor ? TColorBase.magenta : "" }
+    static var cyan: String { VDB.displayTextWithColor ? TColorBase.cyan : "" }
+    static var gray: String { VDB.displayTextWithColor ? TColorBase.gray : "" }
+    static var bold: String { VDB.displayTextWithColor ? TColorBase.bold : "" }
+    static var underline: String { VDB.displayTextWithColor ? TColorBase.underline : "" }
+}
 
 enum Protein : Int, CaseIterable, Equatable, Comparable {
     
@@ -1650,15 +1755,6 @@ struct Isolate : Equatable, Hashable {
     
 }
 
-// MARK: - Autorelease Pool for Linux
-
-#if os(Linux)
-// autorelease call used to minimize memory footprint
-func autoreleasepool<Result>(invoking body: () throws -> Result) rethrows -> Result {
-     return try body()
-}
-#endif
-
 // override to either print normally or via the pager
 func print(_ string: String) {
     var string : String = string
@@ -1668,7 +1764,7 @@ func print(_ string: String) {
     if string.contains("Warning") || string.contains("Note") {
         string = TColor.magenta + TColor.bold + string + TColor.reset
     }
-    if !VDB.printToPager {
+    if !VDB.printToPager || VDB.batchMode {
         Swift.print(string, terminator:"\n")
     }
     else {
@@ -1678,7 +1774,7 @@ func print(_ string: String) {
 
 // print(terminator:) substitute to either print normally or via the pager
 func printJoin(_ string: String, terminator: String) {
-    if !VDB.printToPager {
+    if !VDB.printToPager || VDB.batchMode {
         Swift.print(string, terminator:terminator)
     }
     else {
@@ -1691,63 +1787,6 @@ func printJoin(_ string: String, terminator: String) {
         }
         VDB.pPrint(jString)
     }
-}
-
-// MARK: - Extensions
-
-extension Date {
-    func addMonth(n: Int) -> Date {
-        let cal = NSCalendar.current
-        guard let newDate = cal.date(byAdding: .month, value: n, to: self) else { print("Error adding month to date"); return Date() }
-        return newDate
-    }
-    func addWeek(n: Int) -> Date {
-        let cal = NSCalendar.current
-        guard let newDate = cal.date(byAdding: .day , value: 7*n, to: self) else { print("Error adding week to date"); return Date() }
-        return newDate
-    }
-    func addDay(n: Int) -> Date {
-        let cal = NSCalendar.current
-        guard let newDate = cal.date(byAdding: .day , value: n, to: self) else { print("Error adding week to date"); return Date() }
-        return newDate
-    }
-}
-
-// for printing numbers with thousands separator
-func nf(_ value: Int) -> String {
-    return numberFormatter.string(from: NSNumber(value: value)) ?? ""
-}
-
-infix operator ~~: ComparisonPrecedence
-
-extension String {
-
-    // case insensitive equality
-    static func ~~(lhs: Self, rhs: Self) -> Bool {
-        return lhs.caseInsensitiveCompare(rhs) == .orderedSame
-    }
-}
-
-// xterm ANSI codes for colored text
-struct TColor {
-    static let reset = "\u{001B}[0;0m"
-    static let black = "\u{001B}[0;30m"
-    static let red = "\u{001B}[0;31m"
-    static let green = "\u{001B}[0;32m"
-    static let yellow = "\u{001B}[0;33m"
-    static let blue = "\u{001B}[0;34m"
-    static let magenta = "\u{001B}[0;35m"
-    static let cyan = "\u{001B}[0;36m"
-    static let white = "\u{001B}[0;37m"
-    static let gray = "\u{001B}[0;90m"
-    static let bold = "\u{001B}[1m"       // "\u{001B}[22m"
-    static let underline = "\u{001B}[4m"  // "\u{001B}[24m"
-    static let onRed = "\u{001B}[41m"
-    static let onGreen = "\u{001B}[42m"
-    static let onBlue = "\u{001B}[44m"
-    static let onYellow  = "\u{001B}[43m"
-    static let onMagenta = "\u{001B}[45m"
-    static let onCyan = "\u{001B}[46m"
 }
 
 // MARK: - VDB Type (class) methods
@@ -4506,8 +4545,19 @@ AS.2,B.1.1.317.2
         }
         catch {
             print("Error reading \(nuclRefFile)")
-            if firstCall {
-                downloadNucleotideReferenceToFile(nuclRefFile, vdb: vdb)
+            if firstCall && allowGitHubDownloads {
+//                downloadNucleotideReferenceToFile(nuclRefFile, vdb: vdb)
+                downloadFileFromGitHub(nuclRefFile, vdb: vdb) { refSequence in
+                    if refSequence.count == VDB.refLength {
+                        do {
+                            try refSequence.write(toFile: nuclRefFile, atomically: true, encoding: .ascii)
+                            vdb.nuclRefDownloaded = true
+                        }
+                        catch {
+                            return
+                        }
+                    }
+                }
             }
             return []
         }
@@ -4515,9 +4565,9 @@ AS.2,B.1.1.317.2
         return nuclRef
     }
     
-    class func downloadNucleotideReferenceToFile(_ fileName: String, vdb: VDB) {
-        guard let refName = fileName.components(separatedBy: "/").last else { return }
-        guard let url = URL(string: "https://api.github.com/repos/variant-database/vdb/contents/\(refName)") else { return }
+    class func downloadFileFromGitHub(_ fileName: String, vdb: VDB, onSuccess: @escaping (String) -> Void) {
+        guard let shortName = fileName.components(separatedBy: "/").last else { return }
+        guard let url = URL(string: "https://api.github.com/repos/variant-database/vdb/contents/\(shortName)") else { return }
         let configuration = URLSessionConfiguration.ephemeral
         let session = URLSession(configuration: configuration)
         let task = session.dataTask(with: url) {(data, response, error) in
@@ -4528,16 +4578,8 @@ AS.2,B.1.1.317.2
                 let tmpString : String = parts[1].components(separatedBy: ",")[0]
                 let base64encoded : String = tmpString.replacingOccurrences(of: "\"", with: "").replacingOccurrences(of: ":", with: "").replacingOccurrences(of: " ", with: "").replacingOccurrences(of: "\\n", with: "")
                 if let data2 = Data(base64Encoded: base64encoded, options: .ignoreUnknownCharacters) {
-                    if let refSequence = String(data: data2, encoding: .utf8) {
-                        if refSequence.count == VDB.refLength {
-                            do {
-                                try refSequence.write(toFile: fileName, atomically: true, encoding: .ascii)
-                                vdb.nuclRefDownloaded = true
-                            }
-                            catch {
-                                return
-                            }
-                        }
+                    if let fileString = String(data: data2, encoding: .utf8) {
+                        onSuccess(fileString)
                     }
                 }
             }
@@ -5203,6 +5245,7 @@ AS.2,B.1.1.317.2
     static let defaultCompletions : Bool = true
     static let defaultMinimumPatternsCount : Int = 0
     static let defaultTrendsLineageCount : Int = 5
+    static let defaultDisplayTextWithColor : Bool = true
     
     // user adjustable switches:
     var debug : Bool = defaultDebug                               // print debug messages
@@ -5223,37 +5266,11 @@ AS.2,B.1.1.317.2
     var metaPos : [Int] = []
     var metaFields : [String] = []
     var metadataLoaded : Bool = false
-    let serialQueue = DispatchQueue(label: "update check")
-    var latestVersionStringBacking : String = ""
-    var latestVersionString : String {
-        get {
-            serialQueue.sync {
-                return latestVersionStringBacking
-            }
-        }
-        set {
-            serialQueue.sync {
-                latestVersionStringBacking = newValue
-            }
-        }
-    }
-    var nuclRefDownloadedBacking : Bool = false
-    var nuclRefDownloaded : Bool {
-        get {
-            serialQueue.sync {
-                return nuclRefDownloadedBacking
-            }
-        }
-        set {
-            serialQueue.sync {
-                nuclRefDownloadedBacking = newValue
-            }
-        }
-    }
-
-    struct updateStatus {
-        
-    }
+    var helpDict : [String:String] = [:]
+    
+    @Atomic var latestVersionString : String = ""
+    @Atomic var nuclRefDownloaded : Bool = false
+    @Atomic var helpDocDownloaded : Bool = false
     
     let isolatesKeyword : String = "world"
 
@@ -5262,6 +5279,8 @@ AS.2,B.1.1.317.2
     static var printToPager : Bool = false
     static var printProteinMutations : Bool = false    // temporary flag used to control printing
     static var referenceArray : [UInt8] = []
+    static var batchMode : Bool = false
+    static var displayTextWithColor : Bool = defaultDisplayTextWithColor
 
     // MARK: -
     
@@ -5455,6 +5474,7 @@ AS.2,B.1.1.317.2
         completions = VDB.defaultCompletions
         minimumPatternsCount = VDB.defaultMinimumPatternsCount
         trendsLineageCount = VDB.defaultTrendsLineageCount
+        VDB.displayTextWithColor = VDB.defaultDisplayTextWithColor
     }
     
     // prints the current state of a switch
@@ -5477,13 +5497,14 @@ AS.2,B.1.1.317.2
         printSwitch("trendGraphs",trendGraphs)
         printSwitch("stackGraphs",stackGraphs)
         printSwitch("completions",completions)
+        printSwitch("displayTextWithColor",VDB.displayTextWithColor)
         print("minimumPatternsCount = \(minimumPatternsCount)")
         print("trendsLineageCount = \(trendsLineageCount)")
     }
     
     func offerCompletions(_ offer: Bool, _ ln: LineNoise) {
         if offer {
-            var completions : [String] = ["before","after","named","lineage","consensus","patterns","countries","states","trends","monthly","weekly","clusters","proteins","history","settings","includeSublineages","excludeSublineages","simpleNuclPatterns","excludeNFromCounts","sixel","trendGraphs","stackGraphs","completions","minimumPatternsCount","trendsLineageCount","containing","group","reset"]
+            var completions : [String] = ["before","after","named","lineage","consensus","patterns","countries","states","trends","monthly","weekly","clusters","proteins","history","settings","includeSublineages","excludeSublineages","simpleNuclPatterns","excludeNFromCounts","sixel","trendGraphs","stackGraphs","completions","displayTextWithColor","minimumPatternsCount","trendsLineageCount","containing","group","reset"]
             var countrySet : Set<String> = []
             for iso in isolates {
                 countrySet.insert(iso.country)
@@ -6976,7 +6997,7 @@ list [<n>] <cluster>
 [list] proteins
 
 sort <cluster>  (by date)
-help
+help [<command>]   alias ?
 license
 history
 load <vdb database file>
@@ -6985,22 +7006,26 @@ char <Pango lineage>    prints characteristics of lineage
 testvdb
 save <cluster name> <file name>
 load <cluster name> <file name>
-group lineages <lineage names>
+group lineages <lineage names>    alias group lineage, lineage group
 reset
 settings
+mode
+count <cluster name or pattern name>
+// [<comment>]
 quit
 
 Program switches:
 debug/debug off
 listAccession/listAccession off
 listAverageMutations/listAverageMutations off
-includeSublineages/includeSublineages off
+includeSublineages/includeSublineages off/excludeSublineages
 simpleNuclPatterns/simpleNuclPatterns off
 excludeNFromCounts/excludeNFromCounts off
 sixel/sixel off
 trendGraphs/trendGraphs off
 stackGraphs/stackGraphs off
 completions/completions off
+displayTextWithColor/displayTextWithColor off
 
 minimumPatternsCount = <n>
 trendsLineageCount = <n>
@@ -7111,7 +7136,13 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
             completions = false
             printSwitch(lowercaseLine, completions)
             return (true,.completionsChanged,nil)
-        case "list proteins", "proteins":
+        case "displaytextwithcolor", "displaytextwithcolor on":
+            VDB.displayTextWithColor = true
+            printSwitch(lowercaseLine, VDB.displayTextWithColor)
+        case "displaytextwithcolor off":
+            VDB.displayTextWithColor = false
+            printSwitch(lowercaseLine, VDB.displayTextWithColor)
+         case "list proteins", "proteins":
             VDB.listProteins(vdb: self)
         case "history":
             return (true,.printHistory,nil)
@@ -7272,6 +7303,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
                 let groupString : String = group.joined(separator: ", ")
                 print(groupString)
             }
+        case _ where lowercaseLine.hasPrefix("help ") || lowercaseLine.hasPrefix("? "):
+            let variableNameString : String = line.replacingOccurrences(of: "help ", with: "", options: .caseInsensitive, range: nil).replacingOccurrences(of: "? ", with: "")
+            helpTopic(variableNameString)
         default:
             let parts : [String] = processLine(line)
             
@@ -7341,6 +7375,28 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
         }
     }
     
+    // convert version string to tuple for comparison
+    func versionFromString(_ string: String) -> (Int,Int,Int)? {
+        let vparts : [String] = string.components(separatedBy: ".")
+        if vparts.count == 2 {
+            if let v0 = Int(vparts[0]), let v1 = Int(vparts[1]) {
+                return (v0,v1,0)
+            }
+        }
+        if vparts.count == 3 {
+            if let v0 = Int(vparts[0]), let v1 = Int(vparts[1]), let v2 = Int(vparts[2]) {
+                return (v0,v1,v2)
+            }
+        }
+        return nil
+    }
+    
+    // returns true if the latest version is higher than the current version
+    func latestVersionIsNewer(latestVersion: (Int,Int,Int), currentVersion: (Int,Int,Int)) -> Bool {
+        return latestVersion.0 > currentVersion.0 || ( latestVersion.0 == currentVersion.0 && latestVersion.1 > currentVersion.1) || ( latestVersion.0 == currentVersion.0 && latestVersion.1 == currentVersion.1 && latestVersion.2 > currentVersion.2)
+    }
+    
+    // download the latest release tag from GitHub and compare this to the vdb version being run
     func checkForUpdates() {
         guard let url = URL(string: "https://api.github.com/repos/variant-database/vdb/releases/latest") else { return }
         let configuration = URLSessionConfiguration.ephemeral
@@ -7352,28 +7408,125 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
             if parts.count > 1 {
                 let tmpString : String = parts[1].components(separatedBy: ",")[0]
                 let latestVersionString : String = tmpString.replacingOccurrences(of: "\"", with: "").replacingOccurrences(of: ":", with: "").replacingOccurrences(of: "v", with: "").replacingOccurrences(of: " ", with: "")
-                func versionFromString(_ string: String) -> (Int,Int,Int)? {
-                    let vparts : [String] = string.components(separatedBy: ".")
-                    if vparts.count == 2 {
-                        if let v0 = Int(vparts[0]), let v1 = Int(vparts[1]) {
-                            return (v0,v1,0)
-                        }
-                    }
-                    if vparts.count == 3 {
-                        if let v0 = Int(vparts[0]), let v1 = Int(vparts[1]), let v2 = Int(vparts[2]) {
-                            return (v0,v1,v2)
-                        }
-                    }
-                    return nil
-                }
-                if let currentVersion = versionFromString(version), let latestVersion = versionFromString(latestVersionString) {
-                    if latestVersion.0 > currentVersion.0 || ( latestVersion.0 == currentVersion.0 && latestVersion.1 > currentVersion.1) || ( latestVersion.0 == currentVersion.0 && latestVersion.1 == currentVersion.1 && latestVersion.2 > currentVersion.2) {
+                if let currentVersion = self.versionFromString(version), let latestVersion = self.versionFromString(latestVersionString) {
+                    if self.latestVersionIsNewer(latestVersion: latestVersion, currentVersion: currentVersion) {
                         self.latestVersionString = latestVersionString
                     }
                 }
             }
         }
         task.resume()
+    }
+    
+    // prints command description from Documentation.md
+    // downloads Documentation.md from GitHub if not present in the working directory
+    func helpTopic(_ topic: String) {
+        if helpDict.isEmpty {
+            let docFile : String = "Documentation.md"
+            let docFilePath : String = "\(basePath)/\(docFile)"
+            var docString : String = ""
+            var shouldDownloadDoc : Bool = false
+            do {
+                try docString = String(contentsOfFile: docFilePath)
+                // check version
+                if !docString.isEmpty {
+                    var docVersionString : String = ""
+                    var index1 : String.Index? = nil
+                    var index2 : String.Index? = nil
+                    var index : String.Index = docString.endIndex
+                    while index != docString.startIndex && (index1 == nil || index2 == nil) {
+                        index = docString.index(before: index)
+                        if index2 == nil && docString[index] != "\n" {
+                            index2 = index
+                        }
+                        if index1 == nil && docString[index] == " " {
+                            index1 = docString.index(after: index)
+                        }
+                    }
+                    if let index1 = index1, let index2 = index2 {
+                        if index2 > index1 {
+                            docVersionString = String(docString[index1...index2])
+                        }
+                    }
+                    if let runningVersion = self.versionFromString(version), let docVersion = self.versionFromString(docVersionString) {
+                        if self.latestVersionIsNewer(latestVersion: runningVersion, currentVersion: docVersion) {
+                            shouldDownloadDoc = true
+                        }
+                    }
+                }
+            }
+            catch {
+                shouldDownloadDoc = true
+            }
+            if shouldDownloadDoc && !helpDocDownloaded && allowGitHubDownloads {
+                VDB.downloadFileFromGitHub(docFilePath, vdb: self) { fileString in
+                    do {
+                        try fileString.write(toFile: docFilePath, atomically: true, encoding: .utf8)
+                        self.helpDocDownloaded = true
+                    }
+                    catch {
+                        return
+                    }
+                }
+                for _ in 0..<10 {
+                    if helpDocDownloaded {
+                        do {
+                            try docString = String(contentsOfFile: docFilePath)
+                        }
+                        catch {
+                            return
+                        }
+                        break
+                    }
+                    Thread.sleep(forTimeInterval: 0.1)
+                }
+                helpDocDownloaded = true
+            }
+            let docParts : [String] = docString.components(separatedBy: "####")
+            if docParts.count > 1 {
+                for part in docParts {
+                    let parts2 : [String] = part.replacingOccurrences(of: " = ", with: "").replacingOccurrences(of: "[`list`]", with: "").components(separatedBy: "\n")[0].components(separatedBy: "`")
+                    let cmds : [String] = parts2.enumerated().compactMap { $0.offset.isMultiple(of: 2) ? nil : $0.element.lowercased() }.filter { $0 != "for" && $0 != "in" && !$0.isEmpty }
+                    for cmd in cmds {
+                        helpDict[cmd] = part
+                        if cmd.contains(" off") {
+                            let cmd2 : String = cmd.replacingOccurrences(of: " off", with: " on")
+                            helpDict[cmd2] = part
+                        }
+                    }
+                }
+            }
+        }
+        let topicLC : String = topic.lowercased()
+        var helpInfo : String? = helpDict[topicLC]
+        if helpInfo == nil && topicLC.hasPrefix("list ") {
+            helpInfo = helpDict[topicLC.replacingOccurrences(of: "list ", with: "")]
+        }
+        if let helpInfo = helpInfo {
+            let helpInfo2 : String = helpInfo.replacingOccurrences(of: "<br />", with: "").replacingOccurrences(of: "\\<", with: "<").replacingOccurrences(of: "**", with: "`")
+            var helpInfo2Chars : [Character] = Array(helpInfo2)
+            var counter : Int = 0
+            var highlighted : Bool = false
+            while counter < helpInfo2Chars.count {
+                if helpInfo2Chars[counter] == "`" {
+                    helpInfo2Chars.remove(at: counter)
+                    if highlighted {
+                        helpInfo2Chars.insert(contentsOf: Array("\(TColor.reset) "), at: counter)
+                    }
+                    else {
+                        helpInfo2Chars.insert(contentsOf: Array(" \(TColor.bold)"), at: counter)
+                    }
+                    highlighted.toggle()
+                }
+                counter += 1
+            }
+            let helpInfo3 : String = String(helpInfo2Chars)
+            print("")
+            print("\(helpInfo3)")
+        }
+        else {
+            print("No help available for \(topic)")
+        }
     }
 
     // MARK: - main run loop
@@ -7389,6 +7542,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
         
         let ln = LineNoise()
                 
+        if ln.mode == .notATTY {
+            VDB.batchMode = true
+        }
+        
         offerCompletions(completions, ln)
         loadrc()
         
@@ -7460,9 +7617,29 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
         let trendGraphsSetting : Bool = trendGraphs
         let stackGraphsSetting : Bool = stackGraphs
         let completionsSetting : Bool = completions
+        let displayTextWithColorSetting : Bool = VDB.displayTextWithColor
         let minimumPatternsCountSetting : Int = minimumPatternsCount
         let trendsLineageCountSetting : Int = trendsLineageCount
-
+/*
+        // test all commands - disable func pagerPrint() by immediate return
+        reset()
+        let allCmds : [String] = ["a1 = > 10", "< 5", "# 8", "from ca", "containing E484K", "w/ D253G", "w/o D614G", "consensus B.1.526", "patterns B.1.526", "freq B.1.526", "frequencies B.1.575", "countries B.1.526", "states B.1.526", "monthly B.1.526", "weekly B.1.526", "before 4/6/20", "after 2/5/21", "named PRL", "lineage B.1.526", "lineages B.1.526", "trends ny", "list clusters", "clusters", "list patterns", "patterns", "help", "?", "license", "debug", "debug on", "debug off", "listaccession", "listaccession on", "listaccession off", "listaveragemutations", "listaveragemutations on", "listaveragemutations off", "includesublineages", "includesublineages on", "includesublineages off", "excludesublineages", "simplenuclpatterns", "simplenuclpatterns on", "simplenuclpatterns off", "excludenfromcounts", "excludenfromcounts on", "excludenfromcounts off", "sixel", "sixel on", "sixel off", "trendgraphs", "trendgraphs on", "trendgraphs off", "stackgraphs", "stackgraphs on", "stackgraphs off", "completions", "completions on", "completions off", "displayTextWithColor", "displayTextWithColor on", "displayTextWithColor off", "list proteins", "proteins", "history", "clear", "clear ", "sort world", "char b.1.526", "characteristics b.1.575", "count a1", "mode", "reset", "settings", "trim", "// test comment", "group lineages B.1.1.7", "lineage group B.1.617", "group lineage B.1.618", "lineage groups", "group lineages", "help "]
+        for cmdString in allCmds {
+            VDB.printToPager = false
+            print("\(vdbPrompt)\(cmdString)")
+            VDB.printToPager = true
+            _ = interpretInput(cmdString)
+            VDB.printToPager = false
+            VDB.pagerLines = VDB.pagerLines.filter { !$0.isEmpty }
+            for line in VDB.pagerLines {
+                print(line)
+            }
+            if VDB.pagerLines.isEmpty && !cmdString.contains("//") {
+                print("Error - empty line for \(cmdString)")
+            }
+            VDB.pagerLines = []
+        }
+*/
         reset()
         excludeNFromCounts = excludeNFromCountsSetting
         
@@ -7599,7 +7776,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
             let passesTest : Bool = returnInt == 1
             print("Equality test \(cmds1) \(cmds2) result: \(passesTest)")
         }
-        let eqTests : [(String,String)] = [("a_X = w/ E484K","b_X = with e484k"),("a_X = b.1.526.1","b_X = lineage b.1.526;includeSublineages off;c_X = b.1.526;d_X = b.1.526.2;e_X = b_X - c_X - d_X")]
+        let eqTests : [(String,String)] = [("a_X = w/ E484K","b_X = with e484k"),("a_X = b.1.526.1","b_X = lineage b.1.526;includeSublineages off;c_X = b.1.526;d_X = b.1.526.2;e_X = b.1.526.3;f_X = b_X - c_X - d_X - e_X")]
         for eqTest in eqTests {
             equalityTest(eqTest.0,eqTest.1)
         }
@@ -7621,6 +7798,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
         trendGraphs = trendGraphsSetting
         stackGraphs = stackGraphsSetting
         completions = completionsSetting
+        VDB.displayTextWithColor = displayTextWithColorSetting
         minimumPatternsCount = minimumPatternsCountSetting
         trendsLineageCount = trendsLineageCountSetting
         
