@@ -10,7 +10,7 @@ import Foundation
 import FoundationNetworking
 #endif
 
-let version : String = "1.5"
+let version : String = "1.6"
 let checkForVDBUpdate : Bool = true
 
 print("SARS-CoV-2 Variant Database Creator  Version \(version)      Bjorkman Lab/Caltech")
