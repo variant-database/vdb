@@ -21,6 +21,7 @@ The result, if any, of the previous command is available in the variable `last`.
 \<cluster>`not containing`[\<n>] \<pattern> → cluster    alias `without`, `w/o` (full pattern)  
 \<cluster>`before`\<date>        → cluster  
 \<cluster>`after`\<date>         → cluster  
+\<cluster>[`range`]\<date>-\<date2>    → cluster  
 \<cluster>`>` or `<` or `#` \<n>        → cluster    filter by # of mutations  
 \<cluster>`named`\<state_id or EPI_ISL#>  → cluster  
 \<cluster>`lineage`\<Pango lineage>   → cluster  
@@ -40,7 +41,8 @@ The result, if any, of the previous command is available in the variable `last`.
 [`list`] `weekly` [`for`] \<cluster> [\<cluster2>]  
 [`list`] `patterns`        lists built-in and user defined patterns  
 [`list`] `clusters`        lists built-in and user defined clusters  
-[`list`] `proteins`
+[`list`] `proteins`  
+[`list`] `variants`        lists WHO-designated variants
 
 ## Other commands
 `sort` \<cluster>    (by date)  
@@ -51,6 +53,7 @@ The result, if any, of the previous command is available in the variable `last`.
 `trim`               removes extraneous N nucleotides from all viruses  
 `char` \<Pango lineage>        prints characteristics of lineage  
 `testvdb`               runs built-in tests of **vdb**  
+`demo`                runs demonstration of **vdb**  
 `save` \<cluster name> \<file name>  
 `load` \<cluster name> \<file name>  
 `group lineages` \<lineage names>  define a lineage group  alias `group lineage`, `lineage group`  
@@ -75,6 +78,7 @@ The result, if any, of the previous command is available in the variable `last`.
 `stackGraphs`/`stackGraphs off`  
 `completions`/`completions off`  
 `displayTextWithColor`/`displayTextWithColor off`  
+`paging`/`paging off`  
 
 `minimumPatternsCount = `\<n>  
-`trendsLineageCount = `\<n>
+`trendsLineageCount = `\<n>       alias `trends` \<n>
