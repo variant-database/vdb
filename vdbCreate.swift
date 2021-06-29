@@ -138,7 +138,7 @@ final class VDBCreate {
 
         fileStream.open()
         
-        let bufferSize : Int = 40000
+        let bufferSize : Int = 50000
         let outBufferSize : Int
         if !nucl {
             outBufferSize = fileSize/200
