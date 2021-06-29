@@ -5144,6 +5144,7 @@ plot
                     keep[cStart] = true
                     keep[cStart+1] = true
                     keep[cStart+2] = true
+                    keep[mutation.pos] = true
                 }
             }
             for mutation in iso.mutations {
