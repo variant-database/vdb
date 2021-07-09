@@ -3,14 +3,14 @@
 //  VDBCreate
 //
 //  Copyright (c) 2021  Anthony West, Caltech
-//  Last modified 6/29/21
+//  Last modified 7/8/21
 
 import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
 
-let version : String = "1.7"
+let version : String = "1.8"
 let checkForVDBUpdate : Bool = true
 
 print("SARS-CoV-2 Variant Database Creator  Version \(version)      Bjorkman Lab/Caltech")
