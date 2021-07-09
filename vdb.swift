@@ -6,7 +6,7 @@
 //
 //  Created by Anthony West on 1/31/21.
 //  Copyright (c) 2021  Anthony West, Caltech
-//  Last modified 6/29/21
+//  Last modified 7/8/21
 
 import Foundation
 #if canImport(FoundationNetworking)
@@ -2476,6 +2476,9 @@ final class VDB {
         func intA(_ range : CountableRange<Int>) -> Int {
             var counter : Int = 0
             for i in range {
+                if metadata[i] > 127 {
+                    return 0
+                }
                 buf?[counter] = CChar(metadata[i])
                 counter += 1
             }
