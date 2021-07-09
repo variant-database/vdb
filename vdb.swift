@@ -13,7 +13,7 @@ import Foundation
 import FoundationNetworking
 #endif
 
-let version : String = "1.7"
+let version : String = "1.8"
 let checkForVDBUpdate : Bool = true         // to inform users of updates; the updates are not downloaded
 let allowGitHubDownloads : Bool = true      // to download nucl. ref. and documentation, if missing
 let basePath : String = FileManager.default.currentDirectoryPath
