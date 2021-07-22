@@ -6,14 +6,14 @@
 //
 //  Created by Anthony West on 1/31/21.
 //  Copyright (c) 2021  Anthony West, Caltech
-//  Last modified 7/8/21
+//  Last modified 7/21/21
 
 import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
 
-let version : String = "1.8"
+let version : String = "2.0"
 let checkForVDBUpdate : Bool = true         // to inform users of updates; the updates are not downloaded
 let allowGitHubDownloads : Bool = true      // to download nucl. ref. and documentation, if missing
 let basePath : String = FileManager.default.currentDirectoryPath
@@ -24,12 +24,25 @@ let gnuplotGraphSize : (Int,Int) = (1280,960) // 1600,1000 ?
 let vdbrcFileName : String = ".vdbrc"
 let missingAccessionNumberBase : Int = 1_000_000_001
 let aliasFileName : String = "alias_key.json"
+let mpNumberDefault : Int = 12
+let listSep : String = ","
 
 // MARK: - VDB Command line arguments
 
-let clArguments : [String] = CommandLine.arguments
-let clFileNames : [String] = Array(clArguments.dropFirst())
+var clArguments : [String] = CommandLine.arguments
 
+var mpNumber : Int = mpNumberDefault
+for i in  1..<clArguments.count {
+    if clArguments[i] == "-m" {
+        if i<clArguments.count-1, let clInt = Int(clArguments[i+1]) {
+            mpNumber = clInt
+            clArguments.remove(at: i)
+        }
+        clArguments.remove(at: i)
+        break
+    }
+}
+let clFileNames : [String] = Array(clArguments.dropFirst())
 if clFileNames == ["--version"] {
     print(version)
     exit(0)
@@ -1263,7 +1276,7 @@ dateFormatter.dateFormat = "yyyy-MM-dd"
 let numberFormatter : NumberFormatter = NumberFormatter()
 numberFormatter.numberStyle = .decimal
 
-let defaultListSize : Int = 20
+let defaultListSize : Int = 20  // applies to lists of isolates and lists of mutation patterns
 
 enum LinenoiseCmd {
     case none
@@ -1304,12 +1317,13 @@ let listTrendsForKeyword : String = "listTrendsFor"
 let lastResultKeyword : String = "last"
 let trendsLineageCountKeyword : String = "trendsLineageCount"
 let rangeKeyword : String = "range"
+let variantsKeyword : String = "variants"
+let listVariantsKeyword : String = "listVariants"
 let controlC : String = "\(Character(UnicodeScalar(UInt8(3))))"
 let controlD : String = "\(Character(UnicodeScalar(UInt8(4))))"
 
 let metaOffset : Int = 400000
 let metaMaxSize : Int = 3000000
-let maxMutationsInFreqList : Int = 50
 let pMutationSeparator : String = ":_"
 let altMetadataFileName : String = "metadata.tsv"
 let nuclN : UInt8 = 78
@@ -1819,6 +1833,131 @@ func printJoin(_ string: String, terminator: String) {
     }
 }
 
+extension Mutation : CustomStringConvertible {
+    var description: String {
+        self.string
+    }
+}
+struct PatternStruct : CustomStringConvertible {
+    var mutations : [Mutation]
+    var name : String
+    var description: String {
+        VDB.stringForMutations(mutations)
+    }
+}
+
+struct ClusterStruct : CustomStringConvertible {
+    var isolates : [Isolate]
+    var name : String
+    var description: String {
+        "\(name)\(listSep)\(isolates.count)"
+    }
+}
+
+struct DateRangeStruct : CustomStringConvertible {
+    let description : String
+    let start : Date
+    let end : Date
+}
+
+enum ListType {
+    case lineages
+    case trends
+    case countries
+    case states
+    case frequencies
+    case patterns       // a list of MutationArrays
+    case clusters       // a list of ClusterStruct
+    case monthlyWeekly
+    case variants
+    case list
+    case empty
+}
+
+struct List : CustomStringConvertible {
+    
+    let type : ListType
+    let command : String
+    let items : [[CustomStringConvertible]]
+    let baseCluster : [Isolate]?
+    
+    init(type: ListType, command: String, items: [[CustomStringConvertible]], baseCluster: [Isolate]? = nil) {
+        self.type = type
+        self.command = command
+        self.items = items
+        self.baseCluster = baseCluster
+    }
+    
+    func info(n: Int) {
+        print("\(type) list of \(items.count) items from command \(command)")
+        if items.count > 1 {
+            var types : [Any] = []
+            for anItem in items[1] {
+                switch anItem {
+                case is Int:
+                    types.append(Int.self)
+                case is Double:
+                    types.append(Double.self)
+                case is String:
+                    types.append(String.self)
+                case is Mutation:
+                    types.append(Mutation.self)
+                case is List:
+                    types.append(List.self)
+                case is ClusterStruct:
+                    types.append(ClusterStruct.self)
+                case is PatternStruct:
+                    types.append(PatternStruct.self)
+                case is DateRangeStruct:
+                    types.append(DateRangeStruct.self)
+                case is Array<Any>:
+                    types.append(Array<Any>.self)
+                case is Dictionary<String, Any>:
+                    types.append(Dictionary<String, Any>.self)
+                default:
+                    types.append("Unknown")
+                }
+            }
+            let selfModuleName : String = "\([ClusterStruct.self])".replacingOccurrences(of: "ClusterStruct", with: "").replacingOccurrences(of: "[", with: "").replacingOccurrences(of: "]", with: "")
+            let typesString : String = "\(types)".replacingOccurrences(of: "Swift.", with: "").replacingOccurrences(of: selfModuleName, with: "").replacingOccurrences(of: "Struct", with: "")
+            print("types: \(typesString)")
+        }
+        let nToList : Int = min(n,items.count)
+        for i in 0..<nToList {
+            let dArray : [String] = items[i].map { $0.description }
+            var dLine : String = dArray.joined(separator: listSep)
+            dLine = "\(i+1): " + dLine
+            print("\(dLine)")
+        }
+    }
+    
+    var description: String {
+        var desc : String = ""
+        var first : Bool = false
+        for item in items {
+            if first {
+                first = false
+            }
+            else {
+                desc += "\n"
+            }
+            desc += item.description
+        }
+        return desc
+    }
+
+}
+
+typealias ListStruct = List
+
+let EmptyList : List = List(type: .empty, command: "", items: [])
+
+enum VariantClass : String {
+    case VOC
+    case VOI
+    case Alert
+}
+
 // MARK: - VDB Type (class) methods
 
 // Class VDB implements a read–eval–print loop (REPL) for a SARS-CoV-2 variant query language
@@ -1829,17 +1968,81 @@ final class VDB {
 //extension VDB {
     
     // MARK: - Load VDB
-    
+
     // loads a list of isolates and their mutations from the given fileName
     // reads non-tsv files using the format generated by vdbCreate
-    class func loadMutationDB(_ fileName: String, vdb: VDB) -> [Isolate] {
+    class func loadMutationDB_MP(_ fileName: String, mp_number : Int, vdb: VDB) -> [Isolate] {
         if fileName.suffix(4) == ".tsv" {
             return loadMutationDBTSV(fileName)
         }
         // read mutations
         print("   Loading database from file \(fileName) ... ", terminator:"")
         fflush(stdout)
+                
+        let filePath : String = "\(basePath)/\(fileName)"
+         do {
+            let vdbData = try Data(contentsOf: URL(fileURLWithPath: filePath))
+            lineNMP = [UInt8](vdbData)
+//            let vdbDataSize : Int = vdbData.count
+//            lineN = Array(UnsafeBufferPointer(start: (vdbData as NSData).bytes.bindMemory(to: UInt8.self, capacity: vdbDataSize), count: vdbDataSize))
+        }
+        catch {
+            print("Error reading vdb file \(filePath)")
+            return []
+        }
+
+        var sema : [DispatchSemaphore] = []
+        for _ in 0..<mp_number-1 {
+            sema.append(DispatchSemaphore(value: 0))
+        }
+        let greaterChar : UInt8 = 62
+        var cuts : [Int] = [0]
+        let cutSize : Int = lineNMP.count/mp_number
+        for i in 1..<mp_number {
+            var cutPos : Int = i*cutSize
+            while lineNMP[cutPos] != greaterChar {
+                cutPos += 1
+            }
+            cuts.append(cutPos)
+        }
+        cuts.append(lineNMP.count)
+        var ranges : [(Int,Int)] = []
+        for i in 0..<mp_number {
+            ranges.append((cuts[i],cuts[i+1]))
+        }
         
+        DispatchQueue.concurrentPerform(iterations: mp_number) { index in
+            let isolates_mp : [Isolate] = loadMutationDB_MP_task(mp_index: index, mp_range: ranges[index], vdb: vdb)
+
+            if index != 0 {
+                sema[index-1].wait()
+            }
+                    vdb.isolates.append(contentsOf: isolates_mp)
+
+            if index != mp_number - 1 {
+                sema[index].signal()
+            }
+        }
+        if vdb.isolates.count > 10_000 {
+            print("  \(nf(vdb.isolates.count)) isolates loaded")
+        }
+                
+        lineNMP = []
+        return vdb.isolates
+    }
+
+    // loads a list of isolates and their mutations from the given fileName
+    // reads non-tsv files using the format generated by vdbCreate
+//    class func loadMutationDB(_ fileName: String, vdb: VDB) -> [Isolate] {
+    class func loadMutationDB_MP_task(mp_index: Int, mp_range: (Int,Int), vdb: VDB) -> [Isolate] {
+/*
+        if fileName.suffix(4) == ".tsv" {
+            return loadMutationDBTSV(fileName)
+        }
+        // read mutations
+        print("   Loading database from file \(fileName) ... ", terminator:"")
+        fflush(stdout)
+*/
         let lf : UInt8 = 10     // \n
         let greaterChar : UInt8 = 62
         let slashChar : UInt8 = 47
@@ -1849,7 +2052,7 @@ final class VDB {
         let verticalChar : UInt8 = 124
         let refISL : Int = 402123
         var dummyNumberBase : Int = 0
-        
+/*
         let filePath : String = "\(basePath)/\(fileName)"
         var lineN : [UInt8] = []
         do {
@@ -1862,7 +2065,7 @@ final class VDB {
             print("Error reading vdb file \(filePath)")
             return []
         }
-        
+*/
         var buf : UnsafeMutablePointer<CChar>? = nil
         buf = UnsafeMutablePointer<CChar>.allocate(capacity: 100000)
          
@@ -1870,7 +2073,7 @@ final class VDB {
         func stringA(_ range : CountableRange<Int>) -> String {
             var counter : Int = 0
             for i in range {
-                buf?[counter] = CChar(lineN[i])
+                buf?[counter] = CChar(lineNMP[i])
                 counter += 1
             }
             buf?[counter] = 0 // zero terminate
@@ -1882,7 +2085,7 @@ final class VDB {
         func intA(_ range : CountableRange<Int>) -> Int {
             var counter : Int = 0
             for i in range {
-                buf?[counter] = CChar(lineN[i])
+                buf?[counter] = CChar(lineNMP[i])
                 counter += 1
             }
             buf?[counter] = 0 // zero terminate
@@ -1945,8 +2148,8 @@ final class VDB {
         var mutations : [Mutation] = []
 
         func makeMutation(_ startPos: Int, _ endPos: Int) {
-            let wt : UInt8 = lineN[startPos]
-            let aa : UInt8 = lineN[endPos-1]
+            let wt : UInt8 = lineNMP[startPos]
+            let aa : UInt8 = lineNMP[endPos-1]
             let pos : Int = intA(startPos+1..<endPos-1)
             let mut : Mutation = Mutation(wt: wt, pos: pos, aa: aa)
             mutations.append(mut)
@@ -1961,8 +2164,9 @@ final class VDB {
         var commaFound : Bool = false
         
         var refAdded : Bool = false
-        for pos in 0..<lineN.count {
-            switch lineN[pos] {
+//        for pos in 0..<lineN.count {
+        for pos in mp_range.0..<mp_range.1 {
+            switch lineNMP[pos] {
             case lf:
                 checkCount += 1
                 if !country.isEmpty {
@@ -2108,9 +2312,9 @@ final class VDB {
             }
         }
 
-        if isolates.count > 10_000 {
-            print("  \(nf(isolates.count)) isolates loaded")
-        }
+//        if isolates.count > 10_000 {
+//            print("  \(nf(isolates.count)) isolates loaded")
+//        }
         buf?.deallocate()
 
         return isolates
@@ -2878,7 +3082,7 @@ final class VDB {
     // MARK: - VDB VQL internal methods
         
     // lists the frequencies of mutations in the given cluster
-    class func mutationFrequenciesInCluster(_ cluster: [Isolate], vdb: VDB) {
+    class func mutationFrequenciesInCluster(_ cluster: [Isolate], vdb: VDB) -> List {
 /*
         var allMutations : Set<Mutation> = []
         for isolate in cluster {
@@ -2904,6 +3108,7 @@ final class VDB {
             }
         }
 */
+        var listItems : [[CustomStringConvertible]] = []
         var posMutationCounts : [[(Mutation,Int)]] = Array(repeating: [], count: VDB.refLength+1)
         for isolate in cluster {
             for mutation in isolate.mutations {
@@ -2934,7 +3139,7 @@ final class VDB {
             }
         }
         print("Most frequent mutations:")
-        for i in 0..<min(maxMutationsInFreqList,mutationCounts.count) {
+        for i in 0..<min(vdb.maxMutationsInFreqList,mutationCounts.count) {
             let m : (Mutation,Int) = mutationCounts[i]
             let freq : Double = Double(m.1)/Double(cluster.count)
             let freqString : String = String(format: "%4.2f", freq*100)
@@ -2959,6 +3164,7 @@ final class VDB {
             let counterStringSp : String = padString(counterString, length: 3, left: false)
             let mutNameStringSp : String = padString(mutNameString, length: 11, left: false)
             let freqPlusStringSp : String = padString(freqPlusString, length: 8, left: true)
+            var mutLine : String = ""
             if !vdb.nucleotideMode {
 //                print("\(i+1) : \(m.0.string)  \(freqString)%")
                 print("\(counterStringSp)\(mutNameStringSp)\(freqPlusStringSp)")
@@ -2967,9 +3173,16 @@ final class VDB {
 //                printJoin("\(i+1) : \(m.0.string)  \(freqString)%     ", terminator:"")
                 printJoin("\(counterStringSp)\(mutNameStringSp)\(freqPlusStringSp)     ", terminator:"")
                 let tmpIsolate : Isolate = Isolate(country: "tmp", state: "tmp", date: Date(), epiIslNumber: 0, mutations: [m.0])
-                proteinMutationsForIsolate(tmpIsolate,true)
+                mutLine = proteinMutationsForIsolate(tmpIsolate,true)
             }
+            var aListItem : [CustomStringConvertible] = [m.0,freq]
+            if vdb.nucleotideMode {
+                aListItem.append(mutLine)
+            }
+            listItems.append(aListItem)
         }
+        let list : List = List(type: .frequencies, command: vdb.currentCommand, items: listItems, baseCluster: cluster)
+        return list
 /*
         // pMutations analysis
         var pSets : [ Set<PMutation> ] = Array(repeating: [], count: Protein.allCases.count)
@@ -3041,7 +3254,7 @@ final class VDB {
     }
     
     // lists the countries of the cluster isolates, sorted by the number of occurances
-    class func listCountries(_ cluster: [Isolate], vdb: VDB) {
+    class func listCountries(_ cluster: [Isolate], vdb: VDB) -> List {
         var allCounties : Set<String> = []
         for isolate in cluster {
             allCounties.insert(isolate.country)
@@ -3063,15 +3276,20 @@ final class VDB {
 //        for i in 0..<countryCounts.count {
 //            print("\(i+1) : \(countryCounts[i].0)   \(countryCounts[i].1)")
 //        }
+        var listItems : [[CustomStringConvertible]] = []
         var tableStrings : [[String]] = [["Rank","Country","Count"]]
         for i in 0..<countryCounts.count {
             tableStrings.append(["\(i+1)","\(countryCounts[i].0)",nf(countryCounts[i].1)])
+            let aListItem : [CustomStringConvertible] = [countryCounts[i].0,countryCounts[i].1]
+            listItems.append(aListItem)
         }
         vdb.printTable(array: tableStrings, title: "", leftAlign: [true,true,false], colors: [], titleRowUsed: true, maxColumnWidth: 14)
+        let list : List = List(type: .countries, command: vdb.currentCommand, items: listItems, baseCluster: cluster)
+        return list
     }
 
     // lists the states of the cluster isolates, sorted by the number of occurances
-    class func listStates(_ cluster: [Isolate], vdb: VDB) {
+    class func listStates(_ cluster: [Isolate], vdb: VDB) -> List {
         var allCounties : Set<String> = []
         for isolate in cluster {
             allCounties.insert(isolate.stateShort)
@@ -3093,15 +3311,20 @@ final class VDB {
 //        for i in 0..<countryCounts.count {
 //            print("\(i+1) : \(countryCounts[i].0)   \(countryCounts[i].1)")
 //        }
+        var listItems : [[CustomStringConvertible]] = []
         var tableStrings : [[String]] = [["Rank","State","Count"]]
         for i in 0..<countryCounts.count {
             tableStrings.append(["\(i+1)","\(countryCounts[i].0)",nf(countryCounts[i].1)])
+            let aListItem : [CustomStringConvertible] = [countryCounts[i].0,countryCounts[i].1]
+            listItems.append(aListItem)
         }
         vdb.printTable(array: tableStrings, title: "", leftAlign: [true,true,false], colors: [], titleRowUsed: true)
+        let list : List = List(type: .states, command: vdb.currentCommand, items: listItems, baseCluster: cluster)
+        return list
     }
     
     // lists the lineages of the cluster isolates, sorted by the number of occurances
-    class func listLineages(_ cluster: [Isolate], vdb: VDB, trends: Bool = false) {
+    class func listLineages(_ cluster: [Isolate], vdb: VDB, trends: Bool = false) -> List {
         var lineageCounts : [(String,Int)] = []
         let lineagesToTrackMax : Int = vdb.trendsLineageCount
         let weeklyMode : Bool = vdb.displayWeeklyTrends
@@ -3184,15 +3407,21 @@ final class VDB {
         else {
             lineagesToList = min(lineagesToTrackMax,lineageCounts.count)
         }
+        var listItems : [[CustomStringConvertible]] = []
         var tableStrings : [[String]] = [["Rank","Lineage","Count"]]
         for i in 0..<lineagesToList {
             if lineageCounts[i].1 != 0 {
                 tableStrings.append(["\(i+1)",lineageCounts[i].0,nf(lineageCounts[i].1)])
             }
+            if !trends {
+                let aListItem : [CustomStringConvertible] = [lineageCounts[i].0,lineageCounts[i].1]
+                listItems.append(aListItem)
+            }
         }
         vdb.printTable(array: tableStrings, title: "", leftAlign: [true,true,false], colors: [], titleRowUsed: true)
         if !trends {
-            return
+            let list : List = List(type: .lineages, command: vdb.currentCommand, items: listItems, baseCluster: cluster)
+            return list
         }
         for i in 0..<lineageCounts.count {
             if lineageCounts[i].0.last == "*" {
@@ -3267,31 +3496,40 @@ final class VDB {
         let currentDateComp : DateComponents = cal.dateComponents([.year, .month, .weekOfYear, .yearForWeekOfYear], from: currentDate)
         let numberOfMonths : Int
         var weekNames : [String] = []
+        var weekDates : [(Date,Date)] = []
         if !weeklyMode {
             if let currentYear = currentDateComp.year, let currentMonth = currentDateComp.month {
                 let yearDiff : Int = currentYear - 2019 // 2
                 numberOfMonths = 1 + 12 * (yearDiff-1) + currentMonth
             }
             else {
-                return
+                return EmptyList
             }
         }
         else {
+/*
+2019-12-21 :  wk = 51  yr = 2019
+2019-12-22 :  wk = 52  yr = 2019
+2019-12-24 :  wk = 52  yr = 2019
+2019-12-28 :  wk = 52  yr = 2019
+2019-12-29 :  wk = 1  yr = 2020
+*/
             // first date 2019-12-24  week 52  2019    week 53 only in 2022
             if let currentYearForWeekOfYear = currentDateComp.yearForWeekOfYear, let currentWeek = currentDateComp.weekOfYear {
                 let yearDiff : Int = currentYearForWeekOfYear - 2019
                 numberOfMonths = 1 + 52 * (yearDiff-1) + currentWeek // + (currentYearForWeekOfYear > 2022 ? 1 : 0)
-                if let tmpDate = dateFormatter.date(from:"2019-12-24") {
+                if let tmpDate = dateFormatter.date(from:"2019-12-22") {    // was 12-24
                     for i in 0...numberOfMonths {
                         let nextDate : Date = tmpDate.addWeek(n: i)
                         let dateString : String = dateFormatter.string(from: nextDate)
                         weekNames.append(dateString)
+                        weekDates.append((nextDate,nextDate.addWeek(n: 1)))
                     }
                 }
 
             }
             else {
-                return
+                return EmptyList
             }
         }
         var lmCounts : [[Int]] = Array(repeating: Array(repeating: 0, count: lineagesToTrackPlus+1), count: numberOfMonths)
@@ -3443,7 +3681,7 @@ final class VDB {
         }
         else {
             // no data to show
-            return
+            return EmptyList
         }
         // remove last month is <10% of previous count
         if lmFreqs.count > 3 {
@@ -3527,18 +3765,26 @@ final class VDB {
         }
         lmStrings.append(lNames)
         lmStringsStacked.append(contentsOf: lmStrings)
+        listItems.append(lNames)
         let monthStrings : [String] = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
         for i in 0..<lmFreqs.count {
             let ii : Int = i + removedFromStartCount
             var freqStrings : [String] = []
+            var aListItem : [CustomStringConvertible] = []
+            let dateRangeStart : Date
+            let dateRangeEnd : Date
             if !weeklyMode {
                 let yr : Int = 2019 + (ii+11)/12
                 let mon : Int = (ii+11) % 12
                 freqStrings.append("\(monthStrings[mon]) \(yr)")
+                dateRangeStart = dateFormatter.date(from:"\(yr)-\(mon+1)-01") ?? Date.distantFuture
+                dateRangeEnd = dateRangeStart.addMonth(n: 1)
             }
             else {
                 freqStrings.append(weekNames[ii])
+                (dateRangeStart,dateRangeEnd) = weekDates[ii]
             }
+            aListItem.append(DateRangeStruct(description: freqStrings[0], start: dateRangeStart, end: dateRangeEnd))
             var freqStringsStacked : [String] = freqStrings
             for j in 0..<lineagesToTrack+1 {
                 if lmFreqs[i][j] >= 0.0 {
@@ -3552,11 +3798,14 @@ final class VDB {
                     stackedValue += lmFreqs[i][jj]
                 }
                 freqStringsStacked.append(String(format:"%4.2f",stackedValue) + "%")
+                aListItem.append(lmFreqs[i][j])
             }
             freqStrings.append("\(nf(Int(lmFreqs[i][lineagesToTrack+1])))")
             freqStringsStacked.append("\(nf(Int(lmFreqs[i][lineagesToTrack+1])))")
+            aListItem.append(Int(lmFreqs[i][lineagesToTrack+1]))
             lmStrings.append(freqStrings)
             lmStringsStacked.append(freqStringsStacked)
+            listItems.append(aListItem)
         }
         
         func tablePrint(array: [[String]], columnWidth: Int, title: String) {
@@ -3803,6 +4052,8 @@ plot
                 print("Too few time points to graph")
             }
         }
+        let list : List = List(type: .trends, command: vdb.currentCommand, items: listItems, baseCluster: cluster)
+        return list
     }
 
     // returns a string describing the most frequent lineage in the given cluster
@@ -3888,6 +4139,84 @@ plot
             print("\(name)\(spacer1)\(rangeString)\(spacer2)\(proteinLength)\(spacer3)\(protein.note)")
         }
         print("")
+    }
+    
+    class func listVariants(vdb: VDB) -> List {
+        var variants : [(String,String,[String],Int,Int,Int)] = []
+        // (0: variant name, 1: lineage name(s), 2: lineage list, 3: variant order, 4: virus count, 5: original lineage count)
+        var listItems : [[CustomStringConvertible]] = []
+        for (key,value) in VDB.whoVariants {
+            var lNames : [String] = value.0.components(separatedBy: " + ")
+            let originalLineageCount : Int = lNames.count
+            if vdb.includeSublineages {
+                var subs : [String] = []
+                for lName in lNames {
+                    subs.append(contentsOf: VDB.additionalSublineagesOf(lName, vdb: vdb))
+                }
+                lNames.append(contentsOf: subs)
+            }
+            variants.append((key,value.0,lNames,value.1,0,originalLineageCount))
+        }
+        variants.sort { $0.3 < $1.3 }
+        let all : [Isolate] = vdb.clusters[vdb.isolatesKeyword] ?? []
+        for iso in all {
+            vLoop: for (vIndex,v) in variants.enumerated() {
+                for lName in v.2 {
+                    if vdb.includeSublineages {
+                        if iso.pangoLineage.hasPrefix(lName) {
+                            if iso.pangoLineage.count != lName.count {
+                                if iso.pangoLineage[iso.pangoLineage.index(iso.pangoLineage.startIndex, offsetBy: lName.count)] != "." {
+                                    continue
+                                }
+                            }
+                            variants[vIndex].4 += 1
+                            break vLoop
+                        }
+                    }
+                    else {
+                        if lName == iso.pangoLineage {
+                            variants[vIndex].4 += 1
+                            break vLoop
+                        }
+                    }
+                }
+            }
+        }
+        var table : [[String]] = []
+        table.append(["WHO Name","Pango Lineage Name","Count"])
+        let leftAlign : [Bool] = [true,true,false]
+        for v in variants {
+            table.append([v.0,v.1,nf(v.4)])
+            let aListItem : [CustomStringConvertible] = [v.0,v.1,v.4]
+            listItems.append(aListItem)
+        }
+        let colors : [String] = [TColor.lightCyan,TColor.lightMagenta,TColor.green]
+        vdb.printTable(array: table, title: "", leftAlign: leftAlign, colors: colors)
+        if vdb.nucleotideMode {
+            print()
+        }
+        else {
+            print("\(TColor.reset)\nConsensus mutations")
+            vLoop: for v in variants {
+                var cluster : [Isolate] = VDB.isolatesInLineage(v.2[0], inCluster: all, vdb: vdb, quiet: true)
+                if v.5 > 1 {
+                    for i in 1..<v.5 {
+                        cluster.append(contentsOf: VDB.isolatesInLineage(v.2[i], inCluster: all, vdb: vdb, quiet: true))
+                    }
+                }
+                if cluster.count != v.4 {
+                    print("Error - count mismatch for \(v.0)  \(cluster.count)  \(v.4)")
+                }
+                let consensus : [Mutation] = VDB.consensusMutationsFor(cluster, vdb: vdb, quiet: true)
+                let mutString : String = VDB.stringForMutations(consensus)
+                let spacer : String = "      "
+                let spaces : String = String(spacer.prefix(8-v.0.count))
+                print("\(TColor.lightCyan)\(v.0)\(TColor.reset)\(spaces)\(mutString)")
+            }
+            print("")
+        }
+        let list : List = List(type: .variants, command: vdb.currentCommand, items: listItems)
+        return list
     }
     
     static let stateAb : [String:String] = ["Alabama": "AL","Alaska": "AK","Arizona": "AZ","Arkansas": "AR","California": "CA","Colorado": "CO","Connecticut": "CT","Delaware": "DE","Florida": "FL","Georgia": "GA","Hawaii": "HI","Idaho": "ID","Illinois": "IL","Indiana": "IN","Iowa": "IA","Kansas": "KS","Kentucky": "KY","Louisiana": "LA","Maine": "ME","Maryland": "MD","Massachusetts": "MA","Michigan": "MI","Minnesota": "MN","Mississippi": "MS","Missouri": "MO","Montana": "MT","Nebraska": "NE","Nevada": "NV","New Hampshire": "NH","New Jersey": "NJ","New Mexico": "NM","New York": "NY","North Carolina": "NC","North Dakota": "ND","Ohio": "OH","Oklahoma": "OK","Oregon": "OR","Pennsylvania": "PA","Rhode Island": "RI","South Carolina": "SC","South Dakota": "SD","Tennessee": "TN","Texas": "TX","Utah": "UT","Vermont": "VT","Virginia": "VA","Washington": "WA","West Virginia": "WV","Wisconsin": "WI","Wyoming": "WY"]
@@ -4112,8 +4441,8 @@ plot
             let mut_consensus : [Mutation] = consensusMutationsFor(mut_isolates, vdb: vdb)
             let mut_consensusString : String = mut_consensus.map { $0.string }.joined(separator: " ")
             print("\(mutationPatternString) consensus: \(mut_consensusString)")
-            listCountries(mut_isolates, vdb: vdb)
-            mutationFrequenciesInCluster(mut_isolates, vdb: vdb)
+            _ = listCountries(mut_isolates, vdb: vdb)
+            _ = mutationFrequenciesInCluster(mut_isolates, vdb: vdb)
         }
         return mut_isolates
     }
@@ -4180,8 +4509,8 @@ plot
     }
     
     // lists the mutation patterns in the given cluster in order of frequency
-    // return the most frequent mutation pattern
-    class func frequentMutationPatternsInCluster(_ isolates:[Isolate], vdb: VDB, n: Int = 0) -> [Mutation] {
+    // return the most frequent mutation pattern and the list of patterns
+    class func frequentMutationPatternsInCluster(_ isolates:[Isolate], vdb: VDB, n: Int = 0) -> ([Mutation],List) {
         var mutationPatterns : Set<[Mutation]> = []
         let simpleNuclMode : Bool = vdb.simpleNuclPatterns && vdb.nucleotideMode
         for isolate in isolates {
@@ -4263,6 +4592,7 @@ plot
             numberToList = defaultListSize
         }
         numberToList = min(numberToList,mutationPatternCounts.count)
+        var listItems : [[CustomStringConvertible]] = []
         for i in 0..<numberToList {
             let lineageInfo : String
             let (_,columns) = VDB.rowsAndColumns()
@@ -4278,12 +4608,19 @@ plot
                 VDB.proteinMutationsForIsolate(mutationPatternCounts[i].2[0])
                 printJoin(TColor.reset, terminator:"")
             }
+            let patternStruct : PatternStruct = PatternStruct(mutations: mutationPatternCounts[i].0, name: "pattern \(i+1)")
+            var aListItem : [CustomStringConvertible] = [patternStruct,mutationPatternCounts[i].1]
+            if !lineageInfo.isEmpty {
+                aListItem.append(lineageInfo)
+            }
+            listItems.append(aListItem)
         }
         if !mutationPatternCounts.isEmpty {
-            return mutationPatternCounts[0].0
+            let list : List = List(type: .patterns, command: vdb.currentCommand, items: listItems, baseCluster: isolates)
+            return (mutationPatternCounts[0].0,list)
         }
         else {
-            return []
+            return ([],EmptyList)
         }
     }
     
@@ -4386,9 +4723,9 @@ plot
     
     // lists the number of cluster isolates by month
     // if weekly is true, lists the number of cluster isolates by week
-    class func listMonthly(_ cluster: [Isolate], weekly: Bool, _ cluster2: [Isolate], _ printAvgMut: Bool) {
+    class func listMonthly(_ cluster: [Isolate], weekly: Bool, _ cluster2: [Isolate], _ printAvgMut: Bool, vdb: VDB) -> List {
         if cluster.isEmpty {
-            return
+            return EmptyList
         }
         var sortedCluster : [Isolate] = cluster.sorted { $0.date < $1.date }
         let cutoffDate : Date = dateFormatter.date(from: "2019-11-01") ?? Date.distantPast
@@ -4406,6 +4743,7 @@ plot
         let firstDateString : String = dateFormatter.string(from: firstDate)
         let lastDateString : String = dateFormatter.string(from: lastDate)
         print("first date = \(firstDateString)   last date = \(lastDateString)   count = \(cluster.count)")
+        var listItems : [[CustomStringConvertible]] = []
         let calendar = Calendar.current
         let year : Int = calendar.component(.year, from: firstDate)
         let month : Int = calendar.component(.month, from: firstDate)
@@ -4427,7 +4765,7 @@ plot
             print("Week starting:  count")
         }
         
-        guard let startMonth : Date = dateFormatter.date(from: startMonthString) else { return }
+        guard let startMonth : Date = dateFormatter.date(from: startMonthString) else { return EmptyList }
         let startWeek : Date = firstDate
         var start : Date
         if !weekly {
@@ -4452,14 +4790,19 @@ plot
             }
             let inMonth : [Isolate] = cluster.filter { $0.date >= start && $0.date < end }
             let dateString = dateFormatter2.string(from: start)
+            let dateRangeStruct : DateRangeStruct = DateRangeStruct(description: dateString, start: start, end: end)
             if cluster2.count == 0 {
                 if !printAvgMut {
                     print("\(dateString)\(sep)\(inMonth.count)")
+                    let aListItem : [CustomStringConvertible] = [dateRangeStruct,inMonth.count]
+                    listItems.append(aListItem)
                 }
                 else {
                     let aveMut : Double = averageNumberOfMutations(cluster.filter { $0.date >= start && $0.date < end })
                     let aveString : String = String(format: "%4.2f", aveMut)
                     print("\(dateString)\(sep)\(inMonth.count)\(sep)\(aveString)")
+                    let aListItem : [CustomStringConvertible] = [dateRangeStruct,inMonth.count,aveString]
+                    listItems.append(aListItem)
                 }
             }
             else {
@@ -4467,10 +4810,13 @@ plot
                 let freq : Double = 100.0 * Double(inMonth.count)/Double(inMonth2.count)
                 let freqString = String(format: "%4.2f", freq)
                 print("\(dateString)\(sep)\(inMonth.count)\(sep)\(inMonth2.count)\(sep)\(freqString)%")
-
+                let aListItem : [CustomStringConvertible] = [dateRangeStruct,inMonth.count,inMonth2.count,freq]
+                listItems.append(aListItem)
             }
             start = end
         }
+        let list : List = List(type: .monthlyWeekly, command: vdb.currentCommand, items: listItems, baseCluster: cluster)
+        return list
     }
     
     // returns the average number of mutations in the given cluster
@@ -4860,11 +5206,12 @@ plot
     
     // prints the protein mutations in the specified isolate
     //   oldMutations - used for highlighting new mutations in a lineage consensus mutation pattern
-    class func proteinMutationsForIsolate(_ isolate: Isolate, _ noteSynonymous: Bool = false, _ oldMutations: [Mutation] = []) {
+    @discardableResult
+    class func proteinMutationsForIsolate(_ isolate: Isolate, _ noteSynonymous: Bool = false, _ oldMutations: [Mutation] = []) -> String {
         
         let nuclRef : [UInt8] = referenceArray // nucleotideReference()
         if nuclRef.isEmpty {
-            return
+            return ""
         }
         
         var codons : [Codon] = []
@@ -5012,6 +5359,7 @@ plot
         if isolate.country == "con" {
             print("\n\(mutSummary)")
         }
+        return mutLine
     }
 
     // convert a protein mutation to the most common nucleotide mutation(s)
@@ -5034,9 +5382,10 @@ plot
     
     // load a saved cluster from a file, converting protein/nucl. if necessary
     class func loadCluster(_ clusterName: String, fromFile fileName: String, vdb: VDB) {
+        var clusterName : String = clusterName
         var loadedCluster : [Isolate] = []
         if !fileName.hasSuffix(".pango") {
-            loadedCluster = VDB.loadMutationDB(fileName, vdb: vdb)
+            loadedCluster = VDB.loadMutationDB_MP(fileName, mp_number: 1, vdb: vdb)
         }
         else {
             let filePath : String
@@ -5046,7 +5395,14 @@ plot
             else {
                 filePath = fileName
             }
-            loadedCluster = VDB.loadList(filePath, vdb: vdb)
+            let parts : [String] = clusterName.components(separatedBy: "_")
+            if parts.count < 2 {
+                print("No cluster loaded - use clusterName_lineage")
+                return
+            }
+            clusterName = parts[0]
+            let lineage : String = parts[1]
+            loadedCluster = VDB.loadPangoList(filePath, lineage: lineage, vdb: vdb)
         }
             
         if loadedCluster.isEmpty {
@@ -5110,6 +5466,22 @@ plot
             print("Error writing cluster to file \(fileName)")
         }
     }
+
+    // save a defined list to a file
+    class func saveList(_ list: List, toFile fileName: String, vdb: VDB) {
+        let dateString : String = dateFormatter.string(from: Date())
+        var outString : String = "# List saved by vdb on \(dateString) from command \(list.command)\n"
+        for item in list.items {
+            outString += item.map { $0.description }.joined(separator: listSep) + "\n"
+        }
+        do {
+            try outString.write(toFile: fileName, atomically: true, encoding: .ascii)
+            print("List with \(list.items.count) items saved to \(fileName)")
+        }
+        catch {
+            print("Error writing list to file \(fileName)")
+        }
+    }
     
     // remove nucleotide "N" mutations from isolate mutations
     class func trim(vdb: VDB) {
@@ -5167,8 +5539,10 @@ plot
         print("Mutations trimmed from \(nf(oldMutationCount)) to \(nf(newMutationCount))")
     }
     
-    class func loadList(_ fileName: String, vdb: VDB) -> [Isolate] {
+    // read Pango lineage specification file and return viruses of specified lineage
+    class func loadPangoList(_ filePath: String, lineage: String, vdb: VDB) -> [Isolate] {
         var cluster : [Isolate] = []
+/*
         var fileString : String = ""
         do {
             fileString = try String(contentsOfFile: fileName)
@@ -5193,6 +5567,86 @@ plot
             }
         }
         print("Found \(cluster.count) of \(nf(lines.count)) viruses")
+*/
+        var lineN : [UInt8] = []
+        do {
+            let vdbData = try Data(contentsOf: URL(fileURLWithPath: filePath))
+            lineN = [UInt8](vdbData)
+        }
+        catch {
+            print("Error reading Pango file \(filePath)")
+            return []
+        }
+        
+        var buf : UnsafeMutablePointer<CChar>? = nil
+        buf = UnsafeMutablePointer<CChar>.allocate(capacity: 200)
+         
+        // extract string from byte stream
+        func stringA(_ range : CountableRange<Int>) -> String {
+            var counter : Int = 0
+            for i in range {
+                buf?[counter] = CChar(lineN[i])
+                counter += 1
+            }
+            buf?[counter] = 0 // zero terminate
+            let s = String(cString: buf!)
+            return s
+        }
+        
+        let includeSetting : Bool = vdb.includeSublineages
+        vdb.includeSublineages = true
+        let lineageSet : [Isolate] = isolatesInLineage(lineage.uppercased(), inCluster: vdb.isolates, vdb: vdb)
+        vdb.includeSublineages = includeSetting
+
+        let lineageArray : [UInt8] = [UInt8](lineage.uppercased().utf8)
+        let commaChar : UInt8 = 44
+        let slashChar : UInt8 = 47
+        let lf : UInt8 = 10     // \n
+        var lastLf : Int = -1
+        var commaPos : Int = 0
+        var slashCount : Int = 0
+        var slashPos : [Int] = Array(repeating: 0, count: 5)
+        var searchCount : Int = 0
+        for pos in 0..<lineN.count {
+            switch lineN[pos] {
+            case lf:
+                if lineageArray.count == pos - commaPos - 1 {
+                    var matches : Bool = true
+                    for i in 0..<lineageArray.count {
+                        if lineageArray[i] != lineN[commaPos+1+i] {
+                            matches = false
+                            break
+                        }
+                    }
+                    if matches {
+                        searchCount += 1
+                        let countryName : String = stringA(lastLf+1..<slashPos[0])
+                        let stateName : String = stringA(slashPos[0]+1..<slashPos[1])
+                        var isolate : Isolate? = lineageSet.first { $0.country == countryName && $0.state == stateName }
+                        if isolate == nil {
+                            isolate = vdb.isolates.first { $0.country == countryName && $0.state == stateName }
+                        }
+                        if let isolate = isolate {
+                            cluster.append(isolate)
+                        }
+                        else {
+                            print("No virus found for \(countryName)/\(stateName)")
+                        }
+                    }
+                }
+                lastLf = pos
+                slashCount = 0
+            case commaChar:
+                commaPos = pos
+            case slashChar:
+                slashPos[slashCount] = pos
+                slashCount += 1
+            default:
+                break
+            }
+        }
+        buf?.deallocate()
+        print("Found \(cluster.count) of \(searchCount) viruses. Missing \(searchCount - cluster.count)")
         return cluster
     }
 
@@ -5316,6 +5770,44 @@ plot
             }
         }
         return true
+    }
+    
+    // returns a list item from a list specified by a string of the form listName[item_number]
+    class func listItemFromString(_ string: String, vdb:VDB) -> [CustomStringConvertible]? {
+        if string.last != "]" {
+            return nil
+        }
+        let parts : [String] = string.dropLast().components(separatedBy: "[")
+        if parts.count != 2 {
+            return nil
+        }
+        if let list = vdb.lists[parts[0]] {
+            if let index = Int(parts[1]) {
+                let index2 : Int = index - 1
+                if index2 >= 0 && index2 < list.items.count {
+                    return list.items[index2]
+                }
+            }
+        }
+        return nil
+    }
+    
+    // returns whether a given string is valid mutation pattern from a list
+    class func patternListItemFrom(_ string: String, vdb:VDB) -> String? {
+        if let listItem : [CustomStringConvertible] = listItemFromString(string, vdb: vdb) {
+            if !listItem.isEmpty {
+                if let patternStruct : PatternStruct = listItem[0] as? PatternStruct {
+                    var patternString : String = stringForMutations(patternStruct.mutations)
+                    if patternString.last == " " {
+                        patternString = String(patternString.dropLast())
+                    }
+                    if isPattern(patternString, vdb: vdb) {
+                        return patternString
+                    }
+                }
+            }
+        }
+        return nil
     }
     
     // returns whether a given string appears to be a single mutation string
@@ -5485,6 +5977,7 @@ plot
     var isolates : [Isolate] = []               // isolate = sequenced virus
     var clusters : [String:[Isolate]] = [:]     // cluster = group of isolates
     var patterns : [String:[Mutation]] = [:]    // pattern = group of mutations
+    var lists : [String:List] = [:]             // list = a list produced by a command
     var patternNotes : [String:String] = [:]
     var countries : [String] = []
     var stateNamesPlus : [String] = []
@@ -5493,6 +5986,7 @@ plot
     var lineageGroups : [[String]] = []
     var displayWeeklyTrends : Bool = false      // temporary flag used to control trends command
     var evaluating : Bool = false
+    var currentCommand : String = ""
 
     // switch defaults
     static let defaultDebug : Bool = false
@@ -5508,6 +6002,7 @@ plot
     static let defaultMinimumPatternsCount : Int = 0
     static let defaultTrendsLineageCount : Int = 5
     static let defaultDisplayTextWithColor : Bool = true
+    static let defaultMaxMutationsInFreqList : Int = 50
     
     // user adjustable switches:
     var debug : Bool = defaultDebug                               // print debug messages
@@ -5522,6 +6017,7 @@ plot
     var completions : Bool = defaultCompletions                   // whether tab completions and hints are offered
     var minimumPatternsCount : Int = defaultMinimumPatternsCount  // excludes smaller patterns from list
     var trendsLineageCount : Int = defaultTrendsLineageCount      // number of lineages for trends table
+    var maxMutationsInFreqList : Int = defaultMaxMutationsInFreqList    // number of mutations to freq list
 
     // metadata information
     var metadata : [UInt8] = []
@@ -5546,19 +6042,22 @@ plot
     static var printProteinMutations : Bool = false    // temporary flag used to control printing
     static var referenceArray : [UInt8] = []
     static var batchMode : Bool = false
+    static var quietMode : Bool = false
     static var displayTextWithColor : Bool = defaultDisplayTextWithColor
     static var demoMode : Bool = false
-    
-    static let whoVariants : [String:(String,Int)] = ["Alpha":("B.1.1.7",1),
-                                                "Beta":("B.1.351",2),
-                                                "Gamma":("P.1",3),
-                                                "Delta":("B.1.617.2",4),
-                                                "Epsilon":("B.1.427 + B.1.429",5),
-                                                "Zeta":("P.2",6),
-                                                "Eta":("B.1.525",7),
-                                                "Theta":("P.3",8),
-                                                "Iota":("B.1.526",9),
-                                                "Kappa":("B.1.617.1",10)]
+    static var lineNMP : [UInt8] = []
+
+    static let whoVariants : [String:(String,Int,VariantClass)] = ["Alpha":("B.1.1.7",1,.VOC),
+                                                "Beta":("B.1.351",2,.VOC),
+                                                "Gamma":("P.1",3,.VOC),
+                                                "Delta":("B.1.617.2",4,.VOC),
+                                                "Epsilon":("B.1.427 + B.1.429",5,.Alert),
+                                                "Zeta":("P.2",6,.Alert),
+                                                "Eta":("B.1.525",7,.VOI),
+                                                "Theta":("P.3",8,.Alert),
+                                                "Iota":("B.1.526",9,.VOI),
+                                                "Kappa":("B.1.617.1",10,.VOI),
+                                                "Lambda":("C.37",11,.VOI)]
     
     var vdbPrompt : String {
         "\(TColor.lightGreen)\(vdbPromptBase)\(TColor.reset)"
@@ -5640,7 +6139,8 @@ plot
             print("Error - no database file found")
             return
         }
-        isolates = VDB.loadMutationDB(fileName, vdb: self)
+
+        isolates = VDB.loadMutationDB_MP(fileName, mp_number: mpNumber, vdb: self)
         clusters[isolatesKeyword] = isolates
         var notProtein : Bool = false
         checkMutations: for _ in 0..<min(10,isolates.count) {
@@ -5666,7 +6166,7 @@ plot
     // to load sequneces after the first file is loaded
     // returns number of overlapping entries ignored
     func loadAdditionalSequences(_ filename: String) -> Int {
-        let newIsolates : [Isolate] = VDB.loadMutationDB(filename, vdb: self)
+        let newIsolates : [Isolate] = VDB.loadMutationDB_MP(filename, mp_number: 1, vdb: self)
         var knownISL : [Int] = isolates.map { $0.epiIslNumber }
         var added : Int = 0
         var numberOfOverlappingEntries : Int = 0
@@ -5723,7 +6223,7 @@ plot
     // list all defined clusters
     func listClusters() {
         print("Cluster:  number of isolates")
-        for (key,value) in clusters {
+        for (key,value) in clusters.sorted(by: { $0.0 < $1.0 }) {
             print("  \(key):  \(nf(value.count))")
         }
     }
@@ -5745,6 +6245,14 @@ plot
                 }
                 print("\(patternName): \(mutationsString)  (\(value.count))")
             }
+        }
+    }
+    
+    // list all defined lists
+    func listLists() {
+        print("List:  number of items   created by command")
+        for (key,value) in lists.sorted(by: { $0.0 < $1.0 }) {
+            print("  \(key):  \(nf(value.items.count))  \(value.command)")
         }
     }
     
@@ -5827,78 +6335,6 @@ plot
         }
     }
     
-    func listVariants() {
-        var variants : [(String,String,[String],Int,Int,Int)] = []
-        // (0: variant name, 1: lineage name(s), 2: lineage list, 3: variant order, 4: virus count, 5: original lineage count)
-        for (key,value) in VDB.whoVariants {
-            var lNames : [String] = value.0.components(separatedBy: " + ")
-            let originalLineageCount : Int = lNames.count
-            if includeSublineages {
-                var subs : [String] = []
-                for lName in lNames {
-                    subs.append(contentsOf: VDB.additionalSublineagesOf(lName, vdb: self))
-                }
-                lNames.append(contentsOf: subs)
-            }
-            variants.append((key,value.0,lNames,value.1,0,originalLineageCount))
-        }
-        variants.sort { $0.3 < $1.3 }
-        let all : [Isolate] = clusters[isolatesKeyword] ?? []
-        for iso in all {
-            vLoop: for (vIndex,v) in variants.enumerated() {
-                for lName in v.2 {
-                    if includeSublineages {
-                        if iso.pangoLineage.hasPrefix(lName) {
-                            if iso.pangoLineage.count != lName.count {
-                                if iso.pangoLineage[iso.pangoLineage.index(iso.pangoLineage.startIndex, offsetBy: lName.count)] != "." {
-                                    continue
-                                }
-                            }
-                            variants[vIndex].4 += 1
-                            break vLoop
-                        }
-                    }
-                    else {
-                        if lName == iso.pangoLineage {
-                            variants[vIndex].4 += 1
-                            break vLoop
-                        }
-                    }
-                }
-            }
-        }
-        var table : [[String]] = []
-        table.append(["WHO Name","Pango Lineage Name","Count"])
-        let leftAlign : [Bool] = [true,true,false]
-        for v in variants {
-            table.append([v.0,v.1,nf(v.4)])
-        }
-        let colors : [String] = [TColor.lightCyan,TColor.lightMagenta,TColor.green]
-        printTable(array: table, title: "", leftAlign: leftAlign, colors: colors)
-        if nucleotideMode {
-            print()
-            return
-        }
-        print("\(TColor.reset)\nConsensus mutations")
-        vLoop: for v in variants {
-            var cluster : [Isolate] = VDB.isolatesInLineage(v.2[0], inCluster: all, vdb: self, quiet: true)
-            if v.5 > 1 {
-                for i in 1..<v.5 {
-                    cluster.append(contentsOf: VDB.isolatesInLineage(v.2[i], inCluster: all, vdb: self, quiet: true))
-                }
-            }
-            if cluster.count != v.4 {
-                print("Error - count mismatch for \(v.0)  \(cluster.count)  \(v.4)")
-            }
-            let consensus : [Mutation] = VDB.consensusMutationsFor(cluster, vdb: self, quiet: true)
-            let mutString : String = VDB.stringForMutations(consensus)
-            let spacer : String = "      "
-            let spaces : String = String(spacer.prefix(8-v.0.count))
-            print("\(TColor.lightCyan)\(v.0)\(TColor.reset)\(spaces)\(mutString)")
-        }
-        print("")
-    }
-    
     // reset user adjustable switches
     func reset() {
         debug = VDB.defaultDebug
@@ -5914,6 +6350,8 @@ plot
         minimumPatternsCount = VDB.defaultMinimumPatternsCount
         trendsLineageCount = VDB.defaultTrendsLineageCount
         VDB.displayTextWithColor = VDB.defaultDisplayTextWithColor
+        maxMutationsInFreqList = VDB.defaultMaxMutationsInFreqList
+        VDB.quietMode = false
     }
     
     // prints the current state of a switch
@@ -5937,13 +6375,15 @@ plot
         printSwitch("stackGraphs",stackGraphs)
         printSwitch("completions",completions)
         printSwitch("displayTextWithColor",VDB.displayTextWithColor)
+        printSwitch("quiet", VDB.quietMode)
         print("minimumPatternsCount = \(minimumPatternsCount)")
         print("trendsLineageCount = \(trendsLineageCount)")
+        print("maxMutationsInFreqList = \(maxMutationsInFreqList)")
     }
     
     func offerCompletions(_ offer: Bool, _ ln: LineNoise) {
         if offer {
-            var completions : [String] = ["before","after","named","lineage","consensus","patterns","countries","states","trends","monthly","weekly","clusters","proteins","history","settings","includeSublineages","excludeSublineages","simpleNuclPatterns","excludeNFromCounts","sixel","trendGraphs","stackGraphs","completions","displayTextWithColor","minimumPatternsCount",trendsLineageCountKeyword,"containing","group","reset","variants"]
+            var completions : [String] = ["before","after","named","lineage","consensus","patterns","countries","states","trends","monthly","weekly","clusters","proteins","history","settings","includeSublineages","excludeSublineages","simpleNuclPatterns","excludeNFromCounts","sixel","trendGraphs","stackGraphs","completions","displayTextWithColor","minimumPatternsCount",trendsLineageCountKeyword,"containing","group","reset","variants","maxMutationsInFreqList"]
             completions.append(contentsOf:Array(VDB.whoVariants.keys))
             var countrySet : Set<String> = []
             for iso in isolates {
@@ -6265,9 +6705,16 @@ plot
     func processLine( _ line: String) -> [String] {
         var parts : [String] = line.components(separatedBy: " ")
 
-        let listCmds : [String] = [countriesKeyword,statesKeyword,lineagesKeyword,trendsKeyword,freqKeyword,frequenciesKeyword,monthlyKeyword,weeklyKeyword]
+        let listCmds : [String] = [countriesKeyword,statesKeyword,lineagesKeyword,trendsKeyword,freqKeyword,frequenciesKeyword,monthlyKeyword,weeklyKeyword,variantsKeyword]
         if listCmds.contains(where: { $0 ~~ parts[0] }) {
             parts.insert(listKeyword, at: 0)
+        }
+        if parts.count > 2 {
+            for i in 1..<parts.count-1 {
+                if parts[i] == "=" && listCmds.contains(where: { $0 ~~ parts[i+1] }) {
+                    parts.insert(listKeyword, at: i+1)
+                }
+            }
         }
         if parts.contains(trendsKeyword) {
             if let weeklyIndex = parts.firstIndex(of: weeklyKeyword) {
@@ -6505,6 +6952,16 @@ plot
                     }
                 }
             }
+            if parts.count > 1 {
+                for i in 0..<parts.count-1 {
+                    if parts[i] ~~ listKeyword && parts[i+1] ~~ variantsKeyword {
+                        parts[i] = listVariantsKeyword
+                        parts.remove(at: i+1)
+                        changed = true
+                        break
+                    }
+                }
+            }
         } while changed
         repeat {
             changed = false
@@ -6518,8 +6975,10 @@ plot
                             continue
                         }
                     }
-                    parts.insert(lineageKeyword, at: i)
-                    changed = true
+                    if !parts[i].contains("..") {
+                        parts.insert(lineageKeyword, at: i)
+                        changed = true
+                    }
                 }
             }
         } while changed
@@ -6544,6 +7003,12 @@ plot
                 let ii : Int = parts.count - 1 - i
                 if isDate(parts[ii]) && isDate(parts[ii+1]) && !(ii > 0 && parts[ii-1] ~~ rangeKeyword) {
                     parts.insert(rangeKeyword, at: ii)
+                }
+            }
+            for i in 1..<parts.count {
+                let ii : Int = parts.count - i
+                if isCountryOrState(parts[ii]) && !(parts[ii-1] ~~ fromKeyword) {
+                    parts.insert(fromKeyword, at: ii)
                 }
             }
         }
@@ -6620,6 +7085,8 @@ plot
                 }
             case rangeKeyword:
                 tokens.append(.range)
+            case listVariantsKeyword:
+                tokens.append(.listVariants)
             default:
                 tokens.append(.textBlock(parts[i]))
             }
@@ -6668,7 +7135,14 @@ plot
             case .equal:
                 switch tokens[0] {
                 case let .textBlock(identifier):
-                    let (_,rhs) = parse(Array(tokens[2..<tokens.count]),node: nil)
+                    var topLevelOverride : Bool = false
+                    switch tokens[2] {
+                    case .listFrequenciesFor, .listCountriesFor, .listStatesFor, .listLineagesFor, .listTrendsFor, .listMonthlyFor, .listWeeklyFor, .listVariants:
+                        topLevelOverride = true
+                    default:
+                        break
+                    }
+                    let (_,rhs) = parse(Array(tokens[2..<tokens.count]),node: nil, topLevel: topLevelOverride)
                     if let rhs = rhs {
                         let sid : Expr = Expr.Identifier(identifier)
                         let expr : Expr = Expr.Assignment(sid, rhs)
@@ -6824,13 +7298,16 @@ plot
                     }
                 }
                 if let exprCluster = exprCluster {
-                    let expr : Expr = Expr.List(exprCluster,listSize)
+                    let expr : Expr = Expr.ListIsolates(exprCluster,listSize)
                     return ([],expr)
                 }
                 else {
                     print("Syntax error - cluster expression is nil")
                     return ([],nil)
                 }
+            case .listVariants:
+                let expr : Expr = Expr.ListVariants
+                return ([],expr)
             default:
                 break
             }
@@ -7017,7 +7494,7 @@ plot
                     }
                 }
 
-            case .listFrequenciesFor, .listCountriesFor, .listStatesFor, .listLineagesFor, .listTrendsFor, .listMonthlyFor, .listWeeklyFor, .list:
+            case .listFrequenciesFor, .listCountriesFor, .listStatesFor, .listLineagesFor, .listTrendsFor, .listMonthlyFor, .listWeeklyFor, .list, .listVariants:
                 print("Syntax error - extraneous list command")
                 return ([],nil)
             case .equality:
@@ -7097,7 +7574,7 @@ plot
                     print("Syntax error - consensus for nil")
                 }
             case .patternsIn:
-                var listSize : Int = defaultListSize
+                var listSize : Int = 0
                 var next : Int = i+1
                 if tokens.count > i+2 {
                     switch tokens[next] {
@@ -7251,7 +7728,7 @@ plot
                     var precheckOkay : Bool = true
                     switch expr {
                     case let .Identifier(identifier):
-                        if patterns[identifier] == nil && !VDB.isPattern(identifier, vdb: self) {
+                        if patterns[identifier] == nil && !VDB.isPattern(identifier, vdb: self) && VDB.patternListItemFrom(identifier, vdb: self) == nil {
                             precheckOkay = false
                         }
 //                        case .Assignment, .Cluster, .Containing, .From:
@@ -7421,6 +7898,7 @@ plot
     // returns (shouldContinue,linenoise cmd #,eval return value)
     func interpretInput(_ input: String) -> (Bool,LinenoiseCmd,Int?) {
         let line : String = preprocessLine(input)
+        currentCommand = line
         let lowercaseLine : String = line.lowercased()
         
         let unixPassThru : [String] = []
@@ -7455,6 +7933,8 @@ plot
             listClusters()
         case "list patterns", "patterns":
             listPatterns()
+        case "list lists", "lists":
+            listLists()
         case "help", "?":
             VDB.pPrintMultiline("""
 Commands to query SARS-CoV-2 variant database (Variant Query Language):
@@ -7529,9 +8009,11 @@ trendGraphs/trendGraphs off
 stackGraphs/stackGraphs off
 completions/completions off
 displayTextWithColor/displayTextWithColor off
+quiet/quiet off
 
 minimumPatternsCount = <n>
 trendsLineageCount = <n>
+maxMutationsInFreqList = <n>
 
 """)
             VDB.pagerPrint()
@@ -7651,6 +8133,12 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
         case "paging off":
             VDB.batchMode = true
             printSwitch(lowercaseLine, !VDB.batchMode)
+        case "quiet", "quiet on":
+            VDB.quietMode = true
+            printSwitch(lowercaseLine, VDB.quietMode)
+        case "quiet off":
+            VDB.quietMode = false
+            printSwitch(lowercaseLine, VDB.quietMode)
          case "list proteins", "proteins":
             VDB.listProteins(vdb: self)
         case "history":
@@ -7701,6 +8189,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
                     patterns[variableName] = nil
                     print("Pattern \(variableName) cleared")
                 }
+                else if lists[variableName] != nil {
+                    lists[variableName] = nil
+                    print("List \(variableName) cleared")
+                }
                 else {
                     print("Error - no variable with name \(variableName)")
                 }
@@ -7718,7 +8210,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
             switch loadCmdParts.count {
             case 1:
                 if isolates.isEmpty {
-                    isolates = VDB.loadMutationDB(dbFileName, vdb: self)
+                    isolates = VDB.loadMutationDB_MP(dbFileName, mp_number: mpNumber, vdb: self)
                 }
                 else {
                     let numberOfOverlappingEntries = loadAdditionalSequences(dbFileName)
@@ -7746,6 +8238,11 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
                 if let cluster = clusters[clusterName] {
                     if !cluster.isEmpty {
                         VDB.saveCluster(cluster, toFile: fileName, vdb:self)
+                    }
+                }
+                else if let list = lists[clusterName] {
+                    if !list.items.isEmpty {
+                        VDB.saveList(list, toFile: fileName, vdb:self)
                     }
                 }
             default:
@@ -7828,8 +8325,26 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
         case _ where lowercaseLine.hasPrefix("help ") || lowercaseLine.hasPrefix("? "):
             let variableNameString : String = line.replacingOccurrences(of: "help ", with: "", options: .caseInsensitive, range: nil).replacingOccurrences(of: "? ", with: "")
             helpTopic(variableNameString)
-        case "variants", "list variants":
-            listVariants()
+        case _ where lowercaseLine.contains(".basecluster = "):
+            let lineTmp : String = line.replacingOccurrences(of: ".baseCluster = ", with: "###", options: .caseInsensitive, range: nil)
+            let parts : [String] = lineTmp.components(separatedBy: "###")
+            if parts.count == 2 {
+                if let list = lists[parts[0]] {
+                    let cluster : [Isolate]?
+                    if parts[1] == "nil" {
+                        cluster = nil
+                    }
+                    else if let clusterTmp = clusters[parts[1]] {
+                        cluster = clusterTmp
+                    }
+                    else {
+                        break
+                    }
+                    let newList : List = List(type: list.type, command: list.command, items: list.items, baseCluster: cluster)
+                    lists[parts[0]] = newList
+                    print("base cluster of list \(parts[0]) changed")
+                }
+            }
         default:
             let parts : [String] = processLine(line)
             
@@ -7863,6 +8378,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
                 print("starting evaluation")
             }
             evaluating = true
+            if VDB.quietMode && currentCommand.contains("=") {
+                VDB.printToPager = true
+            }
             let returnValue : Expr? = result.subexpr?.eval(caller: nil, vdb: self)
             evaluating = false
             if let value = returnValue?.number() {
@@ -7870,6 +8388,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
                 returnInt = value
             }
             lastExpr = returnValue
+            if VDB.quietMode && currentCommand.contains("=") && VDB.pagerLines.count > 1 {
+                VDB.pagerLines.removeFirst(VDB.pagerLines.count-1)
+            }
             VDB.pagerPrint()
             print("")
         }
@@ -8146,8 +8667,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
         let stackGraphsSetting : Bool = stackGraphs
         let completionsSetting : Bool = completions
         let displayTextWithColorSetting : Bool = VDB.displayTextWithColor
+        let quietModeSetting : Bool = VDB.quietMode
         let minimumPatternsCountSetting : Int = minimumPatternsCount
         let trendsLineageCountSetting : Int = trendsLineageCount
+        let maxMutationsInFreqListSetting : Int = maxMutationsInFreqList
         
         let existingClusterNames : [String] = Array(clusters.keys)
 /*
@@ -8306,7 +8829,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
             let passesTest : Bool = returnInt == 1
             print("Equality test \(cmds1) \(cmds2) result: \(passesTest)")
         }
-        let eqTests : [(String,String)] = [("a_X = w/ E484K","b_X = with e484k"),("a_X = b.1.526.1","b_X = lineage b.1.526;includeSublineages off;c_X = b.1.526;d_X = b.1.526.2;e_X = b.1.526.3;f_X = b_X - c_X - d_X - e_X")]
+//        let eqTests : [(String,String)] = [("a_X = w/ E484K","b_X = with e484k"),("a_X = b.1.526.1","b_X = lineage b.1.526;includeSublineages off;c_X = b.1.526;d_X = b.1.526.2;e_X = b.1.526.3;f_X = b_X - c_X - d_X - e_X")]
+        let eqTests : [(String,String)] = [("a_X = w/ E484K","b_X = with e484k")]
         for eqTest in eqTests {
             equalityTest(eqTest.0,eqTest.1)
         }
@@ -8329,8 +8853,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
         stackGraphs = stackGraphsSetting
         completions = completionsSetting
         VDB.displayTextWithColor = displayTextWithColorSetting
+        VDB.quietMode = quietModeSetting
         minimumPatternsCount = minimumPatternsCountSetting
         trendsLineageCount = trendsLineageCountSetting
+        maxMutationsInFreqList = maxMutationsInFreqListSetting
         
         for key in clusters.keys {
             if !existingClusterNames.contains(key) {
@@ -8357,8 +8883,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
         let stackGraphsSetting : Bool = stackGraphs
         let completionsSetting : Bool = completions
         let displayTextWithColorSetting : Bool = VDB.displayTextWithColor
+        let quietModeSetting : Bool = VDB.quietMode
         let minimumPatternsCountSetting : Int = minimumPatternsCount
         let trendsLineageCountSetting : Int = trendsLineageCount
+        let maxMutationsInFreqListSetting : Int = maxMutationsInFreqList
         
         let existingClusterNames : [String] = Array(clusters.keys)
         reset()
@@ -8462,8 +8990,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
         stackGraphs = stackGraphsSetting
         completions = completionsSetting
         VDB.displayTextWithColor = displayTextWithColorSetting
+        VDB.quietMode = quietModeSetting
         minimumPatternsCount = minimumPatternsCountSetting
         trendsLineageCount = trendsLineageCountSetting
+        maxMutationsInFreqList = maxMutationsInFreqListSetting
         
         for key in clusters.keys {
             if !existingClusterNames.contains(key) {
@@ -8507,6 +9037,7 @@ enum Token {
     case list
     case lastResult
     case range
+    case listVariants
     case textBlock(String)
     
     var description: String {
@@ -8568,6 +9099,8 @@ enum Token {
                     return "_last_"
                 case .range:
                     return "_range_"
+                case .listVariants:
+                    return "_listVariants_"
                 case let .textBlock(value):
                     return value
                 }
@@ -8602,7 +9135,7 @@ indirect enum Expr {
     case LessThan(Expr,Int)            // Cluster                          --> Cluster
     case EqualMutationCount(Expr,Int)  // Cluster                          --> Cluster
     case ConsensusFor(Expr)            // Identifier or Cluster            --> Pattern
-    case PatternsIn(Expr,Int)          // Cluster                          --> Pattern
+    case PatternsIn(Expr,Int)          // Cluster                          --> Pattern or List if n is given
     case From(Expr,Expr)               // Cluster, Identifier(country)     --> Cluster
     case Containing(Expr,Expr,Int)     // Cluster, Pattern                 --> Cluster
     case NotContaining(Expr,Expr,Int)  // Cluster, Pattern                 --> Cluster
@@ -8610,19 +9143,24 @@ indirect enum Expr {
     case After(Expr,Date)              // Cluster                          --> Cluster
     case Named(Expr,String)            // Cluster                          --> Cluster
     case Lineage(Expr,String)          // Cluster                          --> Cluster
-    case ListFreq(Expr)                // Cluster                          --> nil
-    case ListCountries(Expr)           // Cluster                          --> nil
-    case ListStates(Expr)              // Cluster                          --> nil
-    case ListLineages(Expr)            // Cluster                          --> nil
-    case ListTrends(Expr)              // Cluster                          --> nil
-    case ListMonthly(Expr,Expr)        // Cluster, Cluster                 --> nil
-    case ListWeekly(Expr,Expr)         // Cluster, Cluster                 --> nil
-    case List(Expr,Int)                // Cluster                          --> nil
+    case ListFreq(Expr)                // Cluster                          --> List
+    case ListCountries(Expr)           // Cluster                          --> List
+    case ListStates(Expr)              // Cluster                          --> List
+    case ListLineages(Expr)            // Cluster                          --> List
+    case ListTrends(Expr)              // Cluster                          --> List
+    case ListMonthly(Expr,Expr)        // Cluster, Cluster                 --> List
+    case ListWeekly(Expr,Expr)         // Cluster, Cluster                 --> List
+    case ListIsolates(Expr,Int)        // Cluster                          --> nil
     case Range(Expr,Date,Date)         // Cluster                          --> Cluster
+    case List(List)                    //  --> List  (a list expression, not a list command)
+    case ListVariants                  // -                                --> List
     case Nil
     
     // evaluate node of abstract syntax tree
     func eval(caller: Expr?, vdb: VDB) -> Expr? {
+        if let clusterListExpr : Expr = clusterListExprCmd(caller: caller, vdb: vdb) {
+            return clusterListExpr
+        }
         switch self {
         case .Identifier, .Cluster, .Pattern, .Nil:
             return self
@@ -8663,23 +9201,41 @@ indirect enum Expr {
                     break
                 }
                 let expr3 = expr2.eval(caller: self, vdb: vdb)
+                
+                enum VariableType {
+                    case ClusterVar
+                    case PatternVar
+                    case ListVar
+                }
+                
+                // returns whether the identifier is available for assignment to the specified type
+                func identifierAvailable(identifier: String, variableType: VariableType) -> Bool {
+                    if variableType != .ClusterVar && vdb.clusters[identifier] != nil {
+                        print("Error - name \(identifier) is already defined as a cluster")
+                        return false
+                    }
+                    if variableType != .PatternVar && vdb.patterns[identifier] != nil {
+                        print("Error - name \(identifier) is already defined as a pattern")
+                        return false
+                    }
+                    if variableType != .ListVar && vdb.lists[identifier] != nil {
+                        print("Error - name \(identifier) is already defined as a list")
+                        return false
+                    }
+                    return true
+                }
+                
                 switch expr3 {
                 case let .Cluster(cluster):
-                    if vdb.patterns[identifier] == nil {
+                    if identifierAvailable(identifier: identifier, variableType: .ClusterVar) {
                         vdb.clusters[identifier] = cluster
                         print("Cluster \(identifier) assigned to \(nf(cluster.count)) isolates")
                     }
-                    else {
-                        print("Error - name \(identifier) is already defined as a pattern")
-                    }
                     break
                 case let .Pattern(pattern):
-                    if vdb.clusters[identifier] == nil {
+                    if identifierAvailable(identifier: identifier, variableType: .PatternVar) {
                         vdb.patterns[identifier] = pattern
                         print("Pattern \(identifier) defined as \(VDB.stringForMutations(pattern))")
-                    }
-                    else {
-                        print("Error - name \(identifier) is already defined as a cluster")
                     }
                     break
                 case let .Identifier(identifier2):
@@ -8691,6 +9247,11 @@ indirect enum Expr {
                     if identifier ~~ trendsLineageCountKeyword && vdb.isNumber(identifier2) {
                         vdb.trendsLineageCount = Int(identifier2) ?? VDB.defaultTrendsLineageCount
                         print("trendsLineageCount set to \(vdb.trendsLineageCount)")
+                        break
+                    }
+                    if identifier ~~ "maxMutationsInFreqList" && vdb.isNumber(identifier2) {
+                        vdb.maxMutationsInFreqList = Int(identifier2) ?? VDB.defaultMaxMutationsInFreqList
+                        print("maxMutationsInFreqList set to \(vdb.maxMutationsInFreqList)")
                         break
                     }
                     if VDB.isPattern(identifier2, vdb: vdb) {
@@ -8711,12 +9272,9 @@ indirect enum Expr {
                             mutList = VDB.mutationsFromStringCoercing(identifier2, vdb: vdb)
                         }
                         if (mutList.count == identifier2.components(separatedBy: " ").count || coercePMutation) && mutList.count > 0 {
-                            if vdb.clusters[identifier] == nil {
+                            if identifierAvailable(identifier: identifier, variableType: .PatternVar) {
                                 vdb.patterns[identifier] = mutList
                                 print("Pattern \(identifier) defined as \(VDB.stringForMutations(mutList))")
-                            }
-                            else {
-                                print("Error - name \(identifier) is already defined as a cluster")
                             }
                         }
                     }
@@ -8729,14 +9287,66 @@ indirect enum Expr {
                             cluster = VDB.isolatesFromCountry(identifier2, inCluster: vdb.isolates, vdb: vdb)
                         }
                         if cluster.count > 0 {
-                            if vdb.patterns[identifier] == nil {
+                            if identifierAvailable(identifier: identifier, variableType: .ClusterVar) {
                                 vdb.clusters[identifier] = cluster
                                 print("Cluster \(identifier) assigned to \(nf(cluster.count)) isolates")
                             }
-                            else {
-                                print("Error - name \(identifier) is already defined as a pattern")
+                        }
+                        else {
+                            var listID = identifier2
+                            var closedRange : ClosedRange<Int>? = nil
+                            if identifier2.last == "]" {
+                                let parts : [String] = identifier2.dropLast().components(separatedBy: "[")
+                                if parts.count == 2 {
+                                    var shift : Int = 0
+                                    var rParts : [String] = parts[1].components(separatedBy: "...")
+                                    if rParts.count == 1 {
+                                        rParts = parts[1].components(separatedBy: "..")
+                                    }
+                                    if rParts.count == 1 {
+                                        rParts = parts[1].components(separatedBy: "-")
+                                    }
+                                    if rParts.count == 1 {
+                                        rParts = parts[1].components(separatedBy: "..<")
+                                        if rParts.count == 2 {
+                                            shift = 1
+                                        }
+                                    }
+                                    if rParts.count == 2, let r0 = Int(rParts[0]), let r1 = Int(rParts[1]) {
+                                        let start : Int = r0-1
+                                        let end : Int = r1-shift-1
+                                        if start >= 0 && start <= end {
+                                            closedRange = start...end
+                                            listID = parts[0]
+                                        }
+                                    }
+                                }
+                            }
+                            if let existingList : List = vdb.lists[listID] {
+                                if identifierAvailable(identifier: identifier, variableType: .ListVar) {
+                                    if let closedRange = closedRange {
+                                        if closedRange.upperBound < existingList.items.count {
+                                            let newItems : [[CustomStringConvertible]] = Array(existingList.items[closedRange])
+                                            let newList : List = ListStruct(type: existingList.type, command: vdb.currentCommand, items: newItems, baseCluster: existingList.baseCluster)
+                                            vdb.lists[identifier] = newList
+                                            print("List \(identifier) assigned to list with \(nf(newList.items.count)) items")
+                                        }
+                                        else {
+                                            print("Error - range is incorrect")
+                                        }
+                                    }
+                                    else {
+                                        vdb.lists[identifier] = vdb.lists[listID]
+                                        print("List \(identifier) assigned to list with \(nf(existingList.items.count)) items")
+                                    }
+                                }
                             }
                         }
+                    }
+                case let .List(list):
+                    if identifierAvailable(identifier: identifier, variableType: .ListVar) {
+                        vdb.lists[identifier] = list
+                        print("List \(identifier) assigned to list with  \(nf(list.items.count)) items")
                     }
                 default:
                     break
@@ -8758,6 +9368,9 @@ indirect enum Expr {
                     else if let pattern = vdb.patterns[identifier] {
                         evalExp1 = Expr.Pattern(pattern)
                     }
+                    else if let list = vdb.lists[identifier] {
+                        evalExp1 = Expr.List(list)
+                    }
                 default:
                     break
                 }
@@ -8768,6 +9381,9 @@ indirect enum Expr {
                     }
                     else if let pattern = vdb.patterns[identifier] {
                         evalExp2 = Expr.Pattern(pattern)
+                    }
+                    else if let list = vdb.lists[identifier] {
+                        evalExp2 = Expr.List(list)
                     }
                 default:
                     break
@@ -8791,6 +9407,19 @@ indirect enum Expr {
                             let p1sort : [Mutation] = pattern1.sorted { $0.pos < $1.pos }
                             let p2sort : [Mutation] = pattern2.sorted { $0.pos < $1.pos }
                             equal = p1sort == p2sort
+                        }
+                    default:
+                        break
+                    }
+                case let .List(list1):
+                    switch evalExp2 {
+                    case let .List(list2):
+                        if list1.type == list2.type && list1.items.count == list2.items.count {
+                            let l1strings : [[String]] = list1.items.map { $0.map { $0.description } }.filter { !$0.isEmpty }
+                            let l2strings : [[String]] = list2.items.map { $0.map { $0.description } }.filter { !$0.isEmpty }
+                            let l1sort : [[String]] = l1strings.sorted { $0[0] < $1[0] }
+                            let l2sort : [[String]] = l2strings.sorted { $0[0] < $1[0] }
+                            equal = l1sort == l2sort
                         }
                     default:
                         break
@@ -8839,7 +9468,8 @@ indirect enum Expr {
                 if let value1 = evalExp1.number(), let value2 = evalExp2.number() {
                     return Expr.Identifier("\(value1 + value2)")
                 }
-                return nil
+//                return nil
+                return operateOn(evalExp1: evalExp1, evalExp2: evalExp2, sign: 1, vdb: vdb)
             }
             else {
                 print("Error in addition operator - nil value")
@@ -8873,7 +9503,7 @@ indirect enum Expr {
                 if let value1 = evalExp1.number(), let value2 = evalExp2.number() {
                     return Expr.Identifier("\(value1 - value2)")
                 }
-                return nil
+                return operateOn(evalExp1: evalExp1, evalExp2: evalExp2, sign: -1, vdb: vdb)
             }
             else {
                 print("Error in subtraction operator - nil value")
@@ -8907,7 +9537,8 @@ indirect enum Expr {
                 if let value1 = evalExp1.number(), let value2 = evalExp2.number() {
                     return Expr.Identifier("\(value1 * value2)")
                 }
-                return nil
+//                return nil
+                return operateOn(evalExp1: evalExp1, evalExp2: evalExp2, sign: 0, vdb: vdb)
             }
             else {
                 print("Error in intersection operator - nil value")
@@ -8947,14 +9578,63 @@ indirect enum Expr {
             print("\(nf(cluster2.count)) isolates with exactly \(n) mutations in set of size \(nf(cluster.count))")
             return Expr.Cluster(cluster2)
         case let .ConsensusFor(exprCluster):
+            VDB.printToPager = true
+            if let list = exprCluster.clusterListFromExpr(vdb: vdb) {
+                var listItems : [[CustomStringConvertible]] = []
+                for item in list.items {
+                    if let oldClusterStruct : ClusterStruct = item[0] as? ClusterStruct {
+                        let pattern = VDB.consensusMutationsFor(oldClusterStruct.isolates, vdb: vdb)
+                        let patternStruct : PatternStruct = PatternStruct(mutations: pattern, name: oldClusterStruct.name)
+                        let aListItem : [CustomStringConvertible] = [oldClusterStruct.name,patternStruct]
+                        listItems.append(aListItem)
+                    }
+                }
+                if !listItems.isEmpty {
+                    let list : List = ListStruct(type: .patterns, command: vdb.currentCommand, items: listItems)
+                    return Expr.List(list)
+                }
+                else {
+                    return nil
+                }
+            }
             let cluster = exprCluster.clusterFromExpr(vdb: vdb)
             let pattern = VDB.consensusMutationsFor(cluster, vdb: vdb)
             return Expr.Pattern(pattern)
         case let .PatternsIn(exprCluster,n):
+            if let list = exprCluster.clusterListFromExpr(vdb: vdb) {
+                var listItems : [[CustomStringConvertible]] = []
+                let listType : ListType = n == 0 ? .patterns : .list
+                for item in list.items {
+                    if let oldClusterStruct : ClusterStruct = item[0] as? ClusterStruct {
+                        let (pattern,patternList) : ([Mutation],List) = VDB.frequentMutationPatternsInCluster(oldClusterStruct.isolates, vdb: vdb, n: n)
+                        let aListItem : [CustomStringConvertible]
+                        if n == 0 {
+                            let patternStruct : PatternStruct = PatternStruct(mutations: pattern, name: oldClusterStruct.name)
+                            aListItem = [oldClusterStruct.name,patternStruct]
+                        }
+                        else {
+                            aListItem = [oldClusterStruct.name,patternList]
+                        }
+                        listItems.append(aListItem)
+                    }
+                }
+                if !listItems.isEmpty {
+                    let list : List = ListStruct(type: listType, command: vdb.currentCommand, items: listItems)
+                    return Expr.List(list)
+                }
+                else {
+                    return nil
+                }
+            }
             VDB.printToPager = true
             let cluster = exprCluster.clusterFromExpr(vdb: vdb)
-            let pattern = VDB.frequentMutationPatternsInCluster(cluster, vdb: vdb, n: n)
-            return Expr.Pattern(pattern)
+            let (pattern,patternList) : ([Mutation],List) = VDB.frequentMutationPatternsInCluster(cluster, vdb: vdb, n: n)
+            if n == 0 {
+                return Expr.Pattern(pattern)
+            }
+            else {
+                return Expr.List(patternList)
+            }
         case let .From(exprCluster,exprIdentifier):
             let cluster = exprCluster.clusterFromExpr(vdb: vdb)
             switch exprIdentifier {
@@ -8974,6 +9654,10 @@ indirect enum Expr {
                         let cluster2 = VDB.isolatesContainingMutations(identifier, inCluster: cluster, vdb: vdb, quiet: true, negate: false, n: n)
                         return Expr.Cluster(cluster2)
                     }
+                    else if let patternString = VDB.patternListItemFrom(identifier, vdb: vdb) {
+                        let cluster2 = VDB.isolatesContainingMutations(patternString, inCluster: cluster, vdb: vdb, quiet: true, negate: false, n: n)
+                        return Expr.Cluster(cluster2)
+                    }
                 default:
                     break
                 }
@@ -8989,6 +9673,10 @@ indirect enum Expr {
                 case let .Identifier(identifier):
                     if VDB.isPattern(identifier, vdb: vdb) {
                         let cluster2 = VDB.isolatesContainingMutations(identifier, inCluster: cluster, vdb: vdb, quiet: true, negate: true, n: n)
+                        return Expr.Cluster(cluster2)
+                    }
+                    else if let patternString = VDB.patternListItemFrom(identifier, vdb: vdb) {
+                        let cluster2 = VDB.isolatesContainingMutations(patternString, inCluster: cluster, vdb: vdb, quiet: true, negate: true, n: n)
                         return Expr.Cluster(cluster2)
                     }
                 default:
@@ -9018,40 +9706,51 @@ indirect enum Expr {
         case let .ListFreq(exprCluster):
             VDB.printToPager = true
             let cluster = exprCluster.clusterFromExpr(vdb: vdb)
-            VDB.mutationFrequenciesInCluster(cluster, vdb: vdb)
-            return nil
+            let list : List = VDB.mutationFrequenciesInCluster(cluster, vdb: vdb)
+            return Expr.List(list)
         case let .ListCountries(exprCluster):
             VDB.printToPager = true
             let cluster = exprCluster.clusterFromExpr(vdb: vdb)
-            VDB.listCountries(cluster, vdb: vdb)
-            return nil
+            let list : List = VDB.listCountries(cluster, vdb: vdb)
+            return Expr.List(list)
         case let .ListStates(exprCluster):
             VDB.printToPager = true
             let cluster = exprCluster.clusterFromExpr(vdb: vdb)
-            VDB.listStates(cluster, vdb: vdb)
-            return nil
+            let list : List = VDB.listStates(cluster, vdb: vdb)
+            return Expr.List(list)
         case let .ListLineages(exprCluster):
             VDB.printToPager = true
             let cluster = exprCluster.clusterFromExpr(vdb: vdb)
-            VDB.listLineages(cluster, vdb: vdb)
-            return nil
+            let list : List = VDB.listLineages(cluster, vdb: vdb)
+            return Expr.List(list)
         case let .ListTrends(exprCluster):
             VDB.printToPager = true && !(vdb.sixel && vdb.trendGraphs)
             let cluster = exprCluster.clusterFromExpr(vdb: vdb)
-            VDB.listLineages(cluster, vdb: vdb, trends: true)
-            return nil
+            let list : List = VDB.listLineages(cluster, vdb: vdb, trends: true)
+            return Expr.List(list)
         case let .ListMonthly(exprCluster,exprCluster2):
-            let cluster = exprCluster.clusterFromExpr(vdb: vdb)
-            let cluster2 = exprCluster2.clusterFromExpr(vdb: vdb)
-            VDB.listMonthly(cluster, weekly: false, cluster2, vdb.printAvgMut)
-            return nil
-        case let .ListWeekly(exprCluster,exprCluster2):
-            let cluster = exprCluster.clusterFromExpr(vdb: vdb)
-            let cluster2 = exprCluster2.clusterFromExpr(vdb: vdb)
-            VDB.listMonthly(cluster, weekly: true, cluster2, vdb.printAvgMut)
-            return nil
-        case let .List(exprCluster,n):
             VDB.printToPager = true
+            let cluster = exprCluster.clusterFromExpr(vdb: vdb)
+            let cluster2 = exprCluster2.clusterFromExpr(vdb: vdb)
+            let list : List = VDB.listMonthly(cluster, weekly: false, cluster2, vdb.printAvgMut, vdb: vdb)
+            return Expr.List(list)
+        case let .ListWeekly(exprCluster,exprCluster2):
+            VDB.printToPager = true
+            let cluster = exprCluster.clusterFromExpr(vdb: vdb)
+            let cluster2 = exprCluster2.clusterFromExpr(vdb: vdb)
+            let list : List = VDB.listMonthly(cluster, weekly: true, cluster2, vdb.printAvgMut, vdb: vdb)
+            return Expr.List(list)
+        case let .ListIsolates(exprCluster,n):
+            VDB.printToPager = true
+            switch exprCluster {
+            case let .Identifier(identifier):
+                if let list = vdb.lists[identifier] {
+                    list.info(n: n)
+                    return nil
+                }
+            default:
+                break
+            }
             let cluster = exprCluster.clusterFromExpr(vdb: vdb)
             VDB.listIsolates(cluster, vdb: vdb, n: n)
             return nil
@@ -9059,6 +9758,11 @@ indirect enum Expr {
             let cluster = exprCluster.clusterFromExpr(vdb: vdb)
             let cluster2 = VDB.isolatesInDateRange(date1, date2, inCluster: cluster)
             return Expr.Cluster(cluster2)
+        case let .List(list):
+            return Expr.List(list)
+        case .ListVariants:
+            let list : List = VDB.listVariants(vdb: vdb)
+            return Expr.List(list)
         }
     }
     
@@ -9094,6 +9798,112 @@ indirect enum Expr {
         return []
     }
     
+    // if possible returns a list of clusters from an expression
+    func clusterListFromExpr(vdb: VDB) -> List? {
+        var baseClusterExpr : Expr = Expr.Identifier(vdb.isolatesKeyword)
+        switch self {
+        case let .List(list):
+            if list.type == .clusters {
+                return list
+            }
+        case let .Identifier(identifier):
+            if let list = vdb.lists[identifier] {
+                if list.type == .clusters {
+                    return list
+                }
+                if let baseClusterFromList : [Isolate] = list.baseCluster {
+                    baseClusterExpr = Expr.Cluster(baseClusterFromList)
+                }
+                var clusterListItems : [[CustomStringConvertible]] = []
+                // fast partitioning cases
+                if (list.type == .lineages && !vdb.includeSublineages) || list.type == .countries || list.type == .states || list.type == .variants || list.type == .trends || list.type == .monthlyWeekly {
+                    var itemStrings : [String] = list.items.map { $0[0] as? String ?? "_" }
+                    let emptyStrings : [String] = itemStrings.filter { $0.isEmpty }
+                    if !emptyStrings.isEmpty {
+                        print("empytString.count = \(emptyStrings.count)", terminator: "\n")
+                    }
+                    var clusterArrays : [[Isolate]] = Array(repeating: [], count: itemStrings.count)
+                    let baseCluster : [Isolate] = baseClusterExpr.clusterFromExpr(vdb: vdb)
+                    switch list.type {
+                    case .lineages:
+                        for iso in baseCluster {
+                            if let index = itemStrings.firstIndex(of: iso.pangoLineage) {
+                                clusterArrays[index].append(iso)
+                            }
+                        }
+                    case .countries:
+                        for iso in baseCluster {
+                            if let index = itemStrings.firstIndex(of: iso.country) {
+                                clusterArrays[index].append(iso)
+                            }
+                        }
+                    case .states:
+                        for iso in baseCluster {
+                            if iso.country == "USA" {
+                                if let index = itemStrings.firstIndex(where: { iso.state.prefix(2) == $0 }) {
+                                    clusterArrays[index].append(iso)
+                                }
+                            }
+                            else {
+                                if let index = itemStrings.firstIndex(where: { "non-US" == $0 }) {
+                                    clusterArrays[index].append(iso)
+                                }
+                            }
+                        }
+                    case .variants:
+                        let minCount : Int = list.items.map { $0.count }.min() ?? 0
+                        if minCount > 1 {
+                            let itemStrings2 : [String] = list.items.map { $0[1] as? String ?? "" }
+                            for iso in baseCluster {
+                                if let index = itemStrings2.firstIndex(of: iso.pangoLineage) {
+                                    clusterArrays[index].append(iso)
+                                }
+                            }
+                        }
+                    case .trends, .monthlyWeekly:
+                        let nilDateRange : DateRangeStruct = DateRangeStruct(description: "nil", start: Date.distantFuture, end: Date.distantFuture)
+                        let itemDateRanges : [DateRangeStruct] = list.items.map { $0[0] as? DateRangeStruct ?? nilDateRange }
+                        itemStrings =  itemDateRanges.map { $0.description }
+                        for iso in baseCluster {
+                            if let index = itemDateRanges.firstIndex(where: { $0.start <= iso.date && iso.date < $0.end } ) {
+                                clusterArrays[index].append(iso)
+                            }
+                        }
+                    default:
+                        break
+                    }
+                    clusterListItems = clusterArrays.enumerated().map { [ClusterStruct(isolates: $1, name: itemStrings[$0])] }
+                    let clusterList : List = ListStruct(type: .clusters, command: list.command, items: clusterListItems)
+                    return clusterList
+                }
+                // slower general case
+                for item in list.items {
+                    if let itemString = item[0] as? String {
+                        let itemExpr : Expr
+                        switch list.type {
+                        case .lineages:
+                            itemExpr = Expr.Lineage(baseClusterExpr, itemString)
+                        case .countries, .states:
+                            itemExpr = Expr.From(baseClusterExpr, Expr.Identifier(itemString))
+                        case .patterns:
+                            itemExpr = Expr.Containing(baseClusterExpr, Expr.Identifier(itemString), 0)
+                        default:
+                            continue
+                        }
+                        let cluster : [Isolate] = itemExpr.clusterFromExpr(vdb: vdb)
+                        let clusterStruct : ClusterStruct = ClusterStruct(isolates: cluster, name: itemString)
+                        clusterListItems.append([clusterStruct])
+                    }
+                }
+                let clusterList : List = ListStruct(type: .clusters, command: list.command, items: clusterListItems)
+                return clusterList
+            }
+        default:
+            break
+        }
+        return nil
+    }
+    
     // attempts to generate a pattern from an Expr node
     func patternFromExpr(vdb: VDB) -> [Mutation] {
         switch self {
@@ -9105,6 +9915,14 @@ indirect enum Expr {
                 if VDB.isPattern(identifier, vdb: vdb) {
                     return VDB.mutationsFromString(identifier)
                 }
+                else if let patternString = VDB.patternListItemFrom(identifier, vdb: vdb) {
+                    var patternString2 : String = patternString
+                    if patternString2.last == " " {
+                        patternString2 = String(patternString.dropLast())
+                    }
+                    let mutations : [Mutation] = VDB.mutationsFromString(patternString2)
+                    return mutations
+                }
             }
         case let .Pattern(pattern):
             return pattern
@@ -9114,7 +9932,7 @@ indirect enum Expr {
             return pattern
         case let .PatternsIn(exprCluster, n):
             let cluster = exprCluster.clusterFromExpr(vdb: vdb)
-            let pattern = VDB.frequentMutationPatternsInCluster(cluster, vdb: vdb, n: n)
+            let (pattern,_) : ([Mutation],List) = VDB.frequentMutationPatternsInCluster(cluster, vdb: vdb, n: n)
             return pattern
         case .Minus, .Plus, .Multiply:
             if let patternCalc : Expr = eval(caller: nil, vdb: vdb) {
@@ -9149,6 +9967,219 @@ indirect enum Expr {
         }
         return nil
     }
+    
+    // attempts to generate a list from an Expr node
+    func listFromExpr(vdb: VDB) -> List? {
+        switch self {
+        case let .List(list):
+            return list
+        case let .Identifier(identifier):
+            if let list : List = vdb.lists[identifier] {
+                return list
+            }
+        default:
+            break
+        }
+        return nil
+    }
+    
+    // returns results from filter commands on a list element (subExp)
+    func clusterEvalWithSubstitution(caller: Expr?, vdb: VDB, subExp: Expr) -> [Isolate]? {
+        var tmp : Expr?
+        switch self {
+        case let .GreaterThan(_, n):
+            tmp = Expr.GreaterThan(subExp, n)
+        case let .LessThan(_, n):
+            tmp = Expr.LessThan(subExp, n)
+        case let .EqualMutationCount(_, n):
+            tmp = Expr.EqualMutationCount(subExp, n)
+        case let .From(_, exprIdentifier):
+            tmp = Expr.From(subExp, exprIdentifier)
+        case let .Containing(_, exprPattern, n):
+            tmp = Expr.Containing(subExp, exprPattern, n)
+        case let .NotContaining(_, exprPattern, n):
+            tmp = Expr.NotContaining(subExp, exprPattern, n)
+        case let .Before(_,date):
+            tmp = Expr.Before(subExp,date)
+        case let .After(_,date):
+            tmp = Expr.After(subExp,date)
+        case let .Named(_,name):
+            tmp = Expr.Named(subExp,name)
+        case let .Lineage(_,name):
+            tmp = Expr.Lineage(subExp,name)
+        case let .Range(_,date1,date2):
+            tmp = Expr.Range(subExp,date1,date2)
+        default:
+            break
+        }
+        let tmpEval : Expr? = tmp?.eval(caller: caller, vdb: vdb)
+        switch tmpEval {
+        case let .Cluster(isolates):
+            return isolates
+        default:
+            break
+        }
+        return nil
+    }
+    
+    // returns results from list commands on a list element (subExp)
+    func listEvalWithSubstitution(caller: Expr?, vdb: VDB, subExp: Expr) -> List? {
+        var tmp : Expr?
+        switch self {
+        case .ListFreq(_):
+            tmp = Expr.ListFreq(subExp)
+        case .ListCountries(_):
+            tmp = Expr.ListCountries(subExp)
+        case .ListStates(_):
+            tmp = Expr.ListStates(subExp)
+        case .ListLineages(_):
+            tmp = Expr.ListLineages(subExp)
+        default:
+            break
+        }
+        let tmpEval : Expr? = tmp?.eval(caller: caller, vdb: vdb)
+        switch tmpEval {
+        case let .List(list):
+            return list
+        default:
+            break
+        }
+        return nil
+    }
+    
+    // applies commands to a list of items
+    func clusterListExprCmd(caller: Expr?, vdb: VDB) -> Expr? {
+        switch self {
+        case .GreaterThan(let exprCluster, _), .LessThan(let exprCluster, _), .EqualMutationCount(let exprCluster, _), .From(let exprCluster, _), .Containing(let exprCluster, _, _), .NotContaining(let exprCluster, _, _), .Before(let exprCluster,_), .After(let exprCluster, _), .Named(let exprCluster, _), .Lineage(let exprCluster, _), .Range(let exprCluster, _, _):
+            if let list = exprCluster.clusterListFromExpr(vdb: vdb) {
+                 var listItems : [[CustomStringConvertible]] = []
+                for item in list.items {
+                    if let oldClusterStruct : ClusterStruct = item[0] as? ClusterStruct {
+                        let subExprCluster : Expr = Expr.Cluster(oldClusterStruct.isolates)
+                        if let clusterEval : [Isolate] = self.clusterEvalWithSubstitution(caller: caller, vdb: vdb, subExp: subExprCluster) {
+                            let clusterStruct : ClusterStruct = ClusterStruct(isolates: clusterEval, name: oldClusterStruct.name)
+                            let aListItem : [CustomStringConvertible] = [clusterStruct] // [oldClusterStruct.name,clusterStruct]
+                            listItems.append(aListItem)
+                        }
+                    }
+                }
+                if !listItems.isEmpty {
+                    let list : List = ListStruct(type: .clusters, command: list.command + ";" + vdb.currentCommand, items: listItems)
+                    return Expr.List(list)
+                }
+                else {
+                    return nil
+                }
+            }
+        case .ListFreq(let exprCluster), .ListCountries(let exprCluster), .ListStates(let exprCluster), .ListLineages(let exprCluster):
+            if let list = exprCluster.clusterListFromExpr(vdb: vdb) {
+                var listItems : [[CustomStringConvertible]] = []
+                for item in list.items {
+                    if let oldClusterStruct : ClusterStruct = item[0] as? ClusterStruct {
+                        let subExprCluster : Expr = Expr.Cluster(oldClusterStruct.isolates)
+                        if let listEval : List = self.listEvalWithSubstitution(caller: caller, vdb: vdb, subExp: subExprCluster) {
+                            let aListItem : [CustomStringConvertible] = [oldClusterStruct.name,listEval]
+                            listItems.append(aListItem)
+                        }
+                    }
+                }
+                if !listItems.isEmpty {
+                    let list : List = ListStruct(type: .list, command: list.command + ";" + vdb.currentCommand, items: listItems)
+                    return Expr.List(list)
+                }
+                else {
+                    return nil
+                }
+            }
+        default:
+            break
+        }
+        return nil
+    }
+    
+    func operateOn(evalExp1: Expr, evalExp2: Expr, sign: Int, vdb: VDB) -> Expr? {
+        if let list1 : List = evalExp1.listFromExpr(vdb: vdb), let list2 : List = evalExp2.listFromExpr(vdb: vdb) {
+            if list1.type == list2.type {
+                if list1.items.count > 0 && list1.items[0].count > 1 {
+                    var listItems : [[CustomStringConvertible]] = []
+                    var item2Used : [Bool] = Array(repeating: false, count: list2.items.count)
+                    for item1 in list1.items {
+                        let string1 = item1[0].description
+                        var val1 = item1[1]
+                        for (item2Index,item2) in list2.items.enumerated() {
+                            let string2 = item2[0].description
+                            if string1 == string2 {
+                                let val2 = item2[1]
+                                if let val1Double = val1 as? Double, let val2Double = val2 as? Double {
+                                    if sign != 0 {
+                                        let dSign : Double = Double(sign)
+                                        val1 = val1Double + dSign*val2Double
+                                    }
+                                    else {
+                                        val1 = val1Double / val2Double
+                                    }
+                                    item2Used[item2Index] = true
+                                }
+                                else if let val1Int = val1 as? Int, let val2Int = val2 as? Int {
+                                    if sign != 0 {
+                                        val1 = val1Int + sign*val2Int
+                                    }
+                                    else {
+                                        val1 = Double(val1Int) / Double(val2Int)
+                                    }
+                                    item2Used[item2Index] = true
+                                }
+                                var listItem : [CustomStringConvertible] = [item1[0],val1]
+                                if item1.count > 2 {
+                                    for i in 2..<item1.count {
+                                        listItem.append(item1[i])
+                                    }
+                                }
+                                listItems.append(listItem)
+                                break
+                            }
+                        }
+                    }
+                    for (item2Index,item2) in list2.items.enumerated() {
+                        if !item2Used[item2Index] {
+                            var val2 : CustomStringConvertible = Int(0)
+                            if let val2Double = item2[1] as? Double {
+                                let dSign : Double = Double(sign)
+                                val2 = dSign*val2Double
+                            }
+                            if let val2Int = item2[1] as? Int {
+                                val2 = sign*val2Int
+                            }
+                            var listItem : [CustomStringConvertible] = [item2[0],val2]
+                            if item2.count > 2 {
+                                for i in 2..<item2.count {
+                                    listItem.append(item2[i])
+                                }
+                            }
+                            listItems.append(listItem)
+                        }
+                    }
+                    listItems.sort {
+                        if let val1Double = $0[1] as? Double, let val2Double = $1[1] as? Double {
+                            return val1Double > val2Double
+                        }
+                        else if let val1Int = $0[1] as? Int, let val2Int = $1[1] as? Int {
+                            return val1Int > val2Int
+                        }
+                        else {
+                            return $0.description < $1.description
+                        }
+                    }
+                    if !listItems.isEmpty {
+                        let list : List = ListStruct(type: list1.type, command: vdb.currentCommand, items: listItems)
+                        return Expr.List(list)
+                    }
+                }
+            }
+        }
+        return nil
+    }
+    
 }
 
 // MARK: - start vdb
