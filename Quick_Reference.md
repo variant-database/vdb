@@ -14,6 +14,7 @@ To check whether two clusters or patterns are equal: \<item1> `==` \<item2>
 To count a cluster or pattern in a variable: `count` \<variable name>  
 Set operations `+`, `-`, and `*` (intersection) can be applied to clusters or patterns  
 The result, if any, of the previous command is available in the variable `last`.  
+Results of most list commands can be assigned to a variable.  
 
 ## Filtering commands
 \<cluster>`from`\<country or state>    → cluster  
@@ -54,7 +55,7 @@ The result, if any, of the previous command is available in the variable `last`.
 `char` \<Pango lineage>        prints characteristics of lineage  
 `testvdb`               runs built-in tests of **vdb**  
 `demo`                runs demonstration of **vdb**  
-`save` \<cluster name> \<file name>  
+`save` \<cluster or list name> \<file name>  
 `load` \<cluster name> \<file name>  
 `group lineages` \<lineage names>  define a lineage group  alias `group lineage`, `lineage group`  
 `lineage groups`           lists defined lineages groups  
@@ -79,6 +80,8 @@ The result, if any, of the previous command is available in the variable `last`.
 `completions`/`completions off`  
 `displayTextWithColor`/`displayTextWithColor off`  
 `paging`/`paging off`  
+`quiet`/`quiet off`
 
 `minimumPatternsCount = `\<n>  
-`trendsLineageCount = `\<n>       alias `trends` \<n>
+`trendsLineageCount = `\<n>       alias `trends` \<n>  
+`maxMutationsInFreqList = `\<n>
