@@ -54,7 +54,7 @@ Results of most list commands can be assigned to a variable.
 `trim`               removes extraneous N nucleotides from all viruses  
 `char` \<Pango lineage>        prints characteristics of lineage  
 `sublineages` \<Pango lineage>    prints characteristics of sublineages  
-`diff` \<cluster or pattern> - \<cluster or pattern> differences of consensus/patterns  
+`diff` \<cluster or pattern> [-] \<cluster or pattern> differences of consensus/patterns  
 `testvdb`               runs built-in tests of **vdb**  
 `demo`                runs demonstration of **vdb**  
 `save` \<cluster or pattern or history or list name> \<file name>  
