@@ -53,9 +53,11 @@ Results of most list commands can be assigned to a variable.
 `load` \<vdb database file>  
 `trim`               removes extraneous N nucleotides from all viruses  
 `char` \<Pango lineage>        prints characteristics of lineage  
+`sublineages` \<Pango lineage>    prints characteristics of sublineages  
+`diff` \<cluster or pattern> - \<cluster or pattern> differences of consensus/patterns  
 `testvdb`               runs built-in tests of **vdb**  
 `demo`                runs demonstration of **vdb**  
-`save` \<cluster or list name> \<file name>  
+`save` \<cluster or pattern or history or list name> \<file name>  
 `load` \<cluster name> \<file name>  
 `group lineages` \<lineage names>  define a lineage group  alias `group lineage`, `lineage group`  
 `lineage groups`           lists defined lineages groups  
@@ -80,8 +82,10 @@ Results of most list commands can be assigned to a variable.
 `completions`/`completions off`  
 `displayTextWithColor`/`displayTextWithColor off`  
 `paging`/`paging off`  
-`quiet`/`quiet off`
+`quiet`/`quiet off`  
+`listSpecificity`/`listSpecificity off`  
 
 `minimumPatternsCount = `\<n>  
 `trendsLineageCount = `\<n>       alias `trends` \<n>  
-`maxMutationsInFreqList = `\<n>
+`maxMutationsInFreqList = `\<n>  
+`consensusPercentage = `\<n>
