@@ -3,14 +3,14 @@
 //  VDBCreate
 //
 //  Copyright (c) 2021  Anthony West, Caltech
-//  Last modified 7/21/21
+//  Last modified 8/20/21
 
 import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
 
-let version : String = "2.0"
+let version : String = "2.1"
 let checkForVDBUpdate : Bool = true
 
 print("SARS-CoV-2 Variant Database Creator  Version \(version)      Bjorkman Lab/Caltech")
@@ -149,7 +149,7 @@ final class VDBCreate {
             }
             else {
                 if fileSize > 5_000_000_000 {
-                    outBufferSize = fileSize/15
+                    outBufferSize = fileSize/10
                 }
                 else {
                     outBufferSize = fileSize/5
@@ -556,6 +556,10 @@ final class VDBCreate {
                         }
                     }
                     let ngap : Int = nextBase - 1
+                    if ngap < 0 {
+                        print("Warning ngap = \(ngap)  pos = \(pos)")
+                        continue
+                    }
                     cdsBuffer[ngap] = cdsBuffer[pos]
                     cdsBuffer[pos] = dashChar
                 }
