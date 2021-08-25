@@ -1325,7 +1325,7 @@ let controlC : String = "\(Character(UnicodeScalar(UInt8(3))))"
 let controlD : String = "\(Character(UnicodeScalar(UInt8(4))))"
 
 let metaOffset : Int = 400000
-let metaMaxSize : Int = 3000000
+let metaMaxSize : Int = 5000000
 let pMutationSeparator : String = ":_"
 let altMetadataFileName : String = "metadata.tsv"
 let nuclN : UInt8 = 78
