@@ -1,13 +1,16 @@
 [![MIT license](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 ![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux-lightgrey)
-# vdb
+# cov2db
 A SARS-CoV-2 Mutation Pattern Query Tool
+
+![covid_freq-Group6 (1)](https://user-images.githubusercontent.com/72709799/136820774-5aa4ad9b-ce11-4a56-aee7-8eb690ad360a.jpeg)
+
 
 ## 1. Purpose
 
-The **vdb** program is designed to query the SARS-CoV-2 mutational landscape. It runs as a command shell in a terminal, and it allows customized searches for mutation patterns over the entire SARS-CoV-2 genome dataset or subsets thereof. These patttern searches can be for spike protein mutations or nucleotide mutations over the whole genome.
+The **cov2db** program is designed to query the SARS-CoV-2 mutational landscape. It runs as a command shell in a terminal, and it allows customized searches for mutation patterns over the entire SARS-CoV-2 genome dataset or subsets thereof. These patttern searches can be for spike protein mutations or nucleotide mutations over the whole genome.
 
-The **vdb** tool uses a natural syntax, permitting quick searches over various subsets of the data. The two main types of objects in **vdb** are groups of viruses (“clusters”) and groups of mutations (“patterns”). Clusters can be obtained by searching for patterns, and patterns can be obtained by examining clusters. The program does NOT automatically scan for some pre-defined pattern. Instead, the goal of the program is to make it very easy to look around the spike mutational landscape and see what’s there. The **vdb** program can be thought of as a “viewer” (a device for looking), even though it's entirely text-based.
+The **cov2db** tool uses a natural syntax, permitting quick searches over various subsets of the data. The two main types of objects in **cov2db** are groups of viruses (“clusters”) and groups of mutations (“patterns”). Clusters can be obtained by searching for patterns, and patterns can be obtained by examining clusters. The program does NOT automatically scan for some pre-defined pattern. Instead, the goal of the program is to make it very easy to look around the spike mutational landscape and see what’s there. The **cov2db** program can be thought of as a “viewer” (a device for looking), even though it's entirely text-based.
 
 The default cluster to search is the collection of all sequenced SARS-CoV-2 viruses (“world”). Alternatively, a country or a US state can be specified.
 To search for all viruses from the United States, enter `from US` or just `us` as part of the search command. A cluster or pattern can be assigned to a variable using an equal sign, `=`.
