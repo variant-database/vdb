@@ -6,14 +6,14 @@
 //
 //  Created by Anthony West on 1/31/21.
 //  Copyright (c) 2021  Anthony West, Caltech
-//  Last modified 8/20/21
+//  Last modified 12/9/21
 
 import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
 
-let version : String = "2.1"
+let version : String = "2.2"
 let checkForVDBUpdate : Bool = true         // to inform users of updates; the updates are not downloaded
 let allowGitHubDownloads : Bool = true      // to download nucl. ref. and documentation, if missing
 let basePath : String = FileManager.default.currentDirectoryPath
@@ -24,8 +24,10 @@ let gnuplotGraphSize : (Int,Int) = (1280,960) // 1600,1000 ?
 let vdbrcFileName : String = ".vdbrc"
 let missingAccessionNumberBase : Int = 1_000_000_001
 let aliasFileName : String = "alias_key.json"
+let pangoDesignationFileName : String = "lineages.csv"
 let mpNumberDefault : Int = 12
 let listSep : String = ","
+let maximumFileStreamSize : Int = 2_147_483_648  // Apparent size limit of InputStream
 
 // MARK: - VDB Command line arguments
 
@@ -740,6 +742,11 @@ public class LineNoise {
     // MARK: - Terminal handling
     
     private static func isUnsupportedTerm(_ term: String) -> Bool {
+#if os(macOS)
+        if let xpcServiceName = ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"], xpcServiceName.localizedCaseInsensitiveContains("com.apple.dt.xcode") {
+            return true
+        }
+#endif
         return ["", "dumb", "cons25", "emacs"].contains(term)
     }
     
@@ -1325,7 +1332,7 @@ let controlC : String = "\(Character(UnicodeScalar(UInt8(3))))"
 let controlD : String = "\(Character(UnicodeScalar(UInt8(4))))"
 
 let metaOffset : Int = 400000
-let metaMaxSize : Int = 5000000
+let metaMaxSize : Int = 8_000_000
 let pMutationSeparator : String = ":_"
 let altMetadataFileName : String = "metadata.tsv"
 let nuclN : UInt8 = 78
@@ -1957,7 +1964,8 @@ let EmptyList : List = List(type: .empty, command: "", items: [])
 enum VariantClass : String {
     case VOC
     case VOI
-    case Alert
+    case VUM
+    case FMV
 }
 
 // MARK: - VDB Type (class) methods
@@ -2356,11 +2364,29 @@ final class VDB {
             print("Error reading metadata file \(metadataFile)")
             return
         }
-        vdb.metadata = Array(repeating: 0, count: fileSize)
-        guard let fileStream : InputStream = InputStream(fileAtPath: metadataFile) else { print("Error reading metadata file \(metadataFile)"); return }
-        fileStream.open()
-        _ = fileStream.read(&vdb.metadata, maxLength: fileSize)
-        fileStream.close()
+        
+        if fileSize < maximumFileStreamSize {
+            vdb.metadata = Array(repeating: 0, count: fileSize)
+            guard let fileStream : InputStream = InputStream(fileAtPath: metadataFile) else { print("Error reading metadata file \(metadataFile)"); return }
+            fileStream.open()
+            let bytesRead : Int = fileStream.read(&vdb.metadata, maxLength: fileSize)
+            fileStream.close()
+            if bytesRead < 0 {
+                print("Error 2 reading metadata file \(metadataFile)")
+                return
+            }
+        }
+        else {
+            do {
+                let data : Data = try Data(contentsOf: URL(fileURLWithPath: metadataFile))
+                vdb.metadata = [UInt8](data)
+            }
+            catch {
+                print("Error reading large metadata file \(metadataFile)")
+                return
+            }
+        }
+        
         let metadataFileLastPart : String = metadataFile.components(separatedBy: "/").last ?? ""
         print("   Loading metadata from file \(metadataFileLastPart)")
         fflush(stdout)
@@ -2664,11 +2690,27 @@ final class VDB {
         var metaFields : [String] = []
         var isolates : [Isolate] = []
 
-        metadata = Array(repeating: 0, count: fileSize)
-        guard let fileStream : InputStream = InputStream(fileAtPath: metadataFile) else { print("Error reading tsv file \(metadataFile)"); return [] }
-        fileStream.open()
-        _ = fileStream.read(&metadata, maxLength: fileSize)
-        fileStream.close()
+        if fileSize < maximumFileStreamSize {
+            metadata = Array(repeating: 0, count: fileSize)
+            guard let fileStream : InputStream = InputStream(fileAtPath: metadataFile) else { print("Error reading tsv file \(metadataFile)"); return [] }
+            fileStream.open()
+            let bytesRead : Int = fileStream.read(&metadata, maxLength: fileSize)
+            fileStream.close()
+            if bytesRead < 0 {
+                print("Error 2 reading tsv file \(metadataFile)")
+                return []
+            }
+        }
+        else {
+            do {
+                let data : Data = try Data(contentsOf: URL(fileURLWithPath: metadataFile))
+                metadata = [UInt8](data)
+            }
+            catch {
+                print("Error reading large tsv file \(metadataFile)")
+                return []
+            }
+        }
 
         let lf : UInt8 = 10     // \n
         let tabChar : UInt8 = 9
@@ -2958,6 +3000,152 @@ final class VDB {
             }
         }
         return isolates
+    }
+    
+    // reads metadata tsv file downloaded from GISAID and prepare dictionary for loading Pango lineages
+    class func loadMutationDBTSV2(_ fileName: String) -> [String:Int] {
+        var isoDict : [String:Int] = [:]
+        print("   Loading virus dictionary from file \(fileName) ... ", terminator:"")
+        fflush(stdout)
+        let metadataFile : String = "\(basePath)/\(fileName)"
+        var fileSize : Int = 0
+        do {
+            let attr = try FileManager.default.attributesOfItem(atPath: metadataFile)
+            if let fileSizeUInt64 : UInt64 = attr[FileAttributeKey.size] as? UInt64 {
+                fileSize = Int(fileSizeUInt64)
+            }
+        } catch {
+            print("Error reading tsv file \(metadataFile)")
+            return [:]
+        }
+        var metadata : [UInt8] = []
+        var metaFields : [String] = []
+
+        if fileSize < maximumFileStreamSize {
+            metadata = Array(repeating: 0, count: fileSize)
+            guard let fileStream : InputStream = InputStream(fileAtPath: metadataFile) else { print("Error reading tsv file \(metadataFile)"); return [:] }
+            fileStream.open()
+            let bytesRead : Int = fileStream.read(&metadata, maxLength: fileSize)
+            fileStream.close()
+            if bytesRead < 0 {
+                print("Error 2 reading tsv file \(metadataFile)")
+                return [:]
+            }
+        }
+        else {
+            do {
+                let data : Data = try Data(contentsOf: URL(fileURLWithPath: metadataFile))
+                metadata = [UInt8](data)
+            }
+            catch {
+                print("Error reading large tsv file \(metadataFile)")
+                return [:]
+            }
+        }
+        
+        let lf : UInt8 = 10     // \n
+        let tabChar : UInt8 = 9
+        let spaceChar : UInt8 = 32
+        let underscoreChar : UInt8 = 95
+        var buf : UnsafeMutablePointer<CChar>? = nil
+        buf = UnsafeMutablePointer<CChar>.allocate(capacity: 1000)
+
+        // extract integer from byte stream
+        func intA(_ range : CountableRange<Int>) -> Int {
+            var counter : Int = 0
+            for i in range {
+                if metadata[i] > 127 {
+                    return 0
+                }
+                buf?[counter] = CChar(metadata[i])
+                counter += 1
+            }
+            buf?[counter] = 0 // zero terminate
+            return strtol(buf!,nil,10)
+        }
+        
+        // extract string from byte stream
+        func stringA(_ range : CountableRange<Int>) -> String {
+            var counter : Int = 0
+            for i in range {
+                buf?[counter] = CChar(metadata[i])
+                counter += 1
+            }
+            buf?[counter] = 0 // zero terminate
+            let s = String(cString: buf!)
+            return s
+        }
+        
+        var tabCount : Int = 0
+        var firstLine : Bool = true
+        var lastTabPos : Int = -1
+        
+        let nameFieldName : String = "Virus name"
+        let idFieldName : String = "Accession ID"
+        var nameField : Int = -1
+        var idField : Int = -1
+        var virusName : String = ""
+        var epiIslNumber : Int = 0
+
+        for pos in 0..<metadata.count {
+            switch metadata[pos] {
+            case lf:
+                if firstLine {
+                    let fieldName : String = stringA(lastTabPos+1..<pos)
+                    metaFields.append(fieldName)
+                    firstLine = false
+                    for i in 0..<metaFields.count {
+                        switch metaFields[i] {
+                        case nameFieldName:
+                            nameField = i
+                        case idFieldName:
+                            idField = i
+                        default:
+                            break
+                        }
+                    }
+                    if [nameField,idField].contains(-1) {
+                        print("Error - Missing tsv field")
+                        return [:]
+                    }
+                }
+                else {
+                    if !virusName.isEmpty && epiIslNumber != 0 {
+                        isoDict[virusName] = epiIslNumber
+                        virusName = ""
+                        epiIslNumber = 0
+                    }
+                }
+                tabCount = 0
+                lastTabPos = pos
+            case tabChar:
+                if firstLine {
+                    let fieldName : String = stringA(lastTabPos+1..<pos)
+                    metaFields.append(fieldName)
+                }
+                else {
+                    switch tabCount {
+                    case nameField:
+                        for i in lastTabPos+1+8..<pos {
+                            if metadata[i] == spaceChar {
+                                metadata[i] = underscoreChar
+                            }
+                        }
+                        virusName = stringA(lastTabPos+1+8..<pos)
+                    case idField:
+                        epiIslNumber = intA(lastTabPos+1+8..<pos)
+                    default:
+                        break
+                    }
+                }
+                lastTabPos = pos
+                tabCount += 1
+            default:
+                break
+            }
+        }
+        buf?.deallocate()
+        return isoDict
     }
     
 // loads the aliasDict and lineageArray used for finding child and parent lineages
@@ -3340,6 +3528,57 @@ final class VDB {
             print("\(otherLineagesList)")
         }
         
+        // list specificity of mutation pairs
+        if vdb.listSpecificity && vdb.clusters["pairs"] != nil {
+            print("\nMutation pair analysis")
+            let clusterSetAll : Set<Isolate> = Set(vdb.clusters[vdb.isolatesKeyword] ?? [])
+            let minusCluster : [Isolate] = Array(clusterSetAll.subtracting(cluster))
+            var pairs : [([Mutation],Int,Int,String)] = []
+            var maxMutationsToSearch : Int = numberOfMutationsToList
+            for i in 0..<numberOfMutationsToList {
+                let m : (Mutation,Int,Int,[Int]) = mutationCounts[i]
+                let freq : Double = Double(m.1)/Double(cluster.count)
+                if freq < (Double(vdb.consensusPercentage)*0.01) {
+                    maxMutationsToSearch = i
+                    break
+                }
+            }
+            for i in 0..<(maxMutationsToSearch-1) {
+                let mi : (Mutation,Int,Int,[Int]) = mutationCounts[i]
+                for j in (i+1)..<maxMutationsToSearch {
+                    let mj : (Mutation,Int,Int,[Int]) = mutationCounts[j]
+                    let pair : [Mutation] = [mi.0,mj.0]
+                    let pair_isolates = minusCluster.filter { $0.containsMutations(pair,0) }
+                    let pair_cluster = cluster.filter { $0.containsMutations(pair,0) }
+                    var pair_aa : String = ""
+                    if vdb.nucleotideMode {
+                        if listItems.count > i && listItems[i].count > 4 {
+                            pair_aa += listItems[i][4].description + " "
+                        }
+                        if listItems.count > j && listItems[j].count > 4 {
+                            pair_aa += listItems[j][4].description
+                        }
+                    }
+                    pairs.append((pair,pair_isolates.count,pair_cluster.count,pair_aa))
+                    print("\(i),\(j),\(pair_isolates.count)", terminator:"\n")
+                }
+            }
+            pairs.sort {
+                if $0.1 != $1.1 {
+                    return $0.1 < $1.1
+                }
+                else {
+                    return $0.2 > $1.2
+                }
+            }
+            print("    mutations    # not in cluster    % in cluster")
+            for (index,pair) in pairs.enumerated() {
+                let pairName : String = stringForMutations(pair.0)
+                let freqClusterString : String = String(format:"%5.3f",Double(pair.2)/Double(cluster.count)*100.0)
+                print("\(index+1): \(pairName)  \(pair.1)  \(freqClusterString)%   \(pair.3)")
+            }
+        }
+        
         let list : List = List(type: .frequencies, command: vdb.currentCommand, items: listItems, baseCluster: cluster)
         return list
 /*
@@ -3405,9 +3644,15 @@ final class VDB {
         }
         else {
             half = Int(Double(cluster.count) * Double(vdb.consensusPercentage) * 0.01)
-            print("Warning - consensus calculated with \(vdb.consensusPercentage)% cutoff")
+            if !quiet {
+                print("Warning - consensus calculated with \(vdb.consensusPercentage)% cutoff")
+            }
         }
         let con : [Mutation] = mutationCounts.filter { $0.1 > half }.map { $0.0 }
+        if secondConsensusFreq != 0 {
+            let half2 : Int = Int(Double(cluster.count) * Double(secondConsensusFreq) * 0.01)
+            secondConsensus = mutationCounts.filter { $0.1 > half2 }.map { $0.0 }
+        }
         if !quiet {
             let conString = stringForMutations(con)
             print("Consensus mutations \(conString) for set of size \(nf(cluster.count))")
@@ -5078,6 +5323,20 @@ plot
         return sublineages.map { ($0.0,$0.1) }
     }
     
+    // returns all lineages from a WHO variant lineage description string as in the whoVariants dictionary
+    class func lineagesFor(variantString: String, vdb:VDB) -> [String] {
+        var lineageNames : [String] = []
+        let lNames : [String] = variantString.components(separatedBy: " + ")
+        lineageNames.append(contentsOf: lNames)
+        for lName in lNames {
+            let sublineages = VDB.sublineagesOf(lName, vdb: vdb, namesOnly: true)
+            for sub in sublineages {
+                lineageNames.append(sub.0)
+            }
+        }
+        return lineageNames
+    }
+    
     // prints the consensus mutation pattern of a given lineage
     //   indicates which mutations are new to the lineage
     class func characteristicsOfLineage(_ lineageName: String, inCluster isolates:[Isolate], vdb: VDB) {
@@ -5457,10 +5716,44 @@ plot
                 }
             }
         }
-
     }
     
-    class func downloadFileFromGitHub(_ fileName: String, vdb: VDB, urlIn: URL? = nil, onSuccess: @escaping (String) -> Void) {
+    // returns whether Pango designation file is up-to-date; if not, attempts download
+    class func downloadPangoDesignationFile(vdb: VDB) -> Bool {
+        let filePath : String = "\(basePath)/\(pangoDesignationFileName)"
+        var fileUpToDate : Bool = false
+        do {
+            let fileAttributes : [FileAttributeKey : Any] = try FileManager.default.attributesOfItem(atPath: filePath)
+            if let modDate = fileAttributes[.modificationDate] as? Date {
+                let fileAge : TimeInterval = Date().timeIntervalSince(modDate)
+                if fileAge < 24*60*60 {   // 1 day
+                     fileUpToDate = true
+                }
+            }
+        }
+        catch {
+        }
+        if !fileUpToDate {
+            let fileAddress : String = "https://raw.githubusercontent.com/cov-lineages/pango-designation/master/\(pangoDesignationFileName)"
+            let fileURL : URL? = URL(string: fileAddress)
+            downloadFileFromGitHub("", vdb: vdb, urlIn: fileURL, returnRaw: true)  { fileString in
+                if !fileString.isEmpty {
+                    do {
+                        try fileString.write(toFile: filePath, atomically: true, encoding: .ascii)
+                        vdb.newPangoDesignationFileToLoad = true
+                    }
+                    catch {
+                        print("error writing file to \(filePath)")
+                        return
+                    }
+                }
+            }
+        }
+        return fileUpToDate
+    }
+    
+    // asynchronously downloads a requested file from GitHub, executing completion block onSuccess
+    class func downloadFileFromGitHub(_ fileName: String, vdb: VDB, urlIn: URL? = nil, returnRaw: Bool = false, onSuccess: @escaping (String) -> Void) {
         let url : URL
         if let urlIn = urlIn {
             url = urlIn
@@ -5479,6 +5772,9 @@ plot
         let task = session.dataTask(with: url) {(data, response, error) in
             guard let data = data else { return }
             guard let result =  String(data: data, encoding: .utf8) else { return }
+            if returnRaw {
+                onSuccess(result)
+            }
             let parts = result.components(separatedBy: "\"content")
             if parts.count > 1 {
                 let tmpString : String = parts[1].components(separatedBy: ",")[0]
@@ -5876,35 +6172,11 @@ plot
         print("Mutations trimmed from \(nf(oldMutationCount)) to \(nf(newMutationCount))")
     }
     
+    // MARK: - Pango designation file and lineage assignment
+    
     // read Pango lineage specification file and return viruses of specified lineage
     class func loadPangoList(_ filePath: String, lineage: String, vdb: VDB) -> [Isolate] {
         var cluster : [Isolate] = []
-/*
-        var fileString : String = ""
-        do {
-            fileString = try String(contentsOfFile: fileName)
-        }
-        catch {
-            print("Error reading file \(fileName)")
-        }
-        let lines : [String] = fileString.components(separatedBy: "\n")
-        for line in lines {
-            if line.isEmpty {
-                continue
-            }
-            let parts : [String] = line.components(separatedBy: "/")
-            if parts.count == 3 {
-                for iso in vdb.isolates {
-                    if iso.state == parts[1] {
-                        if iso.country == parts[0] {
-                            cluster.append(iso)
-                        }
-                    }
-                }
-            }
-        }
-        print("Found \(cluster.count) of \(nf(lines.count)) viruses")
-*/
         var lineN : [UInt8] = []
         do {
             let vdbData = try Data(contentsOf: URL(fileURLWithPath: filePath))
@@ -5914,7 +6186,6 @@ plot
             print("Error reading Pango file \(filePath)")
             return []
         }
-        
         var buf : UnsafeMutablePointer<CChar>? = nil
         buf = UnsafeMutablePointer<CChar>.allocate(capacity: 200)
          
@@ -5934,7 +6205,6 @@ plot
         vdb.includeSublineages = true
         let lineageSet : [Isolate] = isolatesInLineage(lineage.uppercased(), inCluster: vdb.isolates, vdb: vdb)
         vdb.includeSublineages = includeSetting
-
         let lineageArray : [UInt8] = [UInt8](lineage.uppercased().utf8)
         let commaChar : UInt8 = 44
         let slashChar : UInt8 = 47
@@ -5985,6 +6255,924 @@ plot
         buf?.deallocate()
         print("Found \(cluster.count) of \(searchCount) viruses. Missing \(searchCount - cluster.count)")
         return cluster
+    }
+    
+    // read Pango lineage specification file and return viruses of specified lineage
+    class func loadPangoListAll(vdb: VDB) {
+        var fileUpToDate : Bool = VDB.downloadPangoDesignationFile(vdb: vdb)
+        if !fileUpToDate {
+            print("Downloading Pango designation file")
+            for _ in 0..<10 {
+                Thread.sleep(forTimeInterval: 0.5)
+                if vdb.newPangoDesignationFileToLoad {
+                    fileUpToDate = true
+                    break
+                }
+            }
+        }
+        if !fileUpToDate {
+            print("Error - could not download Pango designation file")
+            return
+        }
+        // load all lineages821.pango  Missing 11062
+        let filePath : String = "\(basePath)/\(pangoDesignationFileName)"
+        print("Preparing to load Pango designations")
+        var isoDict : [String:Int] = [:]
+        var isoDict2 : [Int:Int] = [:]
+        vdb.lineageDict = [:]
+        var lineageSet : Set<String> = []
+        for i in 0..<vdb.isolates.count {
+            isoDict2[vdb.isolates[i].epiIslNumber] = i
+        }
+        isoDict = VDB.loadMutationDBTSV2(altMetadataFileName)
+        if isoDict.isEmpty {
+            print("Error - cannot load Pango designation file without \(altMetadataFileName) file")
+            return
+        }
+        print("virus count = \(isoDict.count)")
+        print("   Reading Pango designation file \(filePath)")
+        var lineN : [UInt8] = []
+        do {
+            let vdbData = try Data(contentsOf: URL(fileURLWithPath: filePath))
+            lineN = [UInt8](vdbData)
+        }
+        catch {
+            print("Error reading Pango file \(filePath)")
+            return
+        }
+        var buf : UnsafeMutablePointer<CChar>? = nil
+        buf = UnsafeMutablePointer<CChar>.allocate(capacity: 200)
+         
+        // extract string from byte stream
+        func stringA(_ range : CountableRange<Int>) -> String {
+            var counter : Int = 0
+            for i in range {
+                buf?[counter] = CChar(lineN[i])
+                counter += 1
+            }
+            buf?[counter] = 0 // zero terminate
+            let s = String(cString: buf!)
+            return s
+        }
+        
+        let commaChar : UInt8 = 44
+        let slashChar : UInt8 = 47
+        let lf : UInt8 = 10     // \n
+        var lastLf : Int = -1
+        var commaPos : Int = 0
+        var slashCount : Int = 0
+        var slashPos : [Int] = Array(repeating: 0, count: 5)
+        var searchCount : Int = 0
+        var missingCount : Int = 0
+        var missingList : String = ""
+        for pos in 0..<lineN.count {
+            switch lineN[pos] {
+            case lf:
+                if slashCount > 1 {
+                    if true {
+                        searchCount += 1
+                        let idName : String = stringA(lastLf+1..<commaPos)
+                        let lName : String = stringA(commaPos+1..<pos)
+                        if !lineageSet.contains(lName) {
+                            lineageSet.insert(lName)
+                            vdb.lineageDict[lName] = []
+                        }
+                        if let isoNumISL : Int = isoDict[idName], let isoNum : Int = isoDict2[isoNumISL] {
+                            vdb.lineageDict[lName]?.append(isoNum)
+                        }
+                        else {
+                            missingList += stringA(lastLf+1..<pos+1)
+                            missingCount += 1
+                        }
+                    }
+                }
+                lastLf = pos
+                slashCount = 0
+            case commaChar:
+                commaPos = pos
+            case slashChar:
+                slashPos[slashCount] = pos
+                slashCount += 1
+            default:
+                break
+            }
+        }
+        buf?.deallocate()
+        var numberOfDesignations : Int = 0
+        var uniqueSet : Set<Int> = []
+        for (_,value) in vdb.lineageDict {
+            numberOfDesignations += value.count
+            uniqueSet.formUnion(value)
+        }
+        print("Number of designations: \(numberOfDesignations)  unique: \(uniqueSet.count)")
+        if missingCount > 0 {
+            let missingListFile : String = "\(basePath)/missingList.csv"
+            do {
+                try missingList.write(toFile: missingListFile, atomically: true, encoding: .utf8)
+                print("List of \(missingCount) missing viruses written to \(missingListFile)")
+            }
+            catch {
+                print("Error writing missing list to file \(missingListFile)")
+            }
+        }
+        var sum : Int = 0
+        var mismatches : [ String : [ String: Int] ] = [:]
+        var mismatchCount : Int = 0
+        var lCounts : [ (String,Int) ] = []
+        for (key,value) in vdb.lineageDict {
+            lCounts.append((key,value.count))
+            sum += value.count
+            for isoNum in value {
+                let gisaidCall : String = vdb.isolates[isoNum].pangoLineage
+                if key != gisaidCall {
+                    mismatchCount += 1
+                    if mismatches[key] == nil {
+                        mismatches[key] = [:]
+                    }
+                    if let oldCount = mismatches[key]?[gisaidCall] {
+                        mismatches[key]?[gisaidCall] = oldCount + 1
+                    }
+                    else {
+                        mismatches[key]?[gisaidCall] = 1
+                    }
+                }
+            }
+        }
+        lCounts.sort { $0.1 > $1.1 }
+        print("Top lineages in Pango list:")
+        for i in 0..<min(5,lCounts.count) {
+            print("\(i+1):  \(lCounts[i].0) \(lCounts[i].1)")
+        }
+        var mismatchesArray : [ (String,[(String,Int)]) ] = []
+        for (key,value) in mismatches {
+            var mis : [(String,Int)] = []
+            for (key2,value2) in value {
+                mis.append((key2,value2))
+            }
+            mis.sort { $0.1 > $1.1 }
+            mismatchesArray.append((key,mis))
+        }
+        mismatchesArray.sort { $0.1.reduce(0) { $0 + $1.1 } > $1.1.reduce(0) { $0 + $1.1 } }
+        var mCheck : Int = 0
+        let topN : Int = 5
+        print("Top \(topN) lineage mismatches  (Pango designation:  GISAID designation)")
+        for i in 0..<topN {
+            let mis = mismatchesArray[i]
+            var m : String = ""
+            for mm in mis.1 {
+                if !m.isEmpty {
+                    m += ", "
+                }
+                m += "\(mm.0) \(mm.1)"
+                mCheck += mm.1
+            }
+            print("\(mis.0):  \(m)")
+        }
+        print("Total mismatches: \(mismatchCount)  Top \(topN): \(mCheck)   others: \(mismatchCount - mCheck)")
+        print("Found \(sum) of \(searchCount) viruses. Missing \(missingCount)")   // = searchCount - sum
+        vdb.pangoList = []
+        for (key,value) in vdb.lineageDict {
+            for isoNum in value {
+                vdb.pangoList.append((key,vdb.isolates[isoNum]))
+            }
+        }
+        print("Making pango cluster")
+        var pangoCluster : [Isolate] = []
+        for (pLin,p) in vdb.pangoList {
+            let newIsolate : Isolate = Isolate(country: p.country, state: p.state, date: p.date, epiIslNumber: p.epiIslNumber, mutations: p.mutations, pangoLineage: pLin, age: p.age)
+            pangoCluster.append(newIsolate)
+        }
+        vdb.clusters["pango"] = pangoCluster
+        print("")
+    }
+    
+    // returns a simple measure of distance between sets of mutations
+    class func distSD(_ a: [Mutation], _ b: Set<Mutation>) -> Int {
+        return b.symmetricDifference(a).count
+    }
+    
+    // prepares to assign lineages based on consensus mutation sets
+    class func prepareForLineageAssignment(vdb: VDB, checkVariants: Bool = false) {
+        let consensusPercentageSetting : Int = vdb.consensusPercentage
+        secondConsensusFreq = 90
+        defer {
+            vdb.consensusPercentage = consensusPercentageSetting
+            secondConsensusFreq = 0
+        }
+        vdb.consensusPercentage = 70
+        if vdb.pangoList.isEmpty {
+            loadPangoListAll(vdb: vdb)
+            if vdb.pangoList.isEmpty {
+                print("Error - Pango lineage list not available")
+                return
+            }
+        }
+        // update lineageArray for new lineages
+        for key in vdb.lineageDict.keys {
+            if !vdb.lineageArray.contains(key) {
+                vdb.lineageArray.append(key)
+            }
+        }
+        print("Calculating consensus patterns")
+        vdb.consensusDict = [:]  // [String:[(Set<Mutation>,Int,Set<Mutation>)]]
+        let defaultNumberOfConsensusPatterns : Int = 5
+        for (key,value) in vdb.lineageDict {
+            var cluster : [Isolate] = value.map { vdb.isolates[$0] }
+            if cluster.isEmpty || key.replacingOccurrences(of: " ", with: "").isEmpty {
+                print("omitting lineage \(key)")
+                continue
+            }
+            let numberOfConsensusPatterns : Int = defaultNumberOfConsensusPatterns + (cluster.count/5000)
+//            let cluster0 : [Isolate] = cluster
+            
+            func addConsensus() {
+                let consensus : [Mutation] = consensusMutationsFor(cluster, vdb: vdb, quiet: true)
+                let patternsSet : Set<Mutation> = Set(consensus)
+                // find member of cluster closest to consensus
+                var closest : ([Mutation],Int) = ([],1000)
+                for iso in cluster {
+                    let d : Int = distSD(iso.mutations, patternsSet)
+                    if d < closest.1 {
+                        closest = (iso.mutations,d)
+                        if d == 0 {
+                            break
+                        }
+                    }
+                }
+                let matchCount : Int = cluster.filter { $0.mutations == closest.0 }.count
+                let existingPatternCount : Int = vdb.consensusDict[key]?.count ?? 0
+                if closest.1 > 0 && (existingPatternCount > 0) {
+//                    print("skipping more patterns for \(key) with \(existingPatternCount)")
+                    cluster = []
+                    return
+                }
+                let patternsSet2 : Set<Mutation> = Set(closest.0)
+                if vdb.consensusDict[key] == nil {
+                    vdb.consensusDict[key] = [(patternsSet2,matchCount,[],patternsSet2)] // Set(secondConsensus))]
+                }
+                else {
+                    vdb.consensusDict[key]?.append((patternsSet2,matchCount,[],patternsSet2)) // Set(secondConsensus)))
+                }
+                cluster = cluster.filter { distSD($0.mutations, patternsSet2) > 4 }
+            }
+            
+            for _ in 0..<numberOfConsensusPatterns {
+                addConsensus()
+                if cluster.isEmpty {
+                    break
+                }
+            }
+/*
+            // to examine distance distribution from consensus
+            if ["B.1.1.7","B.1.617.2","P.1"].contains(key) {
+                let maxd : Int = 100
+                var distances : [Int] = Array(repeating: 0, count: maxd+1)
+                let patternsSet : Set<Mutation> = consensusDict[key]?[0] ?? []
+                for iso in cluster0 {
+                    var d : Int = dist(iso.mutations, patternsSet)
+                    if d > maxd {
+                        d = maxd
+                    }
+                    distances[d] += 1
+                }
+                print("Distances from consensus for \(key):")
+                for dd in 0..<maxd+1 {
+                    if distances[dd] > 0 {
+                        print("\(dd):  \(distances[dd])")
+                    }
+                }
+                print("")
+            }
+*/
+        }
+        
+        // calculate defining sublineage mutations
+        func parentLineageForLineage(_ lineageName: String) -> String {
+            var parentLineageName : String = ""
+            if let lastPeriodIndex : String.Index = lineageName.lastIndex(of: ".") {
+                parentLineageName = String(lineageName[lineageName.startIndex..<lastPeriodIndex])
+            }
+            if vdb.lineageDict[parentLineageName] == nil {
+                if let pLineageName = vdb.aliasDict[parentLineageName] {
+                    parentLineageName = pLineageName
+                }
+            }
+            return parentLineageName
+        }
+
+        var newConsensusDict : [String:[(Set<Mutation>,Int,Set<Mutation>,Set<Mutation>)]] = [:]
+        for (lineageName,value) in vdb.consensusDict {
+            let parentLineageName : String = parentLineageForLineage(lineageName)
+            var parentPattern : Set<Mutation> = []
+            if let p = vdb.consensusDict[parentLineageName] {
+                parentPattern = p[0].3 // 0
+            }
+            var newValues : [(Set<Mutation>,Int,Set<Mutation>,Set<Mutation>)] = []
+            for v in value {
+                newValues.append((v.0,v.1,v.3.subtracting(parentPattern),[]))
+            }
+            newConsensusDict[lineageName] = newValues
+        }
+        vdb.consensusDict = newConsensusDict
+        
+        // prepare for WHO variant assignments
+        vdb.whoConsensusArray = []
+        var allPango : [Isolate] = [] // vdb.pangoList.map { $0.1 }
+        for (pLin,p) in vdb.pangoList {
+            let newIsolate : Isolate = Isolate(country: p.country, state: p.state, date: p.date, epiIslNumber: p.epiIslNumber, mutations: p.mutations, pangoLineage: pLin, age: p.age)
+            allPango.append(newIsolate)
+        }
+        let allSet : Set<Isolate> = Set(allPango)
+        for (key,value) in whoVariants {
+            let variantLineages : [String] = lineagesFor(variantString: value.0, vdb: vdb)
+            var variantCluster : [Isolate] = []
+            for lName in variantLineages {
+                if let lNumbers : [Int] = vdb.lineageDict[lName] {
+                    let cluster : [Isolate] = lNumbers.map { vdb.isolates[$0] }
+                    variantCluster.append(contentsOf: cluster)
+                }
+            }
+            if variantCluster.isEmpty {
+                continue
+            }
+            let _ : [Mutation] = consensusMutationsFor(variantCluster, vdb: vdb, quiet: true)
+            let variantConsensus : Set<Mutation> = Set(secondConsensus) // Set(consensus)
+            
+            var consensusDictVariant : [String:[(Set<Mutation>,Int,Set<Mutation>,Set<Mutation>)]] = [:]
+            for vLin in variantLineages {
+                consensusDictVariant[vLin] = vdb.consensusDict[vLin]
+            }
+            vdb.whoConsensusArray.append((key,variantConsensus,variantLineages,consensusDictVariant))
+            if checkVariants {
+                var containsConsensusCount : Int = 0
+                for iso in variantCluster {
+                    if variantConsensus.subtracting(iso.mutations).isEmpty {
+                        containsConsensusCount += 1
+                    }
+                }
+                let notInVariantCluster : [Isolate] = Array(allSet.subtracting(variantCluster))
+                var containsConsensusCount2 : Int = 0
+                var badLineages : [String:Int] = [:]
+                for iso in notInVariantCluster {
+                    if variantConsensus.subtracting(iso.mutations).isEmpty {
+                        containsConsensusCount2 += 1
+                        
+                        badLineages[iso.pangoLineage, default: 0] += 1
+                    }
+                }
+                let containsFreqString : String = String(format: "%4.2f", 100.0*Double(containsConsensusCount)/Double(variantCluster.count))
+                var badLin : String = ""
+                if !badLineages.isEmpty {
+                    badLin = "\(badLineages)"
+                }
+                print("Variant \(key):  \(containsFreqString)%   n = \(variantCluster.count)   bad = \(containsConsensusCount2)  \(badLin)")
+            }
+        }
+        print("Done calculating consensus patterns")
+        
+        // check for overlapping consensus patterns
+        print("Overlapping consensus patterns:")
+        var consensusArrays : [(String,Set<Set<Mutation>>)] = []
+        for (key,value) in vdb.consensusDict {
+            consensusArrays.append((key,Set(value.map { $0.0 })))
+        }
+        for i in 0..<consensusArrays.count-1 {
+            for j in i+1..<consensusArrays.count {
+                let intersection : Set<Set<Mutation>> = consensusArrays[i].1.intersection(consensusArrays[j].1)
+                if !intersection.isEmpty {
+                    print("\(i),\(j): \(consensusArrays[i].0)  \(consensusArrays[j].0)  \(intersection.count)")
+                }
+            }
+        }
+        
+    }
+    
+    // assigns Pango lineages to viruses in clusterName1 - results are in clusterName2
+    class func assignLineagesForCluster(_ clusterName1: String, _ clusterName2: String, vdb: VDB) {
+        if vdb.consensusDict.isEmpty && !clusterName2.contains("."){
+            prepareForLineageAssignment(vdb: vdb)
+            if vdb.consensusDict.isEmpty {
+                print("Error - cannot assign lineages")
+                return
+            }
+        }
+        var cluster1 : [Isolate] = []
+        if !clusterName1.isEmpty {
+            if let cluster11 = vdb.clusters[clusterName1] {
+                cluster1 = cluster11
+            }
+        }
+        if !clusterName2.isEmpty {
+            if vdb.patterns[clusterName2] != nil || vdb.lists[clusterName2] != nil {
+                print("Error - \(clusterName2) is not available for clusters assignment")
+                return
+            }
+            if clusterName2.contains(".") && cluster1.count != 1 {
+                // force assign cluster1 to lineage
+                var ids : [Int] = []
+                for i in 0..<cluster1.count {
+                    cluster1[i].pangoLineage = clusterName2
+                    ids.append(cluster1[i].epiIslNumber)
+                }
+                vdb.clusters[clusterName1] = cluster1
+                var tmpDict : [Int:Int] = [:]
+                for i in 0..<vdb.isolates.count {
+                    tmpDict[vdb.isolates[i].epiIslNumber] = i
+                }
+                for virus in cluster1 {
+                    if let index = tmpDict[virus.epiIslNumber] {
+                        vdb.isolates[index].pangoLineage = clusterName2
+                    }
+                }
+                vdb.clusters[vdb.isolatesKeyword] = vdb.isolates
+                print("Cluster \(clusterName1) assigned to lineage \(clusterName2)")
+                return
+            }
+        }
+        
+        func closestLineageCon(a: [Mutation]) -> (String,Int) {
+            var d : Int = 10000
+            var mc : Int = 1
+            var lName : String = ""
+            let aSet : Set<Mutation> = Set(a)
+            var consensusDictLocal = vdb.consensusDict
+            
+            for variant in vdb.whoConsensusArray {
+                if variant.1.subtracting(a).isEmpty {
+                    consensusDictLocal = variant.3
+                    break
+                }
+            }
+            for (key,value) in consensusDictLocal {
+                for p in value {
+//                    let dd : Int = dist(a,p.0) + 2*p.2.subtracting(a).count
+//                    let dd : Int = p.0.subtracting(a).count + aSet.subtracting(p.0).count + 2*p.2.subtracting(a).count
+                    let dd : Int = p.0.subtracting(a).count + aSet.subtracting(p.0).count + 2*p.2.subtracting(a).count
+                    if dd < d {
+                        d = dd
+                        mc = p.1
+                        lName = key
+                    }
+                    else if dd == d && p.1 > mc {
+                        mc = p.1
+                        lName = key
+                    }
+                }
+            }
+            return (lName,d)
+        }
+        
+        func closestLineageConList(a: [Mutation], lineageToCheck: String) -> (String,Int) {
+            var d : Int = 10000
+            var mc : Int = 1
+            var lName : String = ""
+            let aSet : Set<Mutation> = Set(a)
+            var closestArray : [(String,Int,Int)] = []
+            var checkLineage : (String,Int,Int) = ("",0,0)
+            for (key,value) in vdb.consensusDict {
+                for p in value {
+//                    let dd : Int = dist(a,p.0) + 2*p.2.subtracting(a).count
+                    let dd : Int = p.0.subtracting(a).count + aSet.subtracting(p.0).count + 2*p.2.subtracting(a).count
+                    if dd < d {
+                        d = dd
+                        mc = p.1
+                        lName = key
+                        closestArray = [(key,dd,p.1)]
+                    }
+                    else if dd == d && p.1 > mc {
+                        mc = p.1
+                        lName = key
+                        closestArray.append((key,dd,p.1))
+                    }
+                    else if dd == d {
+                        closestArray.append((key,dd,p.1))
+                    }
+                    if key == lineageToCheck {
+                        checkLineage = (key,dd,p.1)
+                    }
+                }
+            }
+            closestArray.sort { $0.2 > $1.2 }
+            for cl in closestArray {
+                print("\(cl.0) : \(cl.1)  \(cl.2)")
+            }
+            if !checkLineage.0.isEmpty {
+                print("\(checkLineage.0) : \(checkLineage.1)  \(checkLineage.2)")
+            }
+            return (lName,d)
+        }
+
+        let startTime : Date = Date()
+        let tenPercent : Int = cluster1.count/10
+        vdb.assignmentCount = 0
+        vdb.assignmentLastPercent = 0
+        if !cluster1.isEmpty {
+            print("Assigning lineages for cluster \(clusterName1) with \(cluster1.count) viruses")
+            if cluster1.count == 1 {
+                var lineageToCheck : String = ""
+                let lName : String = clusterName2.uppercased()
+                if vdb.lineageArray.contains(lName) {
+                    lineageToCheck = lName
+                }
+                let (_,_) : (String,Int) = closestLineageConList(a: cluster1[0].mutations, lineageToCheck: lineageToCheck)
+            }
+            var newCluster : [Isolate] = []
+/*
+            // single thread version
+            for p in cluster1 {
+                let (lNameCon,_) : (String,Int) = closestLineageCon(a: p.mutations)
+                let newIsolate : Isolate = Isolate(country: p.country, state: p.state, date: p.date, epiIslNumber: p.epiIslNumber, mutations: p.mutations, pangoLineage: lNameCon, age: p.age)
+                newCluster.append(newIsolate)
+                if newCluster.count - lastPercent > tenPercent {
+                    lastPercent = newCluster.count
+                    let percentDone : Int = 100 * newCluster.count / cluster1.count
+                    print ("  \(percentDone)% done")
+                }
+            }
+*/
+            func assign_MP_task(mp_index: Int, mp_range: (Int,Int), vdb: VDB) -> [Isolate] {
+                var newCluster : [Isolate] = []
+                var lastPercentLocal : Int = 0
+                let tenPercentLocal : Int = (mp_range.1-mp_range.0)/10
+                for pos in mp_range.0..<mp_range.1 {
+                    let p : Isolate = cluster1[pos]
+                    let (lNameCon,_) : (String,Int) = closestLineageCon(a: p.mutations)
+                    let newIsolate : Isolate = Isolate(country: p.country, state: p.state, date: p.date, epiIslNumber: p.epiIslNumber, mutations: p.mutations, pangoLineage: lNameCon, age: p.age)
+                    newCluster.append(newIsolate)
+                    if newCluster.count - lastPercentLocal > tenPercentLocal {
+                        vdb.assignmentCount += newCluster.count - lastPercentLocal
+                        lastPercentLocal = newCluster.count
+                        if vdb.assignmentCount - vdb.assignmentLastPercent > tenPercent {
+                            vdb.assignmentLastPercent = vdb.assignmentCount
+                            let percentDone : Int = 100 * vdb.assignmentCount / cluster1.count
+                            print ("  \(percentDone)% done")
+                        }
+                    }
+                }
+                return newCluster
+            }
+            
+            let mp_number : Int = mpNumber
+            var sema : [DispatchSemaphore] = []
+            for _ in 0..<mp_number-1 {
+                sema.append(DispatchSemaphore(value: 0))
+            }
+            var cuts : [Int] = [0]
+            let cutSize : Int = cluster1.count/mp_number
+            for i in 1..<mp_number {
+                let cutPos : Int = i*cutSize
+                cuts.append(cutPos)
+            }
+            cuts.append(cluster1.count)
+            var ranges : [(Int,Int)] = []
+            for i in 0..<mp_number {
+                ranges.append((cuts[i],cuts[i+1]))
+            }
+            
+            DispatchQueue.concurrentPerform(iterations: mp_number) { index in
+                let newCluster_mp : [Isolate] = assign_MP_task(mp_index: index, mp_range: ranges[index], vdb: vdb)
+
+                if index != 0 {
+                    sema[index-1].wait()
+                }
+                newCluster.append(contentsOf: newCluster_mp)
+
+                if index != mp_number - 1 {
+                    sema[index].signal()
+                }
+            }
+            var newClusterName : String = clusterName2
+            if newClusterName.isEmpty || vdb.lineageArray.contains(clusterName2.uppercased()) {
+                newClusterName = clusterName1
+                while true {
+                    newClusterName += "_"
+                    if vdb.clusters[newClusterName] == nil {
+                        break
+                    }
+                }
+            }
+            vdb.clusters[newClusterName] = newCluster
+            let assignTime : TimeInterval = Date().timeIntervalSince(startTime)
+            let minutes : Double = assignTime/60.0
+            print("Time to assign n=\(cluster1.count): \(minutes) minutes")
+            print("Cluster \(newClusterName) assigned to \(nf(newCluster.count)) isolates")
+            return
+        }
+        
+        if vdb.lineageArray.contains(clusterName1.uppercased()) {
+            let lName : String = clusterName1.uppercased()
+            if let lInfo : [(Set<Mutation>,Int,Set<Mutation>,Set<Mutation>)] = vdb.consensusDict[lName] {
+                print("Lineage assignment patterns for \(lName):")
+                func patternString(_ mutationSet: Set<Mutation>) -> String {
+                    let mArray : [Mutation] = Array(mutationSet).sorted { $0.pos < $1.pos }
+                    return stringForMutations(mArray)
+                }
+                for pattern in lInfo {
+                    print("  \(patternString(pattern.0))    Match Count: \(pattern.1)   Char. Pattern: \(patternString(pattern.2))")
+                }
+            }
+            return
+        }
+        else if clusterName1 ~~ "counts" {
+            print("Number of assignment patterns for lineages with more than one:")
+            var patternCounts : [(String,Int)] = []
+            for (key,value) in vdb.consensusDict {
+                let pCount : Int = value.count
+                if pCount > 1 {
+                    patternCounts.append((key,pCount))
+                }
+            }
+            patternCounts.sort {
+                if $0.1 != $1.1 {
+                    return $0.1 < $1.1
+                }
+                else {
+                    return $0.0 < $1.0
+                }
+            }
+            for p in patternCounts {
+                print("\(p.0): \(p.1)")
+            }
+            return
+        }
+        let checkAll : Bool = true
+        let pangoToCheck : Int
+        if checkAll || startTime == .distantPast {
+            pangoToCheck = vdb.pangoList.count
+        }
+        else {
+            pangoToCheck = 10000
+        }
+        var pangoCorrect : Int = 0
+        var incorrect : [(Int,String,String)] = []
+        for ri in 0..<pangoToCheck {
+            let r : Int
+            if checkAll || pangoToCheck < 0 {
+                r = ri
+            }
+            else {
+                r = Int.random(in: 0..<vdb.pangoList.count)
+            }
+            let rIso : Isolate = vdb.pangoList[r].1
+            if checkAll && r % 10000 == 0 {
+                print("r = \(r)")
+            }
+            let pattern : [Mutation] = rIso.mutations
+            let (lNameCon,distCon) : (String,Int) = closestLineageCon(a: pattern)
+            if vdb.pangoList[r].0 == lNameCon {
+                pangoCorrect += 1
+            }
+            else {
+                incorrect.append((distCon,"\(rIso.epiIslNumber),\(lNameCon),\(vdb.pangoList[r].0),\(distCon)",lNameCon))
+            }
+        }
+        incorrect.sort {
+            if $0.0 != $1.0 {
+                return $0.0 < $1.0
+            }
+            else {
+                return $0.2 < $1.2
+            }
+        }
+        let assignTime : TimeInterval = Date().timeIntervalSince(startTime)
+        let minutes : Double = assignTime/60.0
+        print("Time to assign n=\(pangoToCheck): \(minutes) minutes")
+        var incorrectFileString : String = "GISAID accession,vdb call,Pango designation,distance to consensus"
+        let incorrectFilePath : String = "\(basePath)/incorrect.csv"
+        for inc in incorrect {
+            incorrectFileString += inc.1 + "\n"
+        }
+        if incorrect.count > 0 {
+            do {
+                try incorrectFileString.write(toFile: incorrectFilePath, atomically: true, encoding: .ascii)
+                print("Incorrect call list (n=\(incorrect.count)) written to \(incorrectFilePath)")
+            }
+            catch {
+                print("Error writing file to path \(incorrectFilePath)")
+            }
+        }
+        let correctPercentage : Double = 100.0*Double(pangoCorrect)/Double(pangoToCheck)
+        let correctString : String = String(format: "%4.2f", correctPercentage)
+        print("vdb lineage assignments (n=\(pangoToCheck))   correct : \(correctString)%")
+    }
+    
+    // searches for viruses in different lineages with identical mutation patterns
+    class func identicalPatternsInCluster(_ clusterName: String, vdb: VDB) {
+        var cluster : [Isolate] = []
+        if !clusterName.isEmpty {
+            if let cluster1 = vdb.clusters[clusterName] {
+                cluster = cluster1
+            }
+        }
+        print("Checking for identical patterns across lineages")
+        var lineageMutationSets : [(String,[(Int,Set<Mutation>)])] = []
+        var lineageDictLocal : [String:[Isolate]] = [:]
+        for iso in cluster {
+            lineageDictLocal[iso.pangoLineage, default: []].append(iso)
+        }
+        for (key,value) in lineageDictLocal {
+            lineageMutationSets.append((key,value.map { ($0.epiIslNumber,Set($0.mutations)) }))
+        }
+        var iCounts : [ String : [ String : Int ] ] = [:]
+        var iCounts2 : [ String : [ String : Int ] ] = [:]
+        for i in 0..<lineageMutationSets.count-1 {
+            for j in (i+1)..<lineageMutationSets.count {
+                var iiToSkip : [Int] = []
+                for (iiIndex,iiPattern) in lineageMutationSets[i].1.enumerated() {
+                    if iiToSkip.contains(iiIndex) {
+                        continue
+                    }
+                    var matches : [Int] = []
+                    for jjPattern in lineageMutationSets[j].1 {
+                        if iiPattern.1 == jjPattern.1 {
+                            matches.append(jjPattern.0)
+                        }
+                    }
+                    if !matches.isEmpty {
+                        var matchesString : String = ""
+                        for m in matches {
+                            if !matchesString.isEmpty {
+                                matchesString.append(" ")
+                            }
+                            matchesString.append("\(m)")
+                        }
+                        var iiArray : [Int] = [iiPattern.0]
+                        for iii in iiIndex+1..<lineageMutationSets[i].1.count {
+                            if iiPattern.1 == lineageMutationSets[i].1[iii].1 {
+                                iiArray.append(lineageMutationSets[i].1[iii].0)
+                                iiToSkip.append(iii)
+                            }
+                        }
+                        var matchesString2 : String = ""
+                        for m in iiArray {
+                            if !matchesString2.isEmpty {
+                                matchesString2.append(" ")
+                            }
+                            matchesString2.append("\(m)")
+                        }
+                        print("\(lineageMutationSets[i].0):\(matchesString2) and \(lineageMutationSets[j].0):\(matchesString)")
+                        iCounts[lineageMutationSets[i].0, default:[:]][lineageMutationSets[j].0, default: 0] += 1
+                        iCounts[lineageMutationSets[j].0, default:[:]][lineageMutationSets[i].0, default: 0] += 1
+                        iCounts2[lineageMutationSets[i].0, default:[:]][lineageMutationSets[j].0, default: 0] += iiArray.count
+                        iCounts2[lineageMutationSets[j].0, default:[:]][lineageMutationSets[i].0, default: 0] += matches.count
+                    }
+                }
+            }
+        }
+        var iCountArray : [(String,Int,[(String,Int)])] = []
+        for (key,value) in iCounts {
+            var idCount : Int = 0
+            var iCountArray2 : [(String,Int)] = []
+            for (key2,value2) in value {
+                iCountArray2.append((key2,value2))
+                idCount += value2
+            }
+            iCountArray2.sort { $0.1 > $1.1 }
+            iCountArray.append((key,idCount,iCountArray2))
+        }
+        iCountArray.sort { $0.1 > $1.1 }
+        print("\nTop identical count by lineage (by pattern count):")
+        for i in 0..<min(10,iCountArray.count) {
+            let m : (String,Int,[(String,Int)]) = iCountArray[i]
+            var misString : String = ""
+            for j in 0..<min(5,m.2.count) {
+                misString += "  \(m.2[j].0) \(m.2[j].1)"
+            }
+            print("\(m.0): \(m.1)   \(misString)")
+        }
+        iCountArray = []
+        for (key,value) in iCounts2 {
+            var idCount : Int = 0
+            var iCountArray2 : [(String,Int)] = []
+            for (key2,value2) in value {
+                iCountArray2.append((key2,value2))
+                idCount += value2
+            }
+            iCountArray2.sort { $0.1 > $1.1 }
+            iCountArray.append((key,idCount,iCountArray2))
+        }
+        iCountArray.sort { $0.1 > $1.1 }
+        print("\nTop identical count by lineage (by virus count):")
+        for i in 0..<min(10,iCountArray.count) {
+            let m : (String,Int,[(String,Int)]) = iCountArray[i]
+            var misString : String = ""
+            for j in 0..<min(5,m.2.count) {
+                misString += "  \(m.2[j].0) \(m.2[j].1)"
+            }
+            print("\(m.0): \(m.1)   \(misString)")
+        }
+    }
+    
+    // compares the lineages assignments of viruses in two clusters
+    class func compareLineagesForClusters(_ clusterName1: String, _ clusterName2: String, vdb: VDB) {
+        var cluster1 : [Isolate] = []
+        var cluster2 : [Isolate] = []
+        if !clusterName1.isEmpty {
+            if let cluster11 = vdb.clusters[clusterName1] {
+                cluster1 = cluster11
+                if cluster1.isEmpty {
+                    print("Error - cluster \(clusterName1) is empty")
+                    return
+                }
+            }
+            else {
+                print("Error - cluster \(clusterName1) is undefined")
+                return
+            }
+        }
+        if !clusterName2.isEmpty {
+            if let cluster22 = vdb.clusters[clusterName2] {
+                cluster2 = cluster22
+                if cluster2.isEmpty {
+                    print("Error - cluster \(clusterName2) is empty")
+                    return
+                }
+            }
+            else {
+                print("Error - cluster \(clusterName2) is undefined")
+                return
+            }
+        }
+        print("Starting comparison")
+        cluster1.sort { $0.epiIslNumber < $1.epiIslNumber }
+        cluster2.sort { $0.epiIslNumber < $1.epiIslNumber }
+        let clusterSizes : [Int] = [cluster1.count,cluster2.count]
+        let fastCompare : Bool = cluster1.count == cluster2.count && (cluster1.map { $0.epiIslNumber } == cluster2.map { $0.epiIslNumber })
+        if !fastCompare {
+            var c1tmp : [Isolate] = []
+            var c2tmp : [Isolate] = []
+            var i2 : Int = 0
+            i1Loop: for i1 in 0..<cluster1.count {
+                if cluster1[i1].epiIslNumber == cluster2[i2].epiIslNumber {
+                    c1tmp.append(cluster1[i1])
+                    c2tmp.append(cluster2[i2])
+                    i2 += 1
+                    if i2 >= cluster2.count {
+                        break
+                    }
+                }
+                else {
+                    while cluster2[i2].epiIslNumber < cluster1[i1].epiIslNumber {
+                        i2 += 1
+                        if i2 >= cluster2.count {
+                            break i1Loop
+                        }
+                    }
+                    if cluster1[i1].epiIslNumber == cluster2[i2].epiIslNumber {
+                        c1tmp.append(cluster1[i1])
+                        c2tmp.append(cluster2[i2])
+                        i2 += 1
+                        if i2 >= cluster2.count {
+                            break
+                        }
+                    }
+                }
+            }
+            cluster1 = c1tmp
+            cluster2 = c2tmp
+            let readyToCompare : Bool = cluster1.count == cluster2.count && (cluster1.map { $0.epiIslNumber } == cluster2.map { $0.epiIslNumber })
+            if !readyToCompare {
+                print("Error comparing \(clusterName1) and \(clusterName2)")
+                return
+            }
+        }
+        if clusterSizes[0] != cluster1.count || clusterSizes[1] != cluster1.count {
+            print("Cluster sizes: \(clusterSizes[0]) and \(clusterSizes[1])    to compare: \(cluster1.count)")
+        }
+        var mismatches : [String:[String:Int]] = [:]
+        var correct : Int = 0
+        for i in 0..<cluster1.count {
+            if cluster1[i].pangoLineage == cluster2[i].pangoLineage {
+                correct += 1
+            }
+            else {
+                mismatches[cluster1[i].pangoLineage, default:[:]][cluster2[i].pangoLineage, default: 0] += 1
+            }
+        }
+        var mismatchArray : [(String,Int,[(String,Int)])] = []
+        for (key,value) in mismatches {
+            var mismatchCount : Int = 0
+            var mismatchArray2 : [(String,Int)] = []
+            for (key2,value2) in value {
+                mismatchArray2.append((key2,value2))
+                mismatchCount += value2
+            }
+            mismatchArray2.sort { $0.1 > $1.1 }
+            mismatchArray.append((key,mismatchCount,mismatchArray2))
+        }
+        mismatchArray.sort { $0.1 > $1.1 }
+        print("Top mismatches by \(clusterName1) lineage:")
+        for i in 0..<min(50,mismatchArray.count) {
+            let m : (String,Int,[(String,Int)]) = mismatchArray[i]
+            var misString : String = ""
+            for j in 0..<min(5,m.2.count) {
+                misString += "  \(m.2[j].0) \(m.2[j].1)"
+            }
+            print("\(m.0): \(m.1)   \(misString)")
+        }
+        let matchPercentage : Double = 100.0*Double(correct)/Double(cluster1.count)
+        let matchString : String = String(format: "%4.2f", matchPercentage)
+        print("lineage assignments (n=\(cluster1.count))   match : \(matchString)%")
     }
 
     // MARK: - Utility methods
@@ -6391,11 +7579,20 @@ plot
     var aliasDict : [String:String] = [:]
     var lineageArray : [String] = []
     
+    // info from Pango designation file lineages.csv
+    var lineageDict : [String:[Int]] = [:]  // [Pango lineage designation: GISAID accession numbers of lineage members]
+    var pangoList : [(String,Isolate)] = [] // [Pango lineage designation, isolate from world (may have different lineage]
+    var consensusDict : [String:[(Set<Mutation>,Int,Set<Mutation>,Set<Mutation>)]] = [:]  // For lineage assignment
+    var whoConsensusArray : [(String,Set<Mutation>,[String],[String:[(Set<Mutation>,Int,Set<Mutation>,Set<Mutation>)]])] = []  // For faster lineage assignment of WHO variants
+    
     @Atomic var latestVersionString : String = ""
     @Atomic var nuclRefDownloaded : Bool = false
     @Atomic var helpDocDownloaded : Bool = false
     @Atomic var newAliasFileToLoad : Bool = false
-    
+    @Atomic var newPangoDesignationFileToLoad : Bool = false
+    @Atomic var assignmentCount : Int = 0
+    @Atomic var assignmentLastPercent : Int = 0
+
     let isolatesKeyword : String = "world"
 
     static var refLength : Int = 1273
@@ -6408,22 +7605,25 @@ plot
     static var displayTextWithColor : Bool = defaultDisplayTextWithColor
     static var demoMode : Bool = false
     static var lineNMP : [UInt8] = []
+    static var secondConsensus : [Mutation] = []
+    static var secondConsensusFreq : Int = 0
 
     static let whoVariants : [String:(String,Int,VariantClass)] = ["Alpha":("B.1.1.7",1,.VOC),
                                                 "Beta":("B.1.351",2,.VOC),
                                                 "Gamma":("P.1",3,.VOC),
                                                 "Delta":("B.1.617.2",4,.VOC),
-                                                "Epsilon":("B.1.427 + B.1.429",5,.Alert),
-                                                "Zeta":("P.2",6,.Alert),
-                                                "Eta":("B.1.525",7,.VOI),
-                                                "Theta":("P.3",8,.Alert),
-                                                "Iota":("B.1.526",9,.VOI),
-                                                "Kappa":("B.1.617.1",10,.VOI),
-                                                "Lambda":("C.37",11,.VOI)]
+                                                "Epsilon":("B.1.427 + B.1.429",5,.FMV),
+                                                "Zeta":("P.2",6,.FMV),
+                                                "Eta":("B.1.525",7,.VUM),
+                                                "Theta":("P.3",8,.FMV),
+                                                "Iota":("B.1.526",9,.VUM),
+                                                "Kappa":("B.1.617.1",10,.VUM),
+                                                "Lambda":("C.37",11,.VOI),
+                                                "Mu":("B.1.621",12,.VOI),
+                                                "Omicron":("B.1.1.529",13,.VOC)]
     
     var vdbPrompt : String {
         "\(TColor.lightGreen)\(vdbPromptBase)\(TColor.reset)"
-//        vdbPromptBase
     }
 
     // MARK: -
@@ -8439,6 +9639,12 @@ count <cluster name or pattern name>
 // [<comment>]
 quit
 
+Lineage assignment:
+prepare      prepare vdb to assign lineages based on consensus mutation sets
+assign <cluster name1> [<cluster name2>]     assigns Pango lineages to viruses in cluster
+compare <cluster name1> <cluster name2>  compares viral lineage assignments in two clusters
+identical <cluster name>    finds viruses in different lineages with identical mutation patterns
+
 Program switches:
 debug/debug off
 listAccession/listAccession off
@@ -8521,10 +9727,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
         case "listaveragemutations off":
             printAvgMut = false
             printSwitch(lowercaseLine,printAvgMut)
-        case "includesublineages", "includesublineages on":
+        case "includesublineages", "includesublineages on", "include sublineages":
             includeSublineages = true
             printSwitch(lowercaseLine,includeSublineages)
-        case "includesublineages off", "excludesublineages":
+        case "includesublineages off", "excludesublineages", "exclude sublineages":
             includeSublineages = false
             printSwitch("includesublineages",includeSublineages)
         case "simplenuclpatterns", "simplenuclpatterns on":
@@ -8659,16 +9865,21 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
             let loadCmdParts : [String] = dbFileName.components(separatedBy: " ")
             switch loadCmdParts.count {
             case 1:
-                if isolates.isEmpty {
-                    isolates = VDB.loadMutationDB_MP(dbFileName, mp_number: mpNumber, vdb: self)
+                if dbFileName ~~ "pango" {
+                    VDB.loadPangoListAll(vdb: self)
                 }
                 else {
-                    let numberOfOverlappingEntries = loadAdditionalSequences(dbFileName)
-                    if numberOfOverlappingEntries > 0 {
-                        print("   Warning - \(numberOfOverlappingEntries) duplicate entries ignored")
+                    if isolates.isEmpty {
+                        isolates = VDB.loadMutationDB_MP(dbFileName, mp_number: mpNumber, vdb: self)
                     }
+                    else {
+                        let numberOfOverlappingEntries = loadAdditionalSequences(dbFileName)
+                        if numberOfOverlappingEntries > 0 {
+                            print("   Warning - \(numberOfOverlappingEntries) duplicate entries ignored")
+                        }
+                    }
+                    clusters[isolatesKeyword] = isolates
                 }
-                clusters[isolatesKeyword] = isolates
             case 2:
                 let clusterName : String = loadCmdParts[0]
                 let fileName : String = loadCmdParts[1]
@@ -8768,14 +9979,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
                 if lineageNames.count == 1 {
                     for (key,value) in VDB.whoVariants {
                         if lineageNames[0] ~~ key {
-                            let lNames : [String] = value.0.components(separatedBy: " + ")
-                            lineageNames.append(contentsOf: lNames)
-                            for lName in lNames {
-                                let sublineages = VDB.sublineagesOf(lName, vdb: self)
-                                for sub in sublineages {
-                                    lineageNames.append(sub.0)
-                                }
-                            }
+                            lineageNames.append(contentsOf:VDB.lineagesFor(variantString: value.0, vdb: self))
                         }
                     }
                 }
@@ -8815,6 +10019,64 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
                     lists[parts[0]] = newList
                     print("base cluster of list \(parts[0]) changed")
                 }
+            }
+        case "prepare":
+            if nucleotideMode {
+                VDB.prepareForLineageAssignment(vdb: self)
+            }
+            else {
+                print("Error - the parpare command is only available in nucleotide mode")
+            }
+        case _ where lowercaseLine.hasPrefix("assign ") || lowercaseLine == "assign":
+            if nucleotideMode {
+                var clusterName1 : String = ""
+                var clusterName2 : String = ""
+                if lowercaseLine != "assign" {
+                    let lineTmp : String = line.replacingOccurrences(of: "assign ", with: "", options: .caseInsensitive, range: nil)
+                    let parts : [String] = lineTmp.components(separatedBy: " ")
+                    if parts.count > 0 {
+                        clusterName1 = parts[0]
+                    }
+                    if parts.count > 1 {
+                        clusterName2 = parts[1]
+                    }
+                }
+                VDB.assignLineagesForCluster(clusterName1,clusterName2,vdb: self)
+            }
+            else {
+                print("Error - the assign command is only available in nucleotide mode")
+            }
+        case _ where lowercaseLine.hasPrefix("identical ") || lowercaseLine == "identical":
+            var clusterName : String = ""
+            if lowercaseLine != "identical" {
+                let lineTmp : String = line.replacingOccurrences(of: "identical ", with: "", options: .caseInsensitive, range: nil)
+                let parts : [String] = lineTmp.components(separatedBy: " ")
+                if parts.count > 0 {
+                    clusterName = parts[0]
+                }
+            }
+            VDB.identicalPatternsInCluster(clusterName,vdb: self)
+        case _ where lowercaseLine.hasPrefix("compare "):
+            if nucleotideMode {
+                var clusterName1 : String = ""
+                var clusterName2 : String = ""
+                let lineTmp : String = line.replacingOccurrences(of: "compare ", with: "", options: .caseInsensitive, range: nil)
+                let parts : [String] = lineTmp.components(separatedBy: " ")
+                if parts.count > 0 {
+                    clusterName1 = parts[0]
+                }
+                if parts.count > 1 {
+                    clusterName2 = parts[1]
+                }
+                if clusterName1.isEmpty || clusterName2.isEmpty {
+                    print("Error - the compare command requires two named clusters")
+                }
+                else {
+                    VDB.compareLineagesForClusters(clusterName1,clusterName2,vdb: self)
+                }
+            }
+            else {
+                print("Error - the compare command is only available in nucleotide mode")
             }
         default:
             let parts : [String] = processLine(line)
