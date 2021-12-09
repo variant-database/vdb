@@ -69,6 +69,12 @@ Results of most list commands can be assigned to a variable.
 `//` [\<comment>]     
 `quit`  
 
+## Lineage assignment
+`prepare`                  prepare **vdb** to assign lineages based on consensus mutation sets  
+`assign` \<cluster name1> [\<cluster name2>]   assigns Pango lineages to viruses in a cluster  
+`compare` \<cluster name1> \<cluster name2>   compares the lineage assignments of viruses in two clusters  
+`identical` \<cluster name>         searches for viruses in different lineages with identical mutation patterns  
+
 ## Program switches
 `debug`/`debug off`  
 `listAccession`/`listAccession off`  
