@@ -236,6 +236,24 @@ A comment line, which is ignored.
 Ends the current **vdb** session.  
 <br />
 
+## Lineage assignment
+#### `prepare`
+
+Prepare **vdb** to assign lineages based on consensus mutation sets.  
+<br />
+#### `assign` \<cluster name1> [\<cluster name2>]
+
+Assigns Pango lineages to the viruses in the first named cluster. The resulting assignments are placed in a new cluster using the second cluster name, or if no second name is specified, an underscore is added to the original cluster name.  
+<br />
+#### `compare` \<cluster name1> \<cluster name2>
+
+Compares the lineage assignments of viruses in two clusters.  
+<br />
+#### `identical` \<cluster name>
+
+Searches for viruses in different lineages in the specified cluster with identical mutation patterns.  
+<br />
+
 ## Program switches
 #### `debug`/`debug off`  
 
@@ -312,4 +330,4 @@ Sets the percentage cutoff for mutations to be included by the `consensus` comma
 <br />
 
 <br />
-Version 2.1
+Version 2.2
