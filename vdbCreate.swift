@@ -2,36 +2,85 @@
 //  VDBCreate.swift
 //  VDBCreate
 //
-//  Copyright (c) 2021  Anthony West, Caltech
-//  Last modified 12/9/21
+//  Copyright (c) 2022  Anthony West, Caltech
+//  Last modified 1/12/22
 
 import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
 
-let version : String = "2.2"
+let version : String = "2.3"
 let checkForVDBUpdate : Bool = true
-
-print("SARS-CoV-2 Variant Database Creator  Version \(version)      Bjorkman Lab/Caltech")
-
+let mpNumberDefault : Int = 12
 let basePath : String = FileManager.default.currentDirectoryPath
 let clArgc : Int  = Int(CommandLine.argc)
-let clArguments : [String] = CommandLine.arguments
+var clArguments : [String] = CommandLine.arguments
 var filteredArguments : [String] = []
 var nuclMode : Bool = false
 var includeAllN : Bool = false
-for i in 1..<clArgc {
-    if clArguments[i] != "-N" && clArguments[i] != "-n" {
-        filteredArguments.append(clArguments[i])
-    }
-    else {
-        nuclMode = true
-        if clArguments[i] == "-N" {
-            includeAllN = true
+var useStdInput : Bool = false
+var overwrite : Bool = false
+var pipeOutput : Bool = false
+var mpNumber : Int = mpNumberDefault
+if clArguments.count > 1 && clArguments[1] == "--version" {
+    print(version)
+    exit(0)
+}
+if clArguments.count > 2 {
+    for i in  1..<(clArguments.count-1) {
+        if clArguments[i] == "-m" || clArguments[i] == "-M" {
+            if let clInt = Int(clArguments[i+1]) {
+                mpNumber = clInt
+                clArguments.remove(at: i)
+            }
+            else {
+                print("Error - option m requires the number of threads to be specified")
+                exit(9)
+            }
+            clArguments.remove(at: i)
+            break
         }
     }
 }
+for i in 1..<clArgc {
+    if clArguments[i].first == "-" {
+        let options : Substring = clArguments[i].dropFirst()
+        if options.isEmpty {
+            print("Error - missing option")
+            exit(9)
+        }
+        for option in options {
+            switch option {
+            case "n":
+                nuclMode = true
+            case "N":
+                nuclMode = true
+                includeAllN = true
+            case "s","S":
+                useStdInput = true
+            case "o","O":
+                overwrite = true
+            case "p","P":
+                pipeOutput = true
+            default:
+                print("Error - invalid option")
+                exit(9)
+            }
+        }
+    }
+    else {
+        filteredArguments.append(clArguments[i])
+    }
+}
+if useStdInput {
+    filteredArguments.insert("vdb_tmp_file", at: 0)
+}
+
+if !pipeOutput {
+    print("SARS-CoV-2 Variant Database Creator  Version \(version)      Bjorkman Lab/Caltech")
+}
+
 if filteredArguments.isEmpty {
     print("Error - missing alignment file name")
     print("Usage: vdbCreate <alignment file name> <optional output file name>")
@@ -42,6 +91,15 @@ var resultFileName : String = ""
 if filteredArguments.count > 1 {
     resultFileName = filteredArguments[1]
 }
+
+// MARK: - Autorelease Pool for Linux
+
+#if os(Linux)
+// autorelease call used to minimize memory footprint
+func autoreleasepool<Result>(invoking body: () throws -> Result) rethrows -> Result {
+     return try body()
+}
+#endif
 
 // xterm ANSI codes for colored text
 struct TColor {
@@ -86,6 +144,7 @@ final class VDBCreate {
         
 //        let refNameString : String = ">hCoV-19/Wuhan/IPBCAMS-WH-01/2019|EPI_ISL_402123|2019-12-24|Asia"
         let refNameString : String = ">hCoV-19/Wuhan/WIV04/2019|EPI_ISL_402124|2019-12-30|China"
+        let refChar2 : UInt8 = 104
 
         let refNameArray : [UInt8] = [UInt8](refNameString.utf8)
         let startSRef : Int = 21563 - 1
@@ -119,54 +178,92 @@ final class VDBCreate {
                                                   "NSP16":(20659,21552)]    // 2′O'ribose methyltransferase
 */
         let filePath : String = "\(basePath)/\(fileName)"
-        var fileSize : Int = 0
-        do {
-            let attr = try FileManager.default.attributesOfItem(atPath: filePath)
-            if let fileSizeUInt64 : UInt64 = attr[FileAttributeKey.size] as? UInt64 {
-                fileSize = Int(fileSizeUInt64)
-            }
-        } catch {
-            print("Error reading alignment file \(filePath)")
-            exit(9)
-        }
-        
-        guard let fileStream : InputStream = InputStream(fileAtPath: filePath) else { print("Error reading alignment file \(filePath)"); exit(9) }
-        let blockBufferSize : Int = 1_000_000_000
-        
-        let lastMaxSize : Int = 50000
-        let lineN : UnsafeMutablePointer<UInt8> = UnsafeMutablePointer<UInt8>.allocate(capacity: blockBufferSize + lastMaxSize)
-
-        fileStream.open()
-        
-        let bufferSize : Int = 50000
-        let outBufferSize : Int
-        if !nucl {
-            outBufferSize = fileSize/200
-        }
-        else {
-            if !includeN {
-                outBufferSize = fileSize/50
+        var deleteTmpFile : Bool = false
+        if !FileManager.default.fileExists(atPath: filePath) {
+            if useStdInput {
+                do {
+                    try "tmp file".write(to: URL(fileURLWithPath: filePath), atomically: true, encoding: .ascii)
+                }
+                catch {
+                    print("Error writing temporary file at \(filePath)")
+                    exit(9)
+                }
+                deleteTmpFile = true
             }
             else {
-                if fileSize > 5_000_000_000 {
-                    outBufferSize = fileSize/10
-                }
-                else {
-                    outBufferSize = fileSize/5
-                }
+                print("Error input vdb file \(filePath) not found")
+                exit(9)
             }
         }
-        var outBuffer : [UInt8] = Array(repeating: 0, count: outBufferSize)
-        var outBufferPosition : Int = 0
-        var tmpBuffer : [UInt8] = Array(repeating: 0, count: bufferSize)
-        var tmpBufferPosition : Int = 0
-        var cdsBuffer : [UInt8] = Array(repeating: 0, count: bufferSize)
-        var cdsBufferPosition : Int = 0
+        defer {
+            if deleteTmpFile {
+                try? FileManager.default.removeItem(atPath: filePath)
+            }
+        }
+        
+        guard let fileStream : InputStream = InputStream(fileAtPath: filePath) else { print("Error reading alignment file \(filePath)"); return }
+        let standardInput : FileHandle = FileHandle.standardInput
+        let blockBufferSize : Int = 1_000_000_000
+        let streamBufferSize : Int =  950_000_000
+        
+        let bufferSize : Int = 50000
+        let lastMaxSize : Int = bufferSize
+        let lineN : UnsafeMutablePointer<UInt8> = UnsafeMutablePointer<UInt8>.allocate(capacity: blockBufferSize + lastMaxSize)
+        
+        let outBufferSize : Int = 100_000_000
+        let mpNumberMin : Int = mpNumber > 2 ? mpNumber-2 : mpNumber
+        let outBufferSizeMP : Int = outBufferSize/mpNumberMin
+        let outBufferWriteSize : Int = (!pipeOutput) ? 50_000_000 : 10_000
+        var outBufferAll : [UInt8] = Array(repeating: 0, count: outBufferSize)
+        var outBufferPositionAll : Int = 0
+        var outBufferMP : [[UInt8]] = Array(repeating:Array(repeating: 0, count: outBufferSizeMP), count: mpNumber)
+        var outBufferPositionMP : [Int] = Array(repeating: 0, count: mpNumber)
+        var tmpBufferMP : [[UInt8]] = Array(repeating:Array(repeating: 0, count: bufferSize), count: mpNumber)
+        var tmpBufferPositionMP : [Int] = Array(repeating: 0, count: mpNumber)
+        var cdsBufferMP : [[UInt8]] = Array(repeating:Array(repeating: 0, count: bufferSize), count: mpNumber)
+        var cdsBufferPositionMP : [Int] = Array(repeating: 0, count: mpNumber)
         var refBuffer : [UInt8] = Array(repeating: 0, count: bufferSize)
         var refBufferPosition : Int = 0
         var refNoGap : [Bool] = Array(repeating: false, count: bufferSize)
         var refProtein : [UInt8] = []
 
+        fileStream.open()
+        
+        // prepare output file
+        var vdbFileName : String
+        if !outputFileName.isEmpty {
+            vdbFileName = outputFileName
+        }
+        else {
+            vdbFileName = "vdb_msa.txt"
+            if fileName.count == 14 {
+                if fileName.prefix(4) == "msa_" && fileName.suffix(6) == ".fasta" {
+                    let dateString = fileName.prefix(8).suffix(4)
+                    if let _ = Int(dateString) {
+                        let date = Date()
+                        if let year = Calendar.current.dateComponents([.year], from: date).year {
+                            vdbFileName = "vdb_\(dateString)\(year-2000).txt"
+                        }
+                    }
+                }
+            }
+            if nucl {
+                vdbFileName = vdbFileName.replacingOccurrences(of: ".txt", with: "_nucl.txt")
+            }
+        }
+        let outFileName : String = "\(basePath)/\(vdbFileName)"
+        if FileManager.default.fileExists(atPath: outFileName) && !overwrite && !pipeOutput {
+            print("Error - output file \(outFileName) already exists. Use option -o to overwrite.")
+            return
+        }
+        if !pipeOutput {
+            FileManager.default.createFile(atPath: outFileName, contents: nil, attributes: nil)
+        }
+        guard let outFileHandle : FileHandle = (!pipeOutput) ? FileHandle(forWritingAtPath: outFileName) : FileHandle.standardOutput else {
+            print("Error - could not write to file \(outFileName)")
+            return
+        }
+        
         // find reference sequence and setup refNoGap to indicate non-gap positions
         var lineCount : Int = 0
         var greaterPosition : Int = -1
@@ -176,8 +273,59 @@ final class VDBCreate {
         var atRef : Bool = false
         
         var lastBufferSize : Int = 0
-        while fileStream.hasBytesAvailable && !atRef {
-            let bytesRead : Int = fileStream.read(&lineN[lastBufferSize], maxLength: blockBufferSize)
+        var firstLoadBytesRead : Int = 0
+        while (useStdInput || fileStream.hasBytesAvailable) && !atRef {
+            var bytesRead : Int = 0
+            var endOfStream : Bool = false
+            if !useStdInput {
+                bytesRead = fileStream.read(&lineN[lastBufferSize], maxLength: blockBufferSize)
+            }
+            else {
+                let _ = autoreleasepool { () -> Void in
+                    var skipDone : Bool = false
+                    while true {
+                        let data : Data = standardInput.availableData
+                        if data.count == 0 {
+                            endOfStream = true
+                            break
+                        }
+                        var skippedCount : Int = 0
+                        if skipDone {
+                            data.copyBytes(to: &lineN[lastBufferSize+bytesRead], count: data.count)
+                        }
+                        else {
+                            var startPos : Int = Int.max
+                            for i in 0..<(data.count-1) {
+                                if data[i] == greaterChar && data[i+1] == refChar2 {
+                                    startPos = i
+                                    break
+                                }
+                            }
+                            if startPos != Int.max {
+                                data.copyBytes(to: &lineN[lastBufferSize+bytesRead], from: startPos..<data.count)
+                                skipDone = true
+                                skippedCount = startPos
+                            }
+                            else {
+                                print("Error - starting position of alignment not found")
+                                return
+                            }
+                        }
+                        bytesRead += data.count - skippedCount
+                        if bytesRead > streamBufferSize {
+                            break
+                        }
+                    }
+                }
+                if firstLoadBytesRead == 0 {
+                    firstLoadBytesRead = bytesRead
+                }
+                if bytesRead == 0 && endOfStream {
+                    break
+                }
+            }
+            let bytesAvailable : Bool = useStdInput ? (bytesRead > 0 && !endOfStream) : fileStream.hasBytesAvailable
+
             let bytesReadAdj : Int = bytesRead + lastBufferSize
             refLoop: for pos in 0..<bytesReadAdj {
                 
@@ -199,7 +347,7 @@ final class VDBCreate {
                                 }
                                 counter += 1
                             }
-                            if atRef {
+                            if atRef && !pipeOutput {
                                 print("reference found")
                             }
                         }
@@ -213,7 +361,7 @@ final class VDBCreate {
                     }
                     lastLf = pos
                     lineCount += 1
-                    if lineN[pos+1] == greaterChar && bytesReadAdj-pos < lastMaxSize && fileStream.hasBytesAvailable {
+                    if lineN[pos+1] == greaterChar && bytesReadAdj-pos < lastMaxSize && bytesAvailable {
                         // stop read and start next block
                         lastBufferSize = bytesReadAdj-pos-1
                         
@@ -245,7 +393,7 @@ final class VDBCreate {
             
         if !atRef {
             print("Error - reference not found\n  alignment must include \(refNameString)")
-            exit(9)
+            return
         }
         var uppercase : Bool = true
         for tc in 0..<refBufferPosition {
@@ -297,8 +445,23 @@ final class VDBCreate {
         // let aaZ : UInt8 = 90
         let aaSTOP : UInt8 = 42
         
+        // write current outBuffer to file
+        func writeBufferToFile() {
+            if outBufferPositionAll == 0 {
+                return
+            }
+            do {
+                try outFileHandle.write(contentsOf: outBufferAll[0..<outBufferPositionAll])
+                outBufferPositionAll = 0
+            }
+            catch {
+                print("Error writing vdb mutation file")
+                exit(9)
+            }
+        }
+        
         // removes insertions from tmpBuffer while copying into cdsBuffer, then translates
-        func condenseAndTranslate() {
+        func condenseAndTranslate(cdsBuffer: inout [UInt8], cdsBufferPosition: inout Int, outBuffer: inout [UInt8], outBufferPosition: inout Int, tmpBuffer: inout [UInt8], tmpBufferPosition: inout Int) {
             // condense based on reference sequence - this ignores insertions
             for pos in 0..<tmpBufferPosition {
                 if refNoGap[pos] {
@@ -307,10 +470,10 @@ final class VDBCreate {
                 }
             }
             if !nucl {
-                translate()
+                translate(cdsBuffer: &cdsBuffer, outBuffer: &outBuffer, outBufferPosition: &outBufferPosition)
             }
             else {
-                nuclMutations()
+                nuclMutations(cdsBuffer: &cdsBuffer, outBuffer: &outBuffer, outBufferPosition: &outBufferPosition)
             }
             tmpBufferPosition = 0
             cdsBufferPosition = 0
@@ -318,10 +481,10 @@ final class VDBCreate {
         
         if !nucl {
             // make reference protein
-            tmpBuffer = refBuffer
-            tmpBufferPosition = refBufferPosition
-            condenseAndTranslate()
-            outBufferPosition = 0
+            tmpBufferMP[0] = refBuffer
+            tmpBufferPositionMP[0] = refBufferPosition
+            condenseAndTranslate(cdsBuffer: &cdsBufferMP[0], cdsBufferPosition: &cdsBufferPositionMP[0], outBuffer: &outBufferMP[0], outBufferPosition: &outBufferPositionMP[0], tmpBuffer: &tmpBufferMP[0], tmpBufferPosition: &tmpBufferPositionMP[0])
+            outBufferPositionMP[0] = 0
         }
         else {
             for pos in 0..<refBufferPosition {
@@ -336,130 +499,234 @@ final class VDBCreate {
         greaterPosition = -1
         lfAfterGreaterPosition = 0
         lastLf = 0
-        var firstSlashPosition : Int = 0
         
         fileStream.close()
-        guard let fileStream2 : InputStream = InputStream(fileAtPath: filePath) else { print("Error reading file \(filePath)"); exit(9) }
+        guard let fileStream2 : InputStream = InputStream(fileAtPath: filePath) else { print("Error reading file \(filePath)"); return }
         fileStream2.open()
         
         checkCount = 0
         var checkCountTotal : Int = 0
+        var lastCheckPrinted : Int = 0
         
         lastBufferSize = 0
         var shouldRead : Bool = true
-        while fileStream2.hasBytesAvailable {
+        while useStdInput || fileStream2.hasBytesAvailable {
             updateStatusReadout()
             if !shouldRead {
                 break
             }
             shouldRead = false
-            let bytesRead : Int = fileStream2.read(&lineN[lastBufferSize], maxLength: blockBufferSize)
+            var bytesRead : Int = 0
+            var endOfStream : Bool = false
+            if !useStdInput {
+                bytesRead = fileStream2.read(&lineN[lastBufferSize], maxLength: blockBufferSize)
+            }
+            else {
+                if firstLoadBytesRead == 0 {
+                    let _ = autoreleasepool { () -> Void in
+                        while true {
+                            let data : Data = standardInput.availableData
+                            if data.count == 0 {
+                                endOfStream = true
+                                break
+                            }
+                            data.copyBytes(to: &lineN[lastBufferSize+bytesRead], count: data.count)
+                            bytesRead += data.count
+                            if bytesRead > streamBufferSize {
+                                // test below added to prevent crash on Linux - optimization bug?
+                                if bytesRead == Int.max {
+                                    print("bytesRead = \(bytesRead)")
+                                }
+                                break
+                            }
+                        }
+                    }
+                    if bytesRead == 0 && endOfStream {
+                        break
+                    }
+                }
+                else {
+                    bytesRead = firstLoadBytesRead
+                    firstLoadBytesRead = 0
+                }
+            }
+            let bytesAvailable : Bool = useStdInput ? (bytesRead > 0 && !endOfStream) : fileStream2.hasBytesAvailable
             let bytesReadAdj : Int = bytesRead + lastBufferSize
-            pos2Loop: for pos in 0..<bytesReadAdj {
-                
-                switch lineN[pos] {
-                case lf:
-                    if lfAfterGreaterPosition == 0 {
-                        lfAfterGreaterPosition = pos
-                        if firstSlashPosition == 0 {
-                            memmove(&outBuffer[outBufferPosition], &lineN[greaterPosition], pos-greaterPosition)
-                            outBufferPosition += pos-greaterPosition
-                        }
-                        else {
-                            outBuffer[outBufferPosition] = greaterChar
-                            outBufferPosition += 1
-                            memmove(&outBuffer[outBufferPosition], &lineN[firstSlashPosition+1], pos-firstSlashPosition-1)
-                            outBufferPosition += pos-firstSlashPosition-1
-                        }
-                        if outBuffer[outBufferPosition-1] < aChar {
-                            outBuffer[outBufferPosition] = verticalChar
-                            outBufferPosition += 1
-                        }
-                        outBuffer[outBufferPosition] = commaChar
-                        outBufferPosition += 1
-                        checkCount += 1
-                        checkCountTotal += 1
-                        if checkCountTotal % 100000 == 0 {
-                            print("isolate count \(checkCountTotal)")
-                        }
-                    }
-                    else {
-                        memmove(&tmpBuffer[tmpBufferPosition], &lineN[lastLf+1], pos-lastLf-1)
-                        tmpBufferPosition += pos-lastLf-1
-                    }
-                    
-                    lastLf = pos
-                    lineCount += 1
-                    if lineN[pos+1] == greaterChar && bytesReadAdj-pos < lastMaxSize && fileStream2.hasBytesAvailable {
-                        // stop read and start next block
-                        shouldRead = true
-                        lastBufferSize = bytesReadAdj-pos-1
-                        
-                        var counter : Int = 0
-                        for i in pos+1..<bytesReadAdj {
-                            lineN[counter] = lineN[i]
-                            counter += 1
-                        }
-                        break pos2Loop
-                    }
-                case greaterChar:
-                    if checkCount > 0 {
-                        checkCount = 0
-                        condenseAndTranslate()
-                    }
-                    greaterPosition = pos
-                    lfAfterGreaterPosition = 0
-                    firstSlashPosition = 0
-                case slashChar:
-                    if firstSlashPosition == 0 {
-                        firstSlashPosition = pos
-                    }
-                default:
-                    break
+            lastBufferSize = 0
+            
+            // setup multithreaded processing
+            var mp_number : Int = mpNumber
+            if bytesReadAdj < 500_000 {
+                mp_number = 1
+            }
+            var sema : [DispatchSemaphore] = []
+            for _ in 0..<mp_number-1 {
+                sema.append(DispatchSemaphore(value: 0))
+            }
+            let greaterChar : UInt8 = 62
+            var cuts : [Int] = [0]
+            let cutSize : Int = bytesReadAdj/mp_number
+            for i in 1..<mp_number {
+                var cutPos : Int = i*cutSize
+                while lineN[cutPos] != greaterChar {
+                    cutPos += 1
+                }
+                cuts.append(cutPos)
+            }
+            cuts.append(bytesReadAdj)
+            var ranges : [(Int,Int)] = []
+            var lfAdd : Int = 0
+            if !bytesAvailable {
+                if lineN[bytesReadAdj-1] == lf {
+                    lineN[bytesReadAdj] = greaterChar
+                }
+                else {
+                    lineN[bytesReadAdj] = lf
+                    lineN[bytesReadAdj+1] = greaterChar
+                    lfAdd = 1
+                }
+            }
+            for i in 0..<mp_number {
+                if bytesAvailable || i != mp_number-1 {
+                    ranges.append((cuts[i],cuts[i+1]+1))
+                }
+                else {
+                    ranges.append((cuts[i],cuts[i+1]+1+lfAdd))
                 }
             }
             
-        }
-        condenseAndTranslate()
-        
-        fileStream2.close()
-        outBuffer.removeLast(outBuffer.count-outBufferPosition)
-        var vdbFileName : String
-        if !outputFileName.isEmpty {
-            vdbFileName = outputFileName
-        }
-        else {
-            vdbFileName = "vdb_msa.txt"
-            if fileName.count == 14 {
-                if fileName.prefix(4) == "msa_" && fileName.suffix(6) == ".fasta" {
-                    let dateString = fileName.prefix(8).suffix(4)
-                    if let _ = Int(dateString) {
-                        let date = Date()
-                        if let year = Calendar.current.dateComponents([.year], from: date).year {
-                            vdbFileName = "vdb_\(dateString)\(year-2000).txt"
-                        }
-                    }
+            DispatchQueue.concurrentPerform(iterations: mp_number) { index in
+                let checkTotalMP = pos2LoopMP(mp_index: index, mp_range: ranges[index])
+                
+                if index != 0 && index != mp_number-1 {
+                    sema[index-1].wait()
+                }
+                _ = outBufferMP[index].withUnsafeBufferPointer { outBufferMPPointer in
+                    memmove(&outBufferAll[outBufferPositionAll], outBufferMPPointer.baseAddress!, outBufferPositionMP[index])
+                }
+// simple memmove statement crashes
+//              memmove(&outBufferAll[outBufferPositionAll], &outBufferMP[index][0], outBufferPositionMP[index])
+// explicit copy is slower than memmove
+//              for i in 0..<outBufferPositionMP[index] {
+//                  outBufferAll[outBufferPositionAll+i] = outBufferMP[index][i]
+//              }
+                outBufferPositionAll += outBufferPositionMP[index]
+                outBufferPositionMP[index] = 0
+                checkCountTotal += checkTotalMP
+                if index != mp_number - 1 {
+                    sema[index].signal()
                 }
             }
-            if nucl {
-                vdbFileName = vdbFileName.replacingOccurrences(of: ".txt", with: "_nucl.txt")
+            if checkCountTotal - lastCheckPrinted > 100_000 && !pipeOutput {
+                print("isolate count \(checkCountTotal)")
+                lastCheckPrinted = checkCountTotal
+            }
+            if outBufferPositionAll > outBufferWriteSize {
+                writeBufferToFile()
+            }
+            if !bytesAvailable {
+                break
+            }
+            
+            func pos2LoopMP(mp_index: Int, mp_range: (Int,Int)) -> Int {
+                var greaterPosition : Int = -1
+                var lfAfterGreaterPosition : Int = 0
+                var firstSlashPosition : Int = 0
+                var lastLf : Int = 0
+                var checkCount : Int = 0
+                var checkCountTotal : Int = 0
+                var lineCount : Int = 0
+                var lastWaitDone : Bool = false
+                
+                pos2Loop: for pos in mp_range.0..<mp_range.1 {
+                    switch lineN[pos] {
+                    case lf:
+                        if lfAfterGreaterPosition == 0 {
+                            lfAfterGreaterPosition = pos
+                            if firstSlashPosition == 0 {
+                                memmove(&outBufferMP[mp_index][outBufferPositionMP[mp_index]], &lineN[greaterPosition], pos-greaterPosition)
+                                outBufferPositionMP[mp_index] += pos-greaterPosition
+                            }
+                            else {
+                                outBufferMP[mp_index][outBufferPositionMP[mp_index]] = greaterChar
+                                outBufferPositionMP[mp_index] += 1
+                                memmove(&outBufferMP[mp_index][outBufferPositionMP[mp_index]], &lineN[firstSlashPosition+1], pos-firstSlashPosition-1)
+                                outBufferPositionMP[mp_index] += pos-firstSlashPosition-1
+                            }
+                            if outBufferMP[mp_index][outBufferPositionMP[mp_index]-1] < aChar {
+                                outBufferMP[mp_index][outBufferPositionMP[mp_index]] = verticalChar
+                                outBufferPositionMP[mp_index] += 1
+                            }
+                            outBufferMP[mp_index][outBufferPositionMP[mp_index]] = commaChar
+                            outBufferPositionMP[mp_index] += 1
+                            checkCount += 1
+                            checkCountTotal += 1
+                            if checkCountTotal % 100000 == 0 {
+                                print("isolate count \(checkCountTotal)")
+                            }
+                        }
+                        else {
+                            memmove(&tmpBufferMP[mp_index][tmpBufferPositionMP[mp_index]], &lineN[lastLf+1], pos-lastLf-1)
+                            tmpBufferPositionMP[mp_index] += pos-lastLf-1
+                        }
+                        lastLf = pos
+                        lineCount += 1
+                    case greaterChar:
+                        if checkCount > 0 {
+                            checkCount = 0
+                            condenseAndTranslate(cdsBuffer: &cdsBufferMP[mp_index], cdsBufferPosition: &cdsBufferPositionMP[mp_index], outBuffer: &outBufferMP[mp_index], outBufferPosition: &outBufferPositionMP[mp_index], tmpBuffer: &tmpBufferMP[mp_index], tmpBufferPosition: &tmpBufferPositionMP[mp_index])
+                        }
+                        greaterPosition = pos
+                        lfAfterGreaterPosition = 0
+                        firstSlashPosition = 0
+                        if mp_index == mp_number-1 && bytesReadAdj-pos < lastMaxSize {
+                            // stop read and start next block
+                            if !lastWaitDone {
+                                if mp_number > 1 {
+                                    sema[mp_number-1-1].wait()
+                                }
+                                lastWaitDone = true
+                            }
+                            if bytesAvailable {
+                                shouldRead = true
+                                lastBufferSize = bytesReadAdj-pos
+                                var counter : Int = 0
+                                for i in pos..<bytesReadAdj {
+                                    lineN[counter] = lineN[i]
+                                    counter += 1
+                                }
+                                break pos2Loop
+                            }
+                        }
+                    case slashChar:
+                        if firstSlashPosition == 0 {
+                            firstSlashPosition = pos
+                        }
+                    default:
+                        break
+                    }
+                }
+                return checkCountTotal
             }
         }
-        let outFileName : String = "\(basePath)/\(vdbFileName)"
-        let outURL : URL = URL(fileURLWithPath: outFileName)
-        let data : Data = Data(outBuffer)
-        do {
-            try data.write(to: outURL)
+
+        fileStream2.close()
+        writeBufferToFile()
+        if !pipeOutput {
+            do {
+                try outFileHandle.synchronize()
+                try outFileHandle.close()
+            }
+            catch {
+                print("Error 2 writing vdb mutation file")
+                return
+            }
+            print("VDB file \(vdbFileName) written")
         }
-        catch {
-            print("Error writing vdb mutation file")
-            exit(9)
-        }
-        print("VDB file \(vdbFileName) written")
         lineN.deallocate()
-        
+
         // attempt to codon align gaps
-        func codonAlign() {
+        func codonAlign(cdsBuffer: inout [UInt8]) {
             posLoop: for pos in stride(from: startSRef, to: endSRef, by: 3) {
                 var gapCount : Int = 0
                 for pp in pos..<pos+3 {
@@ -599,14 +866,14 @@ final class VDBCreate {
         }
         
         // translates sequence in cdsBuffer, compares this to the reference, and writes mutations to outBuffer
-        func translate() {
+        func translate(cdsBuffer: inout [UInt8], outBuffer: inout [UInt8], outBufferPosition: inout Int) {
             
             let makeRef : Bool = refProtein.isEmpty
             var aaPos : Int = 0
 //            var outBufferAA : [UInt8] = Array(repeating: 0, count: bufferSize)
 //            var outBufferAAPosition : Int = 0
             
-            codonAlign()
+            codonAlign(cdsBuffer: &cdsBuffer)
             
             for pos in stride(from: startSRef, to: endSRef, by: 3) {
                 var aa : UInt8 = 0
@@ -762,9 +1029,9 @@ final class VDBCreate {
             outBufferPosition += 1
         }
                 
-        func nuclMutations() {
+        func nuclMutations(cdsBuffer: inout [UInt8], outBuffer: inout [UInt8], outBufferPosition: inout Int) {
             
-            codonAlign()
+            codonAlign(cdsBuffer: &cdsBuffer)
             
             var minPos : Int = -1
             var maxPos : Int = -1
