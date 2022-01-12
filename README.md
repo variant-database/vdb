@@ -51,8 +51,8 @@ Next, download the **vdb** repository ("Download ZIP" under the "Code" button on
 
 The sequence alignment of viral genomes can be downloaded from [GISAID](https://www.gisaid.org). This requires registration with GISAID, agreeing to GISAID terms of use, and an account. Note that among these terms of use are the following requirements: (1) to not share or re-distribute the data to any third party, (2) to make best efforts to collaborate with the originating laboratories who provided the data to GISAID, and (3) to acknowledge the originating and submitting laboratories in any publication with results obtained by analyzing this data.  
 
-On the GISAID EpiCov “Downloads” window, select “MSA full0405 (64MB)” or the latest version in the "Alignment and proteins" section.
-Also download the “metadata” file in the "Download packages" section or in the "Genomic epidemiology" section. Uncompress the files and place the FASTA file and the metadata file in the same directory that will be used to run **vdb**. One can also download selected sequences from GISAID, add the WIV04 reference sequence, and align these with MAFFT. It is possible to load both the large dataset from the main MSA and a local, manually aligned set. The FASTA sequence identifier lines must have the same format as used by GISAID:
+On the GISAID EpiCov “Downloads” window, select “MSA full0111 (808MB)” or the latest version in the "Alignment and proteins" section.
+Also download the “metadata” file in the "Download packages" section or in the "Genomic epidemiology" section. Uncompress/untar the files and place the FASTA file and the metadata file in the same directory that will be used to run **vdb**. The msa_XXXX.tar.xz file will give a msa_XXXX.fasta file over 200 GB in size. If such a file would be too large, **vdbCreate** can be used without creating this file - see the following section for how to run vdbCreate in this way. One can also download selected sequences from GISAID, add the WIV04 reference sequence, and align these with MAFFT. It is possible to load both the large dataset from the main MSA and a local, manually aligned set. The FASTA sequence identifier lines must have the same format as used by GISAID:
 
 \>hCoV-19/Wuhan/WIV04/2019|EPI_ISL_402124|2019-12-30|China
 
@@ -66,34 +66,38 @@ ref_wiv04      This is the same reference in fasta format, to be use
 
 ## 5. Running the programs
 
-To run **vdbCreate** to create the mutations list (this takes about 10 minutes for a million sequences):
+To run **vdbCreate** to create the mutations list (this takes 5-10 minutes for six million sequences):
 
-            ./vdbCreate msa_0405.fasta
+            ./vdbCreate msa_0111.fasta
+
+Version 2.3 of **vdbCreate** has the option (`-s`) to use standard input (i.e., a pipe) instead of a file on disk. Thus, the large msa_XXXX.fasta file does not need to be saved to disk. Instead, one can pipe the output of the tar command directly to **vdbCreate** as follows:
+
+            tar -xOf msa_0111.tar.xz msa_0111/msa_0111.fasta|./vdbCreate -s
 
 For the **vdb** program, you can either tell the program what file(s) to load on the command line, or if you do not give a file on the command line, the program will load the most recently modified file with the name vdb_mmddyy.txt:
 
-            ./vdb vdb_040521.txt
+            ./vdb vdb_011122.txt
             ./vdb
 
 The **vdb** programs can also be used to examine nucleotide mutations. To produce the nucleotide mutation list file, use the -n or -N flag:
 
-            ./vdbCreate -N msa_0405.fasta
+            ./vdbCreate -N msa_0111.fasta
 
 The -n excludes ambiguous bases, while the -N flag includes these. The -N flag is necessary to have protein mutations match what is listed in GISAID. The file produced by -N is much larger. This can be useful if one wants to check if a certain region was not resolved in a particular strain, but it is also slower because of the much larger file. Probably the best option is to generate the mutation list file with the -N flag, and then trim this file using **vdb**, which keeps a very small subset of the Ns. This prevents mutation calls at codons such as NNC, which could happen if these Ns are dropped. The `trim` command takes about 30 seconds on a million sequences, and this only needs to be done once since the results can be saved. The suggested workflow is  
 
-            ./vdbCreate -N msa_0405.fasta  
-            ./vdb vdb_040521_nucl.txt  
+            ./vdbCreate -N msa_0111.fasta  
+            ./vdb vdb_011122_nucl.txt  
             VDB> trim  
-            VDB> save world vdb_040521_trimmed_nucl.txt  
+            VDB> save world vdb_011122_trimmed_nucl.txt  
             VDB> quit  
 
 To read the resulting file into **vdb** and thereby analyze mutations in nucleotide mode:
 
-            ./vdb vdb_040521_trimmed_nucl.txt  
+            ./vdb vdb_011122_trimmed_nucl.txt  
  
 or if the trimmed file has not been generated:
  
-            ./vdb vdb_040521_nucl.txt 
+            ./vdb vdb_011122_nucl.txt 
 
 ## 6. Usage notes
 
