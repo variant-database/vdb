@@ -210,7 +210,7 @@ final class VDBCreate {
         let lastMaxSize : Int = bufferSize
         let lineN : UnsafeMutablePointer<UInt8> = UnsafeMutablePointer<UInt8>.allocate(capacity: blockBufferSize + lastMaxSize)
         
-        let outBufferSize : Int = 100_000_000
+        let outBufferSize : Int = 200_000_000
         let mpNumberMin : Int = mpNumber > 2 ? mpNumber-2 : mpNumber
         let outBufferSizeMP : Int = outBufferSize/mpNumberMin
         let outBufferWriteSize : Int = (!pipeOutput) ? 50_000_000 : 10_000
