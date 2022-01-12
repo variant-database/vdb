@@ -74,6 +74,8 @@ Version 2.3 of **vdbCreate** has the option (`-s`) to use standard input (i.e., 
 
             tar -xOf msa_0111.tar.xz msa_0111/msa_0111.fasta|./vdbCreate -s
 
+This will produce an output file named "vdb_msa.txt" or "vdb_msa_nucl.txt" (if the `-N` option is used). This file should be renamed - changing "msa" to the relevant date based on input file. In this example the name should be "vdb_011122.txt" or "vdb_011122_nucl.txt". Alternatively, that output file name could be included in the command: `tar -xOf msa_0111.tar.xz msa_0111/msa_0111.fasta|./vdbCreate -s vdb_011122.txt`.
+
 For the **vdb** program, you can either tell the program what file(s) to load on the command line, or if you do not give a file on the command line, the program will load the most recently modified file with the name vdb_mmddyy.txt:
 
             ./vdb vdb_011122.txt
@@ -83,7 +85,7 @@ The **vdb** programs can also be used to examine nucleotide mutations. To produc
 
             ./vdbCreate -N msa_0111.fasta
 
-The -n excludes ambiguous bases, while the -N flag includes these. The -N flag is necessary to have protein mutations match what is listed in GISAID. The file produced by -N is much larger. This can be useful if one wants to check if a certain region was not resolved in a particular strain, but it is also slower because of the much larger file. Probably the best option is to generate the mutation list file with the -N flag, and then trim this file using **vdb**, which keeps a very small subset of the Ns. This prevents mutation calls at codons such as NNC, which could happen if these Ns are dropped. The `trim` command takes about 30 seconds on a million sequences, and this only needs to be done once since the results can be saved. The suggested workflow is  
+The -n excludes ambiguous bases, while the -N flag includes these. The -N flag is necessary to have protein mutations match what is listed in GISAID. The file produced by -N is much larger. This can be useful if one wants to check if a certain region was not resolved in a particular strain, but it is also slower because of the much larger file. Probably the best option is to generate the mutation list file with the -N flag, and then trim this file using **vdb**, which keeps a very small subset of the Ns. This prevents mutation calls at codons such as NNC, which could happen if these Ns are dropped. The `trim` command takes about 30 seconds on a million sequences, and this only needs to be done once since the results can be saved. A possible workflow is  
 
             ./vdbCreate -N msa_0111.fasta  
             ./vdb vdb_011122_nucl.txt  
@@ -91,9 +93,13 @@ The -n excludes ambiguous bases, while the -N flag includes these. The -N flag i
             VDB> save world vdb_011122_trimmed_nucl.txt  
             VDB> quit  
 
+Loading the untrimmed vdb nucleotide file can take a large amount of memory. To avoid this, it is possible to run **vdb** in a trim-only mode to produce the trimmed file directly, using only modest memory resources. To do this, run **vdb** with the `-t` command line option:
+
+           ./vdb -t vdb_011122_nucl.txt vdb_011122_trimmed_nucl.txt
+
 To read the resulting file into **vdb** and thereby analyze mutations in nucleotide mode:
 
-            ./vdb vdb_011122_trimmed_nucl.txt  
+            ./vdb vdb_011122_trimmed_nucl.txt
  
 or if the trimmed file has not been generated:
  
