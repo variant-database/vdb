@@ -6,14 +6,14 @@
 //
 //  Created by Anthony West on 1/31/21.
 //  Copyright (c) 2022  Anthony West, Caltech
-//  Last modified 1/12/22
+//  Last modified 2/28/22
 
 import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
 
-let version : String = "2.3"
+let version : String = "2.4"
 let checkForVDBUpdate : Bool = true         // to inform users of updates; the updates are not downloaded
 let allowGitHubDownloads : Bool = true      // to download nucl. ref. and documentation, if missing
 let basePath : String = FileManager.default.currentDirectoryPath
@@ -85,6 +85,7 @@ if useStdInput {
 }
 print("SARS-CoV-2 Variant Database  Version \(version)              Bjorkman Lab/Caltech")
 
+#if !os(Windows)
 // MARK: - Linenoise
 // vdb uses Linenoise to enhance the interactive terminal
 // Linenoise was written by Andy Best, Salvatore Sanfilippo, Pieter Noordhuis
@@ -627,7 +628,7 @@ internal struct Terminal {
 import Foundation
 
 
-public class LineNoise {
+public final class LineNoise {
     public enum Mode {
         case unsupportedTTY
         case supportedTTY
@@ -1304,7 +1305,213 @@ public class LineNoise {
 }
 
 // MARK: End of Linenoise
+ 
+#else
 
+// Begin Windows Linenoise
+
+public enum LinenoiseError: Error {
+    case notATTY
+    case generalError(String)
+    case EOF
+    case CTRL_C
+}
+
+final public class LineNoise {
+    public enum Mode {
+        case unsupportedTTY
+        case supportedTTY
+        case notATTY
+    }
+
+    public let mode: Mode = .unsupportedTTY
+    var tempBuf: String?
+    public var preserveHistoryEdits = false
+    var history: History = History()
+
+    public func setCompletionCallback(_ callback: @escaping (String) -> ([String]) ) {
+    }
+    public func setHintsCallback(_ callback: @escaping (String) -> (String?, (Int, Int, Int)?)) {
+    }
+    
+    internal class History {
+        
+        public enum HistoryDirection: Int {
+            case previous = -1
+            case next = 1
+        }
+        
+        var maxLength: UInt = 0 {
+            didSet {
+                if history.count > maxLength && maxLength > 0 {
+                    history.removeFirst(history.count - Int(maxLength))
+                }
+            }
+        }
+        private var index: Int = 0
+        
+        public var ignoredups : Bool = false
+        
+        var currentIndex: Int {
+            return index
+        }
+        
+        private var hasTempItem: Bool = false
+        
+        private var history: [String] = [String]()
+        var historyItems: [String] {
+            return history
+        }
+        
+        public func add(_ item: String) {
+            if ignoredups {
+            // Don't add a duplicate if the last item is equal to this one
+            if let lastItem = history.last {
+                if lastItem == item {
+                        // Reset the history pointer to the end index
+                        index = history.endIndex
+                    return
+                }
+            }
+            }
+            
+            // Remove an item if we have reached maximum length
+            if maxLength > 0 && history.count >= maxLength {
+                _ = history.removeFirst()
+            }
+            
+            history.append(item)
+            
+            // Reset the history pointer to the end index
+            index = history.endIndex
+        }
+
+        func replaceCurrent(_ item: String) {
+            history[index] = item
+        }
+        
+        // MARK: - History Navigation
+        
+        internal func navigateHistory(direction: HistoryDirection) -> String? {
+            if history.count == 0 {
+                return nil
+            }
+            
+            switch direction {
+            case .next:
+                index += HistoryDirection.next.rawValue
+            case .previous:
+                index += HistoryDirection.previous.rawValue
+            }
+            
+            // Stop at the beginning and end of history
+            if index < 0 {
+                index = 0
+                return nil
+            } else if index >= history.count {
+                index = history.count
+                return nil
+            }
+            
+            return history[index]
+        }
+        
+        // MARK: - Saving and loading
+        
+        internal func save(toFile path: String) throws {
+            let output = history.joined(separator: "\n")
+            try output.write(toFile: path, atomically: true, encoding: .utf8)
+        }
+        
+        internal func load(fromFile path: String) throws {
+            let input = try String(contentsOfFile: path, encoding: .utf8)
+            
+            input.split(separator: "\n").forEach {
+                add(String($0))
+            }
+        }
+        
+    }
+
+
+    public func addHistory(_ item: String) {
+        history.add(item)
+    }
+
+    public func historyList() -> [String] {
+        return history.historyItems
+    }
+    
+    public func saveHistory(toFile path: String) throws {
+        try history.save(toFile: path)
+    }
+
+    internal func getLineUnsupportedTTY(prompt: String) throws -> String {
+        // Since the terminal is unsupported, fall back to Swift's readLine.
+        print(prompt, terminator: "")
+        if let line = readLine() {
+            return line
+        }
+        else {
+            throw LinenoiseError.EOF
+        }
+    }
+    
+    internal func getLineNoTTY(prompt: String) throws -> String {
+//        return ""
+        let line : String = try getLineUnsupportedTTY(prompt: prompt)
+        print(line, terminator: "\n")
+        return line
+    }
+    
+    public func getLine(prompt: String, promptCount: Int) throws -> String {
+        // If there was any temporary history, remove it
+        tempBuf = nil
+
+        switch mode {
+        case .notATTY:
+            return try getLineNoTTY(prompt: prompt)
+        case .unsupportedTTY, .supportedTTY:
+            return try getLineUnsupportedTTY(prompt: prompt)
+        }
+    }
+    
+}
+
+struct Terminal {
+   
+    static func isTTY(_ fileHandle: Int32) -> Bool {
+        // FIX - check how to support batch/non-tty on Windows
+        return true
+    }
+
+    static func withRawMode(_ fileHandle: Int32, body: () throws -> ()) throws {
+        if !isTTY(fileHandle) {
+            throw LinenoiseError.notATTY
+        }
+        // Run the body
+        try body()
+    }
+
+}
+
+func strtol(_ __str: UnsafePointer<CChar>!, _ __endptr: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>!, _ __base: Int32) -> Int {
+    let tmp32 : Int32 = strtol(__str, __endptr, __base)
+    return Int(tmp32)
+}
+
+func usleep(_ uSeconds: Int) {
+    Thread.sleep(forTimeInterval: Double(uSeconds)/1_000_000.0)
+}
+
+@inline(__always)
+func read(_ fd: Int32, _ buf: UnsafeMutableRawPointer!, _ nbyte: Int) -> Int {
+    Int(_read(fd, buf, numericCast(nbyte)))
+}
+
+// end Windows Linenoise
+#endif
+ 
 // MARK: -
 
 // MARK: - Beginning of VDB Code
@@ -1440,7 +1647,7 @@ extension String {
 
 // MARK: - Autorelease Pool for Linux
 
-#if os(Linux)
+#if os(Linux) || os(Windows)
 // autorelease call used to minimize memory footprint
 func autoreleasepool<Result>(invoking body: () throws -> Result) rethrows -> Result {
      return try body()
@@ -2014,7 +2221,7 @@ final class VDB {
 
     // loads a list of isolates and their mutations from the given fileName
     // reads non-tsv files using the format generated by vdbCreate
-    class func loadMutationDB_MP(_ fileName: String, mp_number : Int, vdb: VDB) -> [Isolate] {
+    class func loadMutationDB_MP(_ fileName: String, mp_number : Int, vdb: VDB, initialLoad: Bool = true) -> [Isolate] {
         if fileName.suffix(4) == ".tsv" {
             return loadMutationDBTSV(fileName)
         }
@@ -2034,6 +2241,10 @@ final class VDB {
             return []
         }
 
+        var mp_number : Int = mp_number
+        if lineNMP.count < 1_000_000 {
+            mp_number = 1
+        }
         var sema : [DispatchSemaphore] = []
         for _ in 0..<mp_number-1 {
             sema.append(DispatchSemaphore(value: 0))
@@ -2053,6 +2264,7 @@ final class VDB {
         for i in 0..<mp_number {
             ranges.append((cuts[i],cuts[i+1]))
         }
+        var additionalIsolates : [Isolate] = []
         
         DispatchQueue.concurrentPerform(iterations: mp_number) { index in
             let isolates_mp : [Isolate] = loadMutationDB_MP_task(mp_index: index, mp_range: ranges[index], vdb: vdb)
@@ -2060,18 +2272,25 @@ final class VDB {
             if index != 0 {
                 sema[index-1].wait()
             }
-                    vdb.isolates.append(contentsOf: isolates_mp)
-
+            if initialLoad {
+                vdb.isolates.append(contentsOf: isolates_mp)
+            }
+            else {
+                additionalIsolates.append(contentsOf: isolates_mp)
+            }
             if index != mp_number - 1 {
                 sema[index].signal()
             }
         }
-        if vdb.isolates.count > 10_000 {
-            print("  \(nf(vdb.isolates.count)) isolates loaded")
-        }
-                
         lineNMP = []
-        return vdb.isolates
+        if initialLoad {
+            print("  \(nf(vdb.isolates.count)) isolates loaded")
+            return vdb.isolates
+        }
+        else {
+            print("  \(nf(additionalIsolates.count)) isolates loaded")
+            return additionalIsolates
+        }
     }
 
     // loads a list of isolates and their mutations from the given fileName
@@ -3034,6 +3253,414 @@ final class VDB {
         }
         return isolates
     }
+
+    // loads a list of isolates and their mutations from the given fileName
+    // reads metadata tsv file downloaded from GISAID
+    class func loadMutationDBTSV_MP(_ fileName: String, vdb: VDB? = nil) -> [Isolate] {
+        // Metadata read in 4.45 sec
+        let loadMetadataOnly : Bool = vdb != nil
+        var isoDict : [Int:Int] = [:]
+        if loadMetadataOnly {
+            if let vdb = vdb {
+                for i in 0..<vdb.isolates.count {
+                    isoDict[vdb.isolates[i].epiIslNumber] = i
+                }
+            }
+        }
+        // read mutations
+        if !loadMetadataOnly {
+            print("   Loading database from file \(fileName) ... ", terminator:"")
+        }
+        else {
+            print("   Loading metadata from file \(fileName) ... ")
+        }
+        fflush(stdout)
+        let metadataFile : String = "\(basePath)/\(fileName)"
+        var fileSize : Int = 0
+        do {
+            let attr = try FileManager.default.attributesOfItem(atPath: metadataFile)
+            if let fileSizeUInt64 : UInt64 = attr[FileAttributeKey.size] as? UInt64 {
+                fileSize = Int(fileSizeUInt64)
+            }
+        } catch {
+            print("Error reading tsv file \(metadataFile)")
+            return []
+        }
+        var metadata : [UInt8] = []
+        var metaFields : [String] = []
+        var isolates : [Isolate] = []
+
+        if fileSize < maximumFileStreamSize {
+            metadata = Array(repeating: 0, count: fileSize)
+            guard let fileStream : InputStream = InputStream(fileAtPath: metadataFile) else { print("Error reading tsv file \(metadataFile)"); return [] }
+            fileStream.open()
+            let bytesRead : Int = fileStream.read(&metadata, maxLength: fileSize)
+            fileStream.close()
+            if bytesRead < 0 {
+                print("Error 2 reading tsv file \(metadataFile)")
+                return []
+            }
+        }
+        else {
+            do {
+                let data : Data = try Data(contentsOf: URL(fileURLWithPath: metadataFile))
+                metadata = [UInt8](data)
+            }
+            catch {
+                print("Error reading large tsv file \(metadataFile)")
+                return []
+            }
+        }
+
+        let lf : UInt8 = 10     // \n
+        let tabChar : UInt8 = 9
+        let slashChar : UInt8 = 47
+        let dashChar : UInt8 = 45
+        let commaChar : UInt8 = 44
+        
+        var nameField : Int = -1
+        var idField : Int = -1
+        var dateField : Int = -1
+        var locationField : Int = -1
+        var ageField : Int = -1
+        var pangoField : Int = -1
+        var aaField : Int = -1
+        
+        // setup multithreaded processing
+        var mp_number : Int = mpNumber
+        if metadata.count < 100_000 {
+            mp_number = 1
+        }
+        var sema : [DispatchSemaphore] = []
+        for _ in 0..<mp_number-1 {
+            sema.append(DispatchSemaphore(value: 0))
+        }
+        var cuts : [Int] = [0]
+        let cutSize : Int = metadata.count/mp_number
+        for i in 1..<mp_number {
+            var cutPos : Int = i*cutSize
+            while metadata[cutPos] != lf {
+                cutPos += 1
+            }
+            cuts.append(cutPos+1)
+        }
+        cuts.append(metadata.count)
+        var ranges : [(Int,Int)] = []
+        for i in 0..<mp_number {
+            ranges.append((cuts[i],cuts[i+1]))
+        }
+        var lineageArrayMP : [[(Int,String)]] = Array(repeating: [], count: mp_number)
+        if let vdb = vdb, mp_number > 3 {
+            let arrayCapacity : Int = vdb.isolates.count/(mp_number-3)
+            for i in 0..<mp_number {
+                lineageArrayMP[i].reserveCapacity(arrayCapacity)
+            }
+        }
+        DispatchQueue.concurrentPerform(iterations: mp_number) { index in
+            if index != 0 {
+                sema[index-1].wait()
+            }
+//            let lineageArrayMP : [(Int,String)] =
+            read_MP_task(mp_index: index, mp_range: ranges[index], firstLine: index == 0)
+            if index != 0 {
+                sema[index-1].wait()
+            }
+//            lineageArrayMPAll.append(contentsOf: lineageArrayMP)
+            if index != mp_number - 1 {
+                sema[index].signal()
+            }
+        }
+        if let vdb = vdb {
+            for i in 0..<mp_number {
+                for (index,pangoLineage) in lineageArrayMP[i] {
+                    vdb.isolates[index].pangoLineage = pangoLineage
+                }
+            }
+        }
+        
+        func read_MP_task(mp_index: Int, mp_range: (Int,Int), firstLine: Bool) { // -> [(Int,String)] {
+//            var lineageArrayMP : [(Int,String)] = []
+            
+        var buf : UnsafeMutablePointer<CChar>? = nil
+        buf = UnsafeMutablePointer<CChar>.allocate(capacity: 1000)
+
+        // extract integer from byte stream
+        func intA(_ range : CountableRange<Int>) -> Int {
+            var counter : Int = 0
+            for i in range {
+                if metadata[i] > 127 {
+                    return 0
+                }
+                buf?[counter] = CChar(metadata[i])
+                counter += 1
+            }
+            buf?[counter] = 0 // zero terminate
+            return strtol(buf!,nil,10)
+        }
+        
+        // extract string from byte stream
+        func stringA(_ range : CountableRange<Int>) -> String {
+            var counter : Int = 0
+            for i in range {
+                buf?[counter] = CChar(metadata[i])
+                counter += 1
+            }
+            buf?[counter] = 0 // zero terminate
+            let s = String(cString: buf!)
+            return s
+        }
+        
+        var mutations : [Mutation] = []
+        
+        func makeMutation(_ startPos: Int, _ endPos: Int) {
+            let wt : UInt8 = metadata[startPos]
+            var aa : UInt8 = metadata[endPos-1]
+            let del : Bool = aa == 108
+            let stop : Bool = aa == 112
+            var endPos : Int = endPos
+            if del {
+                aa = 45
+                endPos -= 2
+            }
+            if stop {
+                aa = 42
+                endPos -= 3
+            }
+            let pos : Int
+            if wt != 105 {
+                pos = intA(startPos+1..<endPos-1)
+            }
+            else {  // insertion
+                pos = intA(startPos+3..<endPos-1)
+            }
+            let mut : Mutation = Mutation(wt: wt, pos: pos, aa: aa)
+            mutations.append(mut)
+        }
+        
+        let yearBase : Int = 2019
+        let yearsMax : Int = 4
+        var dateCache : [[[Date?]]] = Array(repeating: Array(repeating: Array(repeating: nil, count: 32), count: 13), count: yearsMax)
+        // create Date objects faster using a cache
+        func getDateFor(year: Int, month: Int, day: Int) -> Date {
+            let y : Int = year - yearBase
+            if y >= 0 && y < yearsMax, let cachedDate = dateCache[y][month][day] {
+                return cachedDate
+            }
+            else {
+                let dateComponents : DateComponents = DateComponents(year:year,month:month,day:day)
+                if let dateFromComp = Calendar.current.date(from: dateComponents) {
+                    if y >= 0 && y < yearsMax {
+                        dateCache[year-yearBase][month][day] = dateFromComp
+                    }
+                    return dateFromComp
+                }
+                else {
+                    exit(9)
+                }
+            }
+        }
+
+        var tabCount : Int = 0
+        var firstLine : Bool = firstLine
+        var lastTabPos : Int = -1
+        
+        let nameFieldName : String = "Virus name"
+        let idFieldName : String = "Accession ID"
+        let dateFieldName : String = "Collection date"
+        let locationFieldName : String = "Location"
+        let ageFieldName : String = "Patient age"
+        let pangoFieldName : String = "Pango lineage"
+        let aaFieldName : String = "AA Substitutions"
+        var country : String = ""
+        var state : String = ""
+        var date : Date = Date()
+        var epiIslNumber : Int = 0
+        var pangoLineage : String = ""
+        var age : Int = 0
+
+        for pos in mp_range.0..<mp_range.1 {
+            switch metadata[pos] {
+            case lf:
+                if firstLine {
+                    let fieldName : String = stringA(lastTabPos+1..<pos)
+                    metaFields.append(fieldName)
+                    firstLine = false
+                    for i in 0..<metaFields.count {
+                        switch metaFields[i] {
+                        case nameFieldName:
+                            nameField = i
+                        case idFieldName:
+                            idField = i
+                        case dateFieldName:
+                            dateField = i
+                        case locationFieldName:
+                            locationField = i
+                        case ageFieldName:
+                            ageField = i
+                        case pangoFieldName:
+                            pangoField = i
+                        case aaFieldName:
+                            aaField = i
+                        default:
+                            break
+                        }
+                    }
+                    if [nameField,idField,dateField,locationField,ageField,pangoField,aaField].contains(-1) {
+                        print("Error - Missing tsv field")
+                        return
+                    }
+                    if loadMetadataOnly {
+                        nameField = -1
+                        dateField = -1
+                        locationField = -1
+                        aaField = -1
+                    }
+                    for si in 0..<mp_number-1 {
+                        sema[si].signal()
+                    }
+                }
+                else {
+                    if !country.isEmpty {
+                        var add : Bool = true
+                        if epiIslNumber == 882740 {
+                            add = false
+                        }
+                        if add {
+                            mutations.sort { $0.pos < $1.pos }
+                            var newIsolate = Isolate(country: country, state: state, date: date, epiIslNumber: epiIslNumber, mutations: mutations)
+                            newIsolate.pangoLineage = pangoLineage
+                            newIsolate.age = age
+                            isolates.append(newIsolate)
+                            mutations = []
+                        }
+                    }
+                    else if loadMetadataOnly {
+                        if let index = isoDict[epiIslNumber] {
+                            lineageArrayMP[mp_index].append((index,pangoLineage))
+                        }
+                    }
+                }
+                tabCount = 0
+                lastTabPos = pos
+            case tabChar:
+                if firstLine {
+                    let fieldName : String = stringA(lastTabPos+1..<pos)
+                    metaFields.append(fieldName)
+                }
+                else {
+                    switch tabCount {
+                    case nameField:
+                        var slashPos : Int = 0
+                        var ppos : Int = lastTabPos+1+8
+                        repeat {
+                            if metadata[ppos] == slashChar {
+                                slashPos = ppos
+                                break
+                            }
+                            ppos += 1
+                        } while true
+                        country = stringA(lastTabPos+1+8..<slashPos)
+                        state = stringA(slashPos+1..<pos)
+                    case idField:
+                        epiIslNumber = intA(lastTabPos+1+8..<pos)
+                    case dateField:
+                        var firstDash : Int = 0
+                        var secondDash : Int = 0
+                        for i in lastTabPos..<pos {
+                            if metadata[i] == dashChar {
+                                if firstDash == 0 {
+                                    firstDash = i
+                                }
+                                else {
+                                    secondDash = i
+                                    break
+                                }
+                            }
+                        }
+                        let year : Int
+                        var month : Int = 0
+                        var day : Int = 0
+                        if firstDash != 0 && secondDash != 0 {
+                            year = intA(lastTabPos+1..<firstDash)
+                            month = intA(firstDash+1..<secondDash)
+                            day = intA(secondDash+1..<pos)
+                        }
+                        else {
+                            if firstDash != 0 {
+                                year = intA(lastTabPos+1..<firstDash)
+                                month = intA(firstDash+1..<pos)
+
+                            }
+                            else {
+                                year = intA(lastTabPos+1..<pos)
+                            }
+                        }
+                        if day == 0 {
+                            day = 15
+                        }
+                        if month == 0 {
+                            month = 7
+                            day = 1
+                        }
+                        date = getDateFor(year: year, month: month, day: day)
+                    case locationField:
+                        break
+                    case ageField:
+                        if metadata[lastTabPos+1] != 117 {
+                            age = intA(lastTabPos+1..<pos)
+                        }
+                        else {
+                            age = 0
+                        }
+                    case pangoField:
+                        pangoLineage = stringA(lastTabPos+1..<pos)
+                    case aaField:
+                        var i : Int = lastTabPos+2
+                        repeat {
+                            if metadata[i] == 83 {  // Spike
+                                let mStart : Int = i+6
+                                var mEnd : Int = pos-1
+                                for j in mStart..<mEnd {
+                                    if metadata[j] == commaChar {
+                                        mEnd = j
+                                        break
+                                    }
+                                }
+                                makeMutation(mStart, mEnd)
+                                i = mEnd + 1
+                            }
+                            else {
+                                while i < pos-1 && metadata[i] != commaChar {
+                                    i += 1
+                                }
+                                i += 1
+                            }
+                        } while i < pos-1
+                    default:
+                        break
+                    }
+                }
+                lastTabPos = pos
+                tabCount += 1
+            default:
+                break
+            }
+        }
+        buf?.deallocate()
+//        return lineageArrayMP
+    }
+        
+        if isolates.count > 40_000 {
+            print("  \(nf(isolates.count)) isolates loaded")
+        }
+        if loadMetadataOnly {
+            if let vdb = vdb {
+                vdb.clusters[vdb.isolatesKeyword] = vdb.isolates
+                vdb.metadataLoaded = true
+            }
+        }
+        return isolates
+    }
     
     // reads metadata tsv file downloaded from GISAID and prepare dictionary for loading Pango lineages
     class func loadMutationDBTSV2(_ fileName: String) -> [String:Int] {
@@ -3532,6 +4159,7 @@ final class VDB {
                 else {
                     while lineN[bytesRead-1] != lf {
                         var char: UInt8 = 0
+#if !os(Windows)
                         while read(standardInput.fileDescriptor, &char, 1) == 1 {
                             lineN[bytesRead] = char
                             bytesRead += 1
@@ -3539,6 +4167,15 @@ final class VDB {
                                 break
                             }
                         }
+#else
+                        while read(0, &char, 1) == 1 {
+                            lineN[bytesRead] = char
+                            bytesRead += 1
+                            if char == lf {
+                                break
+                            }
+                        }
+#endif
                     }
                 }
                 // setup multithreaded processing
@@ -6336,7 +6973,7 @@ plot
         var clusterName : String = clusterName
         var loadedCluster : [Isolate] = []
         if !fileName.hasSuffix(".pango") {
-            loadedCluster = VDB.loadMutationDB_MP(fileName, mp_number: 1, vdb: vdb)
+            loadedCluster = VDB.loadMutationDB_MP(fileName, mp_number: 1, vdb: vdb, initialLoad: false)
         }
         else {
             let filePath : String
@@ -7122,7 +7759,7 @@ plot
                 if newCluster.count - lastPercent > tenPercent {
                     lastPercent = newCluster.count
                     let percentDone : Int = 100 * newCluster.count / cluster1.count
-                    print ("  \(percentDone)% done")
+                    print("  \(percentDone)% done")
                 }
             }
 */
@@ -7141,7 +7778,7 @@ plot
                         if vdb.assignmentCount - vdb.assignmentLastPercent > tenPercent {
                             vdb.assignmentLastPercent = vdb.assignmentCount
                             let percentDone : Int = 100 * vdb.assignmentCount / cluster1.count
-                            print ("  \(percentDone)% done")
+                            print("  \(percentDone)% done")
                         }
                     }
                 }
@@ -7714,6 +8351,7 @@ plot
     }
     
     class func rowsAndColumns() -> (Int,Int) {
+#if !os(Windows)
         var w : winsize = winsize()
         let returnCode = ioctl(STDOUT_FILENO,UInt(TIOCGWINSZ),&w)
         if returnCode == -1 {
@@ -7722,6 +8360,9 @@ plot
         let rows : Int = Int(w.ws_row)
         let columns : Int = Int(w.ws_col)
         return (rows,columns)
+#else
+        return (40,120)
+#endif
     }
     
     class func nonColorCount(_ string: String) -> Int {
@@ -7883,7 +8524,11 @@ plot
     static let defaultCompletions : Bool = true
     static let defaultMinimumPatternsCount : Int = 0
     static let defaultTrendsLineageCount : Int = 5
+#if !os(Windows)
     static let defaultDisplayTextWithColor : Bool = true
+#else
+    static let defaultDisplayTextWithColor : Bool = false
+#endif
     static let defaultMaxMutationsInFreqList : Int = 50
     static let defaultListSpecificity : Bool = false
     static let defaultConsensusPercentage : Int = 50
@@ -8064,7 +8709,7 @@ plot
     // to load sequneces after the first file is loaded
     // returns number of overlapping entries ignored
     func loadAdditionalSequences(_ filename: String) -> Int {
-        let newIsolates : [Isolate] = VDB.loadMutationDB_MP(filename, mp_number: 1, vdb: self)
+        let newIsolates : [Isolate] = VDB.loadMutationDB_MP(filename, mp_number: 1, vdb: self, initialLoad: false)
         var knownISL : [Int] = isolates.map { $0.epiIslNumber }
         var added : Int = 0
         var numberOfOverlappingEntries : Int = 0
@@ -8438,7 +9083,7 @@ plot
                     metadataFileName = VDB.mostRecentMetadataFileName()
                 }
                 if metadataFileName.suffix(1+altMetadataFileName.count) == "/" + altMetadataFileName {
-                    _ = VDB.loadMutationDBTSV(altMetadataFileName, vdb: self)
+                    _ = VDB.loadMutationDBTSV_MP(altMetadataFileName, vdb: self)
                 }
                 else {
                     VDB.readPangoLineages(metadataFileName, vdb: self)
@@ -9876,28 +10521,6 @@ plot
         let line : String = preprocessLine(input)
         currentCommand = line
         let lowercaseLine : String = line.lowercased()
-        
-        let unixPassThru : [String] = []
-        for cmd in unixPassThru {
-            if line.hasPrefix(cmd) {
-                let parts : [String] = input.components(separatedBy: " ")
-                let task : Process = Process()
-                task.executableURL = URL(fileURLWithPath: "/bin/sh")
-                if parts.count > 1 {
-                    task.arguments = ["-c", line] // Array(parts[1..<parts.count])
-                }
-                do {
-                    try task.run()
-                }
-                catch {
-                    print("Error running shell command \(input)")
-                }
-                task.waitUntilExit()
-                print()
-                return (true,.none,nil) // continue mainRunLoop
-            }
-        }
-                
         var returnInt : Int? = nil
         switch lowercaseLine {
         case "quit", "exit", controlD, controlC:
@@ -10147,7 +10770,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
                 print("Error clearing screen")
             }
             cls.waitUntilExit()
-            print (String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: String.Encoding.utf8) ?? "")
+            print(String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: String.Encoding.utf8) ?? "")
 //                print("\u{001B}[2J")
         case _ where lowercaseLine.hasPrefix("clear "):
             let variableNameString : String = line.replacingOccurrences(of: "clear ", with: "", options: .caseInsensitive, range: nil)
@@ -10206,7 +10829,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
                 }
                 else {
                     if isolates.isEmpty {
-                        isolates = VDB.loadMutationDB_MP(dbFileName, mp_number: mpNumber, vdb: self)
+                        isolates = VDB.loadMutationDB_MP(dbFileName, mp_number: mpNumber, vdb: self, initialLoad: true)
                     }
                     else {
                         let numberOfOverlappingEntries = loadAdditionalSequences(dbFileName)
@@ -10642,7 +11265,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
             print("No help available for \(topic)")
         }
     }
-
+        
     // MARK: - main run loop
     
     // main entry point - loads data and starts REPL
@@ -12312,7 +12935,7 @@ indirect enum Expr {
         switch self {
         case .GreaterThan(let exprCluster, _), .LessThan(let exprCluster, _), .EqualMutationCount(let exprCluster, _), .From(let exprCluster, _), .Containing(let exprCluster, _, _), .NotContaining(let exprCluster, _, _), .Before(let exprCluster,_), .After(let exprCluster, _), .Named(let exprCluster, _), .Lineage(let exprCluster, _), .Range(let exprCluster, _, _):
             if let list = exprCluster.clusterListFromExpr(vdb: vdb) {
-                 var listItems : [[CustomStringConvertible]] = []
+                var listItems : [[CustomStringConvertible]] = []
                 for item in list.items {
                     if let oldClusterStruct : ClusterStruct = item[0] as? ClusterStruct {
                         let subExprCluster : Expr = Expr.Cluster(oldClusterStruct.isolates)
