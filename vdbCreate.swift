@@ -3,14 +3,14 @@
 //  VDBCreate
 //
 //  Copyright (c) 2022  Anthony West, Caltech
-//  Last modified 1/12/22
+//  Last modified 2/28/22
 
 import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
 
-let version : String = "2.3"
+let version : String = "2.4"
 let checkForVDBUpdate : Bool = true
 let mpNumberDefault : Int = 12
 let basePath : String = FileManager.default.currentDirectoryPath
@@ -92,9 +92,9 @@ if filteredArguments.count > 1 {
     resultFileName = filteredArguments[1]
 }
 
-// MARK: - Autorelease Pool for Linux
+// MARK: - Autorelease Pool for Linux and Windows
 
-#if os(Linux)
+#if os(Linux) || os(Windows)
 // autorelease call used to minimize memory footprint
 func autoreleasepool<Result>(invoking body: () throws -> Result) rethrows -> Result {
      return try body()
@@ -361,7 +361,7 @@ final class VDBCreate {
                     }
                     lastLf = pos
                     lineCount += 1
-                    if lineN[pos+1] == greaterChar && bytesReadAdj-pos < lastMaxSize && bytesAvailable {
+                    if lineN[pos+1] == greaterChar && bytesReadAdj-pos < lastMaxSize && bytesAvailable && !atRef {
                         // stop read and start next block
                         lastBufferSize = bytesReadAdj-pos-1
                         
@@ -541,7 +541,7 @@ final class VDBCreate {
                             }
                         }
                     }
-                    if bytesRead == 0 && endOfStream {
+                    if bytesRead == 0 && lastBufferSize == 0 && endOfStream {
                         break
                     }
                 }
