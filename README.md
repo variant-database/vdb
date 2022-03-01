@@ -1,5 +1,5 @@
 [![MIT license](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux-lightgrey)
+![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 # vdb
 A SARS-CoV-2 Mutation Pattern Query Tool
 
@@ -46,6 +46,8 @@ Next, download the **vdb** repository ("Download ZIP" under the "Code" button on
 
             swiftc -O vdbCreate.swift
             swiftc -O vdb.swift
+            
+Installation of the Swift compiler on Windows is described at https://www.swift.org/getting-started/.
 
 ## 4. Data files
 
