@@ -47,7 +47,12 @@ Next, download the **vdb** repository ("Download ZIP" under the "Code" button on
             swiftc -O vdbCreate.swift
             swiftc -O vdb.swift
             
-Installation of the Swift compiler on Windows is described at https://www.swift.org/getting-started/.
+**Instructions for Windows:** Installation of the Swift compiler on Windows is described at https://www.swift.org/getting-started/. If the python version listed in those instructions is not available, try omitting the version number. Once the Swift compiler is installed, under the Start Menu item for Visual Studio 2019, run "x64 Native Tools Command Prompt for VS 2019" (don't use the regular command prompt). Then change to the directory with the **vdb** source files and enter the following commands:
+
+              swiftc -O -sdk %SDKROOT% -I %SDKROOT%/usr/lib/swift -L SDKROOT%/usr/lib/swift/windows -emit-executable -o vdbCreate.exe vdbCreate.swift
+              swiftc -O -sdk %SDKROOT% -I %SDKROOT%/usr/lib/swift -L SDKROOT%/usr/lib/swift/windows -emit-executable -o vdb.exe vdb.swift
+
+Any questions about the installation process can be sent to vdb_support@icloud.com.
 
 ## 4. Data files
 
