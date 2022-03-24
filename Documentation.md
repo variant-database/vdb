@@ -49,41 +49,45 @@ In a couple situations, **vdb** interprets input as implying the `from` or `line
 All valid commands should print a response. For commands that involve several steps, output will be printed for each step. If no response is printed, this indicates that there is an error in the input. Some syntax errors are explicitly noted. When printed lists are longer than the terminal display, **vdb** will print the list one page at a time. To advance to the next page, press the space bar. To advance one line at a time, press return or down arrow. To stop printing the list, press `q`.  
 
 ## Filtering commands
-#### \<cluster>`from`\<country or state>    → cluster  
+#### \<cluster> `from` \<country or state>    → cluster  
 
 Searches the specified cluster (or all viruses if no cluster is given) for viruses from the specified country or US state.  
 <br />
-#### \<cluster>`containing`[\<n>] \<pattern>  → cluster    alias `with`, `w/`  
+#### \<cluster> `containing` [\<n>] \<pattern>  → cluster    alias `with`, `w/`  
 
 Searches the specified cluster (or all viruses if no cluster is given) for viruses with the specified mutation pattern. By default only viruses with all the mutations of the specified pattern are returned. If an integer \<n> is specified in the search command, then viruses are returned only if they have at least \<n> of the mutations in the pattern.  
 <br />
-#### \<cluster>`not containing`[\<n>] \<pattern>   → cluster    alias `without`, `w/o` (full pattern)  
+#### \<cluster> `not containing` [\<n>] \<pattern>   → cluster    alias `without`, `w/o` (full pattern)  
 
 Searches the specified cluster (or all viruses if no cluster is given) for viruses without the specified mutation pattern. All viruses are returned except those that contain the complete mutation pattern. If an integer \<n> is specified in the search command, then viruses are returned only if they have less than \<n> of the mutations in the pattern.  
 <br />
-#### \<cluster>`before`\<date>        → cluster  
+#### \<cluster> `before` \<date>        → cluster  
 
 Searches the specified cluster (or all viruses if no cluster is given) for viruses with collection date before the specified date.  
 <br />
-#### \<cluster>`after`\<date>         → cluster  
+#### \<cluster> `after` \<date>         → cluster  
 
 Searches the specified cluster (or all viruses if no cluster is given) for viruses with collection date after the specified date.  
 <br />
-#### \<cluster>[`range`]\<date>-\<date2>    → cluster  
+#### \<cluster> [`range`] \<date>-\<date2>    → cluster  
 
 Searches the specified cluster (or all viruses if no cluster is given) for viruses with collection date in the specified range.  
 <br />
-#### \<cluster>`>` or `<` or `#`\<n>       → cluster    filter by # of mutations  
+#### \<cluster> `>` or `<` or `#`\<n>       → cluster    filter by # of mutations  
 
 Searches the specified cluster (or all viruses if no cluster is given) for viruses with greater than (or less than, or equal to) the specified number of mutations.  
 <br />
-#### \<cluster>`named`\<state_id or EPI_ISL#>  → cluster  
+#### \<cluster> `named` \<state_id or EPI_ISL#>  → cluster  
 
 Searches the specified cluster (or all viruses if no cluster is given) for viruses with the specified text string in their virus name field. Or, if a number is specified, returns the virus with that accession number.  
 <br />
-#### \<cluster>`lineage`\<Pango lineage>   → cluster  
+#### \<cluster> `lineage` \<Pango lineage>   → cluster  
 
 Searches the specified cluster (or all viruses if no cluster is given) for viruses belonging to the specified Pango lineage. A program switch determines whether viruses in sublineages are returned (by default sublineages are included). Lineage names with periods are autodetected, so the keyword `lineage` can be omitted in combined commands.  
+<br />
+#### \<cluster> `sample` \<number or decimal fraction>   → cluster  
+
+Returns a random subset of the specified cluster, with either the given number of strains or the given fraction of the original cluster.  
 <br />
 
 ## Commands to find mutation patterns
@@ -330,4 +334,4 @@ Sets the percentage cutoff for mutations to be included by the `consensus` comma
 <br />
 
 <br />
-Version 2.4
+Version 2.5
