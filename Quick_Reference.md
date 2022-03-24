@@ -17,15 +17,16 @@ The result, if any, of the previous command is available in the variable `last`.
 Results of most list commands can be assigned to a variable.  
 
 ## Filtering commands
-\<cluster>`from`\<country or state>    → cluster  
-\<cluster>`containing`[\<n>] \<pattern>  → cluster    alias `with`, `w/`  
-\<cluster>`not containing`[\<n>] \<pattern> → cluster    alias `without`, `w/o` (full pattern)  
-\<cluster>`before`\<date>        → cluster  
-\<cluster>`after`\<date>         → cluster  
-\<cluster>[`range`]\<date>-\<date2>    → cluster  
-\<cluster>`>` or `<` or `#` \<n>        → cluster    filter by # of mutations  
-\<cluster>`named`\<state_id or EPI_ISL#>  → cluster  
-\<cluster>`lineage`\<Pango lineage>   → cluster  
+\<cluster> `from` \<country or state>    → cluster  
+\<cluster> `containing` [\<n>] \<pattern>  → cluster    alias `with`, `w/`  
+\<cluster> `not containing` [\<n>] \<pattern> → cluster    alias `without`, `w/o` (full pattern)  
+\<cluster> `before` \<date>        → cluster  
+\<cluster> `after` \<date>         → cluster  
+\<cluster> [`range`] \<date>-\<date2>    → cluster  
+\<cluster> `>` or `<` or `#` \<n>        → cluster    filter by # of mutations  
+\<cluster> `named` \<state_id or EPI_ISL#>  → cluster  
+\<cluster> `lineage` \<Pango lineage>   → cluster  
+\<cluster> `sample` \<number or decimal fraction> → cluster   random subset  
 
 ## Commands to find mutation patterns
 `consensus` [`for`] \<cluster or country or state>   → pattern  
