@@ -334,4 +334,4 @@ Sets the percentage cutoff for mutations to be included by the `consensus` comma
 <br />
 
 <br />
-Version 2.5
+Version 2.6
