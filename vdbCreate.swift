@@ -10,7 +10,7 @@ import Foundation
 import FoundationNetworking
 #endif
 
-let version : String = "2.6"
+let version : String = "2.7"
 let checkForVDBUpdate : Bool = true
 let mpNumberDefault : Int = 12
 let basePath : String = FileManager.default.currentDirectoryPath
