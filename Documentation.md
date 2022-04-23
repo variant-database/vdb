@@ -332,6 +332,10 @@ Sets the maximum number of mutations to list for the `freq` command. The default
 
 Sets the percentage cutoff for mutations to be included by the `consensus` command. The default value is 50.  
 <br />
+#### `caseMatching = all/exact/uppercase`  
+
+Determines case matching behavior for virus name searches by the `named` command. `all` is a case-insensitive search (slower), `exact` is case-sensitive (faster), and `uppercase` searches for the uppercase form of the specified search. The default value is `all`.  
+<br />
 
 <br />
-Version 2.6
+Version 2.7
