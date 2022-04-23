@@ -95,4 +95,5 @@ Results of most list commands can be assigned to a variable.
 `minimumPatternsCount = `\<n>  
 `trendsLineageCount = `\<n>       alias `trends` \<n>  
 `maxMutationsInFreqList = `\<n>  
-`consensusPercentage = `\<n>
+`consensusPercentage = `\<n>  
+`caseMatching = all/exact/uppercase`
