@@ -6,14 +6,14 @@
 //
 //  Created by Anthony West on 1/31/21.
 //  Copyright (c) 2022  Anthony West, Caltech
-//  Last modified 4/22/22
+//  Last modified 6/12/22
 
 import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
 
-let version : String = "2.7"
+let version : String = "2.8"
 let checkForVDBUpdate : Bool = true         // to inform users of updates; the updates are not downloaded
 let allowGitHubDownloads : Bool = true      // to download nucl. ref. and documentation, if missing
 let basePath : String = FileManager.default.currentDirectoryPath
@@ -29,11 +29,16 @@ let maximumFileStreamSize : Int = 2_147_483_648  // Apparent size limit of Input
 let zeroDate : Date = Date(timeIntervalSinceReferenceDate: 598690800.0) // "2019-12-22" -3600
 let weekMax = Int(Date().timeIntervalSince(zeroDate))/604800 + 1
 let otherName : String = "Other"
+let nRegionsFileExt : String = "_Nregions"
+let insertionCodeStart : UInt8 = 0 // 97
+let insertionChar : UInt8 = 105 // "i"
+let minDeletionToNLength : Int = 10
 
 var trimMode : Bool = false
 var useStdInput : Bool = true
 var overwrite : Bool = false
 var pipeOutput : Bool = false
+var trimExtendN : Bool = false
 @usableFromInline var mpNumber : Int = mpNumberDefault
 var clArguments : [String] = CommandLine.arguments
 var clFileNames : [String] = []
@@ -99,6 +104,8 @@ for i in 1..<clArguments.count {
                 overwrite = true
             case "p","P":
                 pipeOutput = true
+            case "n","N":
+                trimExtendN = true
             default:
                 Swift.print("Error - invalid option")
                 exit(9)
@@ -1710,6 +1717,7 @@ let minimumPatternsCountKeyword : String = "minimumPatternsCount"
 let maxMutationsInFreqListKeyword : String = "maxMutationsInFreqList"
 let consensusPercentageKeyword : String = "consensusPercentage"
 let caseMatchingKeyword : String = "caseMatching"
+let arrayBaseKeyword : String = "arrayBase"
 let controlC : String = "\(Character(UnicodeScalar(UInt8(3))))"
 let controlD : String = "\(Character(UnicodeScalar(UInt8(4))))"
 
@@ -1801,6 +1809,10 @@ public final class AtomicDict<Key: Hashable, Value>: CustomDebugStringConvertibl
     
     public init() {}
     
+    private init(dict: [Key: Value]) {
+        self.dictStorage = dict
+    }
+    
     public subscript(key: Key) -> Value? {
         get { queue.sync { dictStorage[key] } }
         set { queue.async(flags: .barrier) { [weak self] in self?.dictStorage[key] = newValue } }
@@ -1826,6 +1838,10 @@ public final class AtomicDict<Key: Hashable, Value>: CustomDebugStringConvertibl
     
     public var debugDescription: String {
         return dictStorage.debugDescription
+    }
+    
+    public func copyObject() -> AtomicDict<Key,Value> {
+        return AtomicDict<Key,Value>(dict: self.copy())
     }
     
 }
@@ -2054,26 +2070,107 @@ struct Mutation : Equatable, Hashable, MutationProtocol {
     }
     
     // initialize mutation based on string
-    init(mutString: String) {
-        let chars : [Character] = Array(mutString.uppercased())
-        let pos : Int = Int(String(chars[1..<chars.count-1])) ?? 0
-        let wt : UInt8 = chars[0].asciiValue ?? 0
-        let aa : UInt8 = chars[chars.count-1].asciiValue ?? 0
-//        print(vdb: vdb, "mutString = \(mutString)  pos = \(pos)  wt = \(wt)  aa = \(aa)")
-        if pos == 0 || wt == 0 || aa == 0 {
-            Swift.print("Error making mutation from \(mutString)")
-            Thread.current.cancel()
+    init(mutString: String, vdb: VDB) {
+        let mutStringUpperCased : String = mutString.uppercased()
+        if mutStringUpperCased.prefix(3) != "INS" {
+            let chars : [Character] = Array(mutStringUpperCased)
+            let pos : Int = Int(String(chars[1..<chars.count-1])) ?? 0
+            let wt : UInt8 = chars[0].asciiValue ?? 0
+            let aa : UInt8 = chars[chars.count-1].asciiValue ?? 0
+            //        print(vdb: vdb, "mutString = \(mutString)  pos = \(pos)  wt = \(wt)  aa = \(aa)")
+            if pos == 0 || wt == 0 || aa == 0 {
+                Swift.print("Error making mutation from \(mutString)")
+                Thread.current.cancel()
+            }
+            self.wt = wt
+            self.aa = aa
+            self.pos = pos
         }
-        self.wt = wt
-        self.aa = aa
-        self.pos = pos
+        else {
+            let insertionString : [UInt8] = Array(mutStringUpperCased.utf8)
+            var counter : Int = 0
+            for char in insertionString {
+                if counter > 3 {
+                    if char < 48 || char > 57 {
+                        break
+                    }
+                }
+                counter += 1
+            }
+            let pos : Int = Int(mutString[mutString.index(mutString.startIndex, offsetBy: 3)..<mutString.index(mutString.startIndex, offsetBy: counter)]) ?? 0
+            if pos == 0 {
+                Swift.print("Error making mutation from \(mutString)")
+                Thread.current.cancel()
+            }
+            let insertion : [UInt8] = Array(insertionString[counter...])
+            let (code,offset) = vdb.insertionCodeForPosition(pos, withInsertion: insertion)
+            self.wt = insertionChar + offset
+            self.pos = pos
+            self.aa = code
+        }
+    }
+    
+    // initialize mutation based on string
+    init(mutStringWithoutVDB mutString: String) {
+        let mutStringUpperCased : String = mutString.uppercased()
+        if mutStringUpperCased.prefix(3) != "INS" {
+            let chars : [Character] = Array(mutStringUpperCased)
+            let pos : Int = Int(String(chars[1..<chars.count-1])) ?? 0
+            let wt : UInt8 = chars[0].asciiValue ?? 0
+            let aa : UInt8 = chars[chars.count-1].asciiValue ?? 0
+            //        print(vdb: vdb, "mutString = \(mutString)  pos = \(pos)  wt = \(wt)  aa = \(aa)")
+            if pos == 0 || wt == 0 || aa == 0 {
+                Swift.print("Error making mutation from \(mutString)")
+                Thread.current.cancel()
+            }
+            self.wt = wt
+            self.aa = aa
+            self.pos = pos
+        }
+        else {
+            let insertionString : [UInt8] = Array(mutStringUpperCased.utf8)
+            var counter : Int = 0
+            for char in insertionString {
+                if counter > 3 {
+                    if char < 48 || char > 57 {
+                        break
+                    }
+                }
+                counter += 1
+            }
+            let pos : Int = Int(mutString[mutString.index(mutString.startIndex, offsetBy: 3)..<mutString.index(mutString.startIndex, offsetBy: counter)]) ?? 0
+            if pos == 0 {
+                Swift.print("Error making mutation from \(mutString)")
+                Thread.current.cancel()
+            }
+//            let insertion : [UInt8] = Array(insertionString[counter...])
+            let (code,offset) = (insertionChar,UInt8(0)) // vdb.insertionCodeForPosition(pos, withInsertion: insertion)
+            self.wt = insertionChar + offset
+            self.pos = pos
+            self.aa = code
+        }
     }
 
-    var string : String {
-        get {
+    func string(vdb: VDB) -> String {
+        if wt < insertionChar {
             let aaChar : Character = Character(UnicodeScalar(aa))
             let wtChar : Character = Character(UnicodeScalar(wt))
             return "\(wtChar)\(pos)\(aaChar)"
+        }
+        else {
+            let insertionString : String = vdb.insertionStringForMutation(self)
+            return "ins\(pos)\(insertionString)"
+        }
+    }
+    
+    func stringWithoutInsertion() -> String {
+        if wt < insertionChar {
+            let aaChar : Character = Character(UnicodeScalar(aa))
+            let wtChar : Character = Character(UnicodeScalar(wt))
+            return "\(wtChar)\(pos)\(aaChar)"
+        }
+        else {
+            return "ins\(pos)"
         }
     }
     
@@ -2153,7 +2250,8 @@ final class Isolate : Equatable, Hashable {
     let epiIslNumber : Int
     let mutations : [Mutation]
     var pangoLineage : String = ""
-    var age : Int = 0
+//    var age : Int = 0
+    var nRegions : [Int16] = []
 
     init(country: String, state: String, date: Date , epiIslNumber: Int, mutations: [Mutation], pangoLineage: String = "", age: Int = 0) {
         self.country = country
@@ -2165,23 +2263,64 @@ final class Isolate : Equatable, Hashable {
     }
     
     // string description of isolate - used in list of isolates
-    func string(_ dateFormatter: DateFormatter) -> String {
+    func string(_ dateFormatter: DateFormatter, vdb: VDB) -> String {
         let dateString : String = dateFormatter.string(from: date)
         var mutationsString : String = ""
         for mutation in mutations {
-            mutationsString += mutation.string + " "
+            mutationsString += mutation.string(vdb: vdb) + " "
         }
         return "\(country)/\(state)/\(dateString) : \(mutationsString)"
     }
 
     // string description for writing cluster to a file
-    func vdbString(_ dateFormatter: DateFormatter) -> String {
+    func vdbString(_ dateFormatter: DateFormatter, includeLineage: Bool, ref: String, vdb: VDB) -> String {
         let dateString : String = dateFormatter.string(from: date)
         var mutationsString : String = ""
-        for mutation in mutations {
-            mutationsString += mutation.string + " "
+        if ref.isEmpty {
+            for mutation in mutations {
+                mutationsString += mutation.string(vdb: vdb) + " "
+            }
         }
-        return ">\(country)/\(state)/\(dateString.prefix(4))|EPI_ISL_\(epiIslNumber)|\(dateString)|,\(mutationsString)\n"
+        else {
+            var seq : String = ref
+            var insertions : [Mutation] = []
+            for mutation in mutations {
+                if mutation.wt < insertionChar {
+                    let pos = seq.index(seq.startIndex, offsetBy: mutation.pos)
+                    let mut : Character = Character(UnicodeScalar(mutation.aa))
+                    seq.replaceSubrange(pos...pos, with: [mut])
+                }
+                else {
+                    insertions.append(mutation)
+                }
+            }
+            let nChar : Character = "N"
+            for n in stride(from: 0, to: nRegions.count, by: 2) {
+                let posStart = seq.index(seq.startIndex, offsetBy: Int(nRegions[n]))
+                let posEnd = seq.index(seq.startIndex, offsetBy: Int(nRegions[n+1]))
+                let rep : [Character] = Array(repeating: nChar, count: Int(nRegions[n+1]-nRegions[n]+1))
+                seq.replaceSubrange(posStart...posEnd, with: rep)
+            }
+            if !insertions.isEmpty {
+                if insertions.count > 1 {
+                    insertions = insertions.sorted { $0.pos > $1.pos }
+                }
+                for insertion in insertions {
+                    let insertionString = vdb.insertionStringForMutation(insertion)
+                    if !insertionString.isEmpty {
+                        seq.insert(contentsOf: insertionString, at: seq.index(seq.startIndex, offsetBy: insertion.pos+1))
+                    }
+                }
+            }
+            seq.replaceSubrange(seq.startIndex...seq.startIndex, with: ["\n"])
+            mutationsString = seq
+        }
+        if includeLineage {
+            return ">\(country)/\(state)/\(dateString.prefix(4))|EPI_ISL_\(epiIslNumber)|\(dateString)|\(pangoLineage),\(mutationsString)\n"
+        }
+        else {
+            return ">\(country)/\(state)/\(dateString.prefix(4))|EPI_ISL_\(epiIslNumber)|\(dateString)|,\(mutationsString)\n"
+        }
     }
     
     // whether the isolate contains at least n of the mutations in mutationsArray
@@ -2395,16 +2534,36 @@ func printJoin(vdb: VDB, _ string: String, terminator: String) {
     }
 }
 
-extension Mutation : CustomStringConvertible {
+//extension Mutation {
+//    var description: String {
+//        self.string
+//    }
+//}
+
+struct MutationStruct : CustomStringConvertible {
+    var mutation : Mutation
+    weak var vdb: VDB?
     var description: String {
-        self.string
+        if let vdb = vdb {
+            return mutation.string(vdb: vdb)
+        }
+        else {
+            return "Error - vdb is nil in MutationStruct"
+        }
     }
 }
+
 struct PatternStruct : CustomStringConvertible {
     var mutations : [Mutation]
     var name : String
+    weak var vdb: VDB?
     var description: String {
-        VDB.stringForMutations(mutations)
+        if let vdb = vdb {
+            return VDB.stringForMutations(mutations, vdb: vdb)
+        }
+        else {
+            return "Error - vdb is nil in PatternStruct"
+        }
     }
 }
 
@@ -2463,7 +2622,7 @@ struct List : CustomStringConvertible {
                     types.append(Double.self)
                 case is String:
                     types.append(String.self)
-                case is Mutation:
+                case is MutationStruct:
                     types.append(Mutation.self)
                 case is List:
                     types.append(List.self)
@@ -2701,19 +2860,51 @@ final class VDB {
             var date : Date = Date()
             var epiIslNumber : Int = 0
             var mutations : [Mutation] = []
+            var lastInsertionPos : Int = 0
+            var lastInsertion : [UInt8] = []
+            var lastInsertionCode : UInt8 = 0
+            var lastInsertionShift : UInt8 = 0
 
 #if !VDB_SERVER && swift(>=1)
             func makeMutation(_ startPos: Int, _ endPos: Int) {
-                let wt : UInt8 = lineNMP[startPos]
-                let aa : UInt8 = lineNMP[endPos-1]
-                let pos : Int = intA(startPos+1..<endPos-1)
+                var wt : UInt8 = lineNMP[startPos]
+                var aa : UInt8 = lineNMP[endPos-1]
+                let pos : Int
+                if wt < insertionChar {
+                    pos = intA(startPos+1..<endPos-1)
+                }
+                else {  // insertion
+                    var insertionStartPos : Int = startPos+4
+                    while lineNMP[insertionStartPos] < 58 && lineNMP[insertionStartPos] > 47 {
+                        insertionStartPos += 1
+                    }
+                    pos = intA(startPos+3..<insertionStartPos)
+                    if pos == lastInsertionPos && lineNMP[insertionStartPos..<endPos] == ArraySlice(lastInsertion) {
+                        aa = lastInsertionCode
+                        wt += lastInsertionShift
+                    }
+                    else {
+                        if insertionStartPos > endPos {
+                            print("startPos = \(startPos)  endPos = \(endPos)  \(lineNMP[startPos..<endPos])")
+                            print("insertionStartPos = \(insertionStartPos)")
+                        }
+                        let insertion = Array(lineNMP[insertionStartPos..<endPos])
+                        let shift : UInt8
+                        (aa,shift) = vdb.insertionCodeForPosition(pos, withInsertion:insertion)
+                        wt += shift
+                        lastInsertionPos = pos
+                        lastInsertion = insertion
+                        lastInsertionCode = aa
+                        lastInsertionShift = shift
+                    }
+                }
                 let mut : Mutation = Mutation(wt: wt, pos: pos, aa: aa)
                 mutations.append(mut)
             }
 #else
             var lineage : String = ""
             func makeMutation(_ startPos: Int, _ endPos: Int) {
-                let wt : UInt8 = lineNMP[startPos]
+                var wt : UInt8 = lineNMP[startPos]
                 var aa : UInt8 = lineNMP[endPos-1]
                 let del : Bool = aa == 108
                 let stop : Bool = aa == 112
@@ -2727,11 +2918,33 @@ final class VDB {
                     endPos -= 3
                 }
                 let pos : Int
-                if wt != 105 {
+                if wt < insertionChar {
                     pos = intA(startPos+1..<endPos-1)
                 }
                 else {  // insertion
-                    pos = intA(startPos+3..<endPos-1)
+                    var insertionStartPos : Int = startPos+4
+                    while lineNMP[insertionStartPos] < 58 && lineNMP[insertionStartPos] > 47 {
+                        insertionStartPos += 1
+                    }
+                    pos = intA(startPos+3..<insertionStartPos)
+                    if pos == lastInsertionPos && lineNMP[insertionStartPos..<endPos] == ArraySlice(lastInsertion) {
+                        aa = lastInsertionCode
+                        wt += lastInsertionShift
+                    }
+                    else {
+                        if insertionStartPos > endPos {
+                            print("startPos = \(startPos)  endPos = \(endPos)  \(lineNMP[startPos..<endPos])")
+                            print("insertionStartPos = \(insertionStartPos)")
+                        }
+                        let insertion = Array(lineNMP[insertionStartPos..<endPos])
+                        let shift : UInt8
+                        (aa,shift) = vdb.insertionCodeForPosition(pos, withInsertion:insertion)
+                        wt += shift
+                        lastInsertionPos = pos
+                        lastInsertion = insertion
+                        lastInsertionCode = aa
+                        lastInsertionShift = shift
+                    }
                 }
                 let mut : Mutation = Mutation(wt: wt, pos: pos, aa: aa)
                 mutations.append(mut)
@@ -2764,9 +2977,9 @@ final class VDB {
                                 refAdded = true
                             }
                         }
-                        if epiIslNumber == 882740 {
-                            add = false
-                        }
+//                        if epiIslNumber == 882740 {
+//                            add = false
+//                        }
                         if epiIslNumber == 0 {
                             // assign dummy number
                             if dummyNumberBase == 0 {
@@ -3185,10 +3398,10 @@ final class VDB {
             print(vdb: vdb, "   Warning - no Pango lineages available")
             return
         }
-        var ageField : Int = -1
-        if let ageField1 = vdb.metaFields.firstIndex(of: "age") {
-            ageField = ageField1
-        }
+//        var ageField : Int = -1
+//        if let ageField1 = vdb.metaFields.firstIndex(of: "age") {
+//            ageField = ageField1
+//        }
         let lf : UInt8 = 10     // \n
         let tabChar : UInt8 = 9
         var buf : UnsafeMutablePointer<CChar>? = nil
@@ -3244,10 +3457,10 @@ final class VDB {
                         let fieldName : String = stringA(lastTabPos+1..<pos)
                         vdb.isolates[i].pangoLineage = fieldName
                     }
-                    if tabCount == ageField {
-                        let age : Int = intA(lastTabPos+1..<pos)
-                        vdb.isolates[i].age = age
-                    }
+//                    if tabCount == ageField {
+//                        let age : Int = intA(lastTabPos+1..<pos)
+//                        vdb.isolates[i].age = age
+//                    }
                     lastTabPos = pos
                     tabCount += 1
                 default:
@@ -3356,7 +3569,7 @@ final class VDB {
         var mutations : [Mutation] = []
         
         func makeMutation(_ startPos: Int, _ endPos: Int) {
-            let wt : UInt8 = metadata[startPos]
+            var wt : UInt8 = metadata[startPos]
             var aa : UInt8 = metadata[endPos-1]
             let del : Bool = aa == 108
             let stop : Bool = aa == 112
@@ -3370,11 +3583,18 @@ final class VDB {
                 endPos -= 3
             }
             let pos : Int
-            if wt != 105 {
+            if wt < insertionChar {
                 pos = intA(startPos+1..<endPos-1)
             }
             else {  // insertion
-                pos = intA(startPos+3..<endPos-1)
+                var insertionStartPos : Int = startPos+4
+                while metadata[insertionStartPos] < 58 && metadata[insertionStartPos] > 47 {
+                    insertionStartPos += 1
+                }
+                pos = intA(startPos+3..<insertionStartPos)
+                let shift : UInt8
+                (aa,shift) = vdb.insertionCodeForPosition(pos, withInsertion:Array(metadata[insertionStartPos..<endPos]))
+                wt += shift
             }
             let mut : Mutation = Mutation(wt: wt, pos: pos, aa: aa)
             mutations.append(mut)
@@ -3412,14 +3632,14 @@ final class VDB {
         let idFieldName : String = "Accession ID"
         let dateFieldName : String = "Collection date"
         let locationFieldName : String = "Location"
-        let ageFieldName : String = "Patient age"
+//        let ageFieldName : String = "Patient age"
         let pangoFieldName : String = "Pango lineage"
         let aaFieldName : String = "AA Substitutions"
         var nameField : Int = -1
         var idField : Int = -1
         var dateField : Int = -1
         var locationField : Int = -1
-        var ageField : Int = -1
+//        var ageField : Int = -1
         var pangoField : Int = -1
         var aaField : Int = -1
         var country : String = ""
@@ -3427,7 +3647,7 @@ final class VDB {
         var date : Date = Date()
         var epiIslNumber : Int = 0
         var pangoLineage : String = ""
-        var age : Int = 0
+//        var age : Int = 0
 
         for pos in 0..<metadata.count {
             switch metadata[pos] {
@@ -3446,8 +3666,8 @@ final class VDB {
                             dateField = i
                         case locationFieldName:
                             locationField = i
-                        case ageFieldName:
-                            ageField = i
+//                        case ageFieldName:
+//                            ageField = i
                         case pangoFieldName:
                             pangoField = i
                         case aaFieldName:
@@ -3456,7 +3676,7 @@ final class VDB {
                             break
                         }
                     }
-                    if [nameField,idField,dateField,locationField,ageField,pangoField,aaField].contains(-1) {
+                    if [nameField,idField,dateField,locationField,pangoField,aaField].contains(-1) {
                         print(vdb: vdb, "Error - Missing tsv field")
                         return []
                     }
@@ -3469,23 +3689,23 @@ final class VDB {
                 }
                 else {
                     if !country.isEmpty {
-                        var add : Bool = true
-                        if epiIslNumber == 882740 {
-                            add = false
-                        }
-                        if add {
+//                        var add : Bool = true
+//                        if epiIslNumber == 882740 {
+//                            add = false
+//                        }
+//                        if add {
                             mutations.sort { $0.pos < $1.pos }
                             let newIsolate = Isolate(country: country, state: state, date: date, epiIslNumber: epiIslNumber, mutations: mutations)
                             newIsolate.pangoLineage = pangoLineage
-                            newIsolate.age = age
+//                            newIsolate.age = age
                             isolates.append(newIsolate)
                             mutations = []
-                        }
+//                        }
                     }
                     else if loadMetadataOnly {
                         if let index = isoDict[epiIslNumber] {
                             vdb.isolates[index].pangoLineage = pangoLineage
-                            vdb.isolates[index].age = age
+//                            vdb.isolates[index].age = age
                         }
                     }
                 }
@@ -3554,13 +3774,13 @@ final class VDB {
                         date = getDateFor(year: year, month: month, day: day)
                     case locationField:
                         break
-                    case ageField:
-                        if metadata[lastTabPos+1] != 117 {
-                            age = intA(lastTabPos+1..<pos)
-                        }
-                        else {
-                            age = 0
-                        }
+//                    case ageField:
+//                        if metadata[lastTabPos+1] != 117 {
+//                            age = intA(lastTabPos+1..<pos)
+//                        }
+//                        else {
+//                            age = 0
+//                        }
                     case pangoField:
                         pangoLineage = stringA(lastTabPos+1..<pos)
                     case aaField:
@@ -3671,7 +3891,7 @@ final class VDB {
         var idField : Int = -1
         var dateField : Int = -1
         var locationField : Int = -1
-        var ageField : Int = -1
+//        var ageField : Int = -1
         var pangoField : Int = -1
         var aaField : Int = -1
         
@@ -3760,7 +3980,7 @@ final class VDB {
         var mutations : [Mutation] = []
         
         func makeMutation(_ startPos: Int, _ endPos: Int) {
-            let wt : UInt8 = metadata[startPos]
+            var wt : UInt8 = metadata[startPos]
             var aa : UInt8 = metadata[endPos-1]
             let del : Bool = aa == 108
             let stop : Bool = aa == 112
@@ -3774,11 +3994,18 @@ final class VDB {
                 endPos -= 3
             }
             let pos : Int
-            if wt != 105 {
+            if wt < insertionChar {
                 pos = intA(startPos+1..<endPos-1)
             }
             else {  // insertion
-                pos = intA(startPos+3..<endPos-1)
+                var insertionStartPos : Int = startPos+4
+                while metadata[insertionStartPos] < 58 && metadata[insertionStartPos] > 47 {
+                    insertionStartPos += 1
+                }
+                pos = intA(startPos+3..<insertionStartPos)
+                let shift : UInt8
+                (aa,shift) = vdb.insertionCodeForPosition(pos, withInsertion:Array(metadata[insertionStartPos..<endPos]))
+                wt += shift
             }
             let mut : Mutation = Mutation(wt: wt, pos: pos, aa: aa)
             mutations.append(mut)
@@ -3816,7 +4043,7 @@ final class VDB {
         let idFieldName : String = "Accession ID"
         let dateFieldName : String = "Collection date"
         let locationFieldName : String = "Location"
-        let ageFieldName : String = "Patient age"
+//        let ageFieldName : String = "Patient age"
         let pangoFieldName : String = "Pango lineage"
         let aaFieldName : String = "AA Substitutions"
         var country : String = ""
@@ -3824,7 +4051,7 @@ final class VDB {
         var date : Date = Date()
         var epiIslNumber : Int = 0
         var pangoLineage : String = ""
-        var age : Int = 0
+//        var age : Int = 0
 
         for pos in mp_range.0..<mp_range.1 {
             switch metadata[pos] {
@@ -3843,8 +4070,8 @@ final class VDB {
                             dateField = i
                         case locationFieldName:
                             locationField = i
-                        case ageFieldName:
-                            ageField = i
+//                        case ageFieldName:
+//                            ageField = i
                         case pangoFieldName:
                             pangoField = i
                         case aaFieldName:
@@ -3853,7 +4080,8 @@ final class VDB {
                             break
                         }
                     }
-                    if [nameField,idField,dateField,locationField,ageField,pangoField,aaField].contains(-1) {
+//                    if [nameField,idField,dateField,locationField,ageField,pangoField,aaField].contains(-1) {
+                    if [nameField,idField,dateField,locationField,pangoField,aaField].contains(-1) {
                         print(vdb: vdb, "Error - Missing tsv field")
                         return
                     }
@@ -3869,18 +4097,18 @@ final class VDB {
                 }
                 else {
                     if !country.isEmpty {
-                        var add : Bool = true
-                        if epiIslNumber == 882740 {
-                            add = false
-                        }
-                        if add {
+//                        var add : Bool = true
+//                        if epiIslNumber == 882740 {
+//                            add = false
+//                        }
+//                        if add {
                             mutations.sort { $0.pos < $1.pos }
                             let newIsolate = Isolate(country: country, state: state, date: date, epiIslNumber: epiIslNumber, mutations: mutations)
                             newIsolate.pangoLineage = pangoLineage
-                            newIsolate.age = age
+//                            newIsolate.age = age
                             isolates.append(newIsolate)
                             mutations = []
-                        }
+//                        }
                     }
                     else if loadMetadataOnly {
                         if let index = isoDict[epiIslNumber] {
@@ -3953,13 +4181,13 @@ final class VDB {
                         date = getDateFor(year: year, month: month, day: day)
                     case locationField:
                         break
-                    case ageField:
-                        if metadata[lastTabPos+1] != 117 {
-                            age = intA(lastTabPos+1..<pos)
-                        }
-                        else {
-                            age = 0
-                        }
+//                    case ageField:
+//                        if metadata[lastTabPos+1] != 117 {
+//                            age = intA(lastTabPos+1..<pos)
+//                        }
+//                        else {
+//                            age = 0
+//                        }
                     case pangoField:
                         pangoLineage = stringA(lastTabPos+1..<pos)
                     case aaField:
@@ -4284,7 +4512,8 @@ final class VDB {
     // loads and trims a list of isolates and their mutations from the given fileName
     // reads non-tsv files using the format generated by vdbCreate
     // immediately saves file with trimmed mutations
-    class func loadAndTrimMutationDB_MP(_ fileName: String, _ trimmedFileName: String, pipe: Pipe? = nil) {
+    class func loadAndTrimMutationDB_MP(_ fileName: String, _ trimmedFileName: String, pipe: Pipe? = nil, extendN : Bool = false) {
+        let isoDict : [Int:Double] = loadMutationDBTSV_MP_N_Content()
         if fileName.suffix(4) == ".tsv" {
             Swift.print("Error - trim mode is not available for tsv files")
             return
@@ -4302,6 +4531,7 @@ final class VDB {
             return
         }
         let outFileName : String = "\(basePath)/\(trimmedFileName)"
+        let outFileName2 : String = "\(basePath)/\(trimmedFileName)\(nRegionsFileExt)"
         if FileManager.default.fileExists(atPath: outFileName) && !overwrite && !pipeOutput {
             Swift.print("Error - output file \(outFileName) already exists. Use option -o to overwrite.")
             return
@@ -4313,19 +4543,33 @@ final class VDB {
             Swift.print("Error - could not write to file \(outFileName)")
             return
         }
+        if !pipeOutput {
+            FileManager.default.createFile(atPath: outFileName2, contents: nil, attributes: nil)
+        }
+        guard let outFileHandle2 : FileHandle = (!pipeOutput) ? FileHandle(forWritingAtPath: outFileName2) : FileHandle.standardOutput else {
+            Swift.print("Error - could not write to file \(outFileName2)")
+            return
+        }
         let refLengthLocal : Int = VDBProtein.SARS2_nucleotide_refLength
         let outBufferSize : Int = 200_000_000
         let mpNumberMin : Int = mpNumber > 2 ? mpNumber-2 : mpNumber
         let outBufferSizeMP : Int = outBufferSize/mpNumberMin
         var outBufferAll : [UInt8] = Array(repeating: 0, count: outBufferSize)
         var outBufferPositionAll : Int = 0
+        var outBuffer2All : [UInt8] = Array(repeating: 0, count: outBufferSize)
+        var outBuffer2PositionAll : Int = 0
         var outBufferMP : [[UInt8]] = Array(repeating:Array(repeating: 0, count: outBufferSizeMP), count: mpNumber)
         var outBufferPositionMP : [Int] = Array(repeating: 0, count: mpNumber)
+        var outBuffer2MP : [[UInt8]] = Array(repeating:Array(repeating: 0, count: outBufferSizeMP), count: mpNumber)
+        var outBuffer2PositionMP : [Int] = Array(repeating: 0, count: mpNumber)
         let codonStart : [Int] = codonStarts(referenceLength: refLengthLocal)
         var mutationRangesMP : [[Int]] = Array(repeating: Array(repeating: 0, count: 50000), count: mpNumber)
 
         // write current outBuffer to file - success returns true
         func writeBufferToFile() -> Bool {
+            defer {
+                _ = writeBuffer2ToFile()
+            }
             if outBufferPositionAll == 0 {
                 return true
             }
@@ -4341,14 +4585,33 @@ final class VDB {
             }
             return true
         }
+
+        // write current outBuffer to file - success returns true
+        func writeBuffer2ToFile() -> Bool {
+            if outBuffer2PositionAll == 0 {
+                return true
+            }
+            do {
+                if #available(iOS 13.4,*) {
+                    try outFileHandle2.write(contentsOf: outBuffer2All[0..<outBuffer2PositionAll])
+                }
+                outBuffer2PositionAll = 0
+            }
+            catch {
+                Swift.print("Error writing trimmed vdb mutation Nregion file")
+                return false
+            }
+            return true
+        }
         
         // core trim mutation method
-        func loadAndTrimMutationDB_MP_task(mp_index: Int, mp_range: (Int,Int), mutationRange: inout [Int], outBuffer: inout [UInt8], outBufferPosition: inout Int) -> Int {
+        func loadAndTrimMutationDB_MP_task(mp_index: Int, mp_range: (Int,Int), mutationRange: inout [Int], outBuffer: inout [UInt8], outBufferPosition: inout Int, outBuffer2: inout [UInt8], outBuffer2Position: inout Int) -> Int {
 
             let lf : UInt8 = 10     // \n
             let greaterChar : UInt8 = 62
             let spaceChar : UInt8 = 32
             let commaChar : UInt8 = 44
+            let dashCharacter : UInt8 = 45
             let verticalChar : UInt8 = 124
             var buf : UnsafeMutablePointer<CChar>? = nil
             buf = UnsafeMutablePointer<CChar>.allocate(capacity: 1000)
@@ -4372,8 +4635,19 @@ final class VDB {
 
             func makeMutation(_ startPos: Int, _ endPos: Int) {
                 let wt : UInt8 = lineN[startPos]
-                let aa : UInt8 = lineN[endPos-1]
-                let pos : Int = intA(startPos+1..<endPos-1)
+                var aa : UInt8 = lineN[endPos-1]
+                let pos : Int
+                if wt < insertionChar {
+                    pos = intA(startPos+1..<endPos-1)
+                }
+                else {  // insertion
+                    var insertionStartPos : Int = startPos+4
+                    while lineN[insertionStartPos] < 58 && lineN[insertionStartPos] > 47 {
+                        insertionStartPos += 1
+                    }
+                    pos = intA(startPos+3..<insertionStartPos)
+                    aa = insertionCodeStart
+                }
                 let mut : Mutation = Mutation(wt: wt, pos: pos, aa: aa)
                 mutations.append(mut)
                 mutationRange[mutationCounter] = startPos
@@ -4397,15 +4671,261 @@ final class VDB {
                     for i in 0...refLengthLocal {
                         keep[i] = false
                     }
-                    for mutation in mutations {
+                    var nRegionStart : Int16? = nil
+                    var nRegionEnd : Int16 = 0
+                    var nRegions : [Int16] = []
+                    var nRegionsIns : [Int16] = []
+                    for (mIndex,mutation) in mutations.enumerated() {
                         if mutation.aa != nuclN {
                             let cStart : Int = codonStart[mutation.pos]
                             keep[cStart] = true
                             keep[cStart+1] = true
                             keep[cStart+2] = true
                             keep[mutation.pos] = true
+                            if mutation.wt >= insertionChar {
+                                var hasN : Bool = false
+                                for mutPos in mutationRange[2*mIndex]+4..<mutationRange[2*mIndex+1] {
+                                    if lineN[mutPos] == nuclN {
+                                        hasN = true
+                                        break
+                                    }
+                                }
+                                if hasN {
+                                    nRegionsIns.append(Int16(mutation.pos))
+                                    nRegionsIns.append(Int16(mutation.pos))
+                                }
+                            }
+                        }
+                        else {
+                            if let nRegionStartLocal = nRegionStart {
+                                if mutation.pos == nRegionEnd + 1 {
+                                    nRegionEnd = Int16(mutation.pos)
+                                }
+                                else {
+                                    nRegions.append(nRegionStartLocal)
+                                    nRegions.append(nRegionEnd)
+                                    nRegionStart = Int16(mutation.pos)
+                                    nRegionEnd = Int16(mutation.pos)
+                                }
+                            }
+                            else {
+                                nRegionStart = Int16(mutation.pos)
+                                nRegionEnd = Int16(mutation.pos)
+                            }
                         }
                     }
+                    if let nRegionStartLocal = nRegionStart {
+                        nRegions.append(nRegionStartLocal)
+                        nRegions.append(nRegionEnd)
+                    }
+                    
+                    if extendN {
+                        // remove artifical deletions from alignment - adjacent to single N nRegions
+                        var deletionRanges : [(Int,Int)] = []
+                        var deletionStart : Int? = nil
+                        var deletionEnd : Int = 0
+//                        var deletionStartIndex : Int = 0
+                        
+                        for mutation in mutations {
+                            if mutation.aa == dashCharacter {
+                                if let deletionStartLocal = deletionStart {
+                                    if mutation.pos == deletionEnd + 1 {
+                                        deletionEnd = mutation.pos
+                                    }
+                                    else {
+                                        deletionRanges.append((deletionStartLocal,deletionEnd))
+                                        deletionStart = mutation.pos
+                                        deletionEnd = mutation.pos
+//                                        deletionStartIndex = mIndex
+                                    }
+                                }
+                                else {
+                                    deletionStart = mutation.pos
+                                    deletionEnd = mutation.pos
+ //                                   deletionStartIndex = mIndex
+                                }
+                            }
+                        }
+                        if let deletionStartLocal = deletionStart {
+                            deletionRanges.append((deletionStartLocal,deletionEnd))
+                        }
+//                        var rangesToDelete : [(Int,Int)] = []
+                        
+                        if !nRegionsIns.isEmpty {
+  //                          print("nRegionsIns.count = \(nRegionsIns.count)")
+                            nRegions.append(contentsOf: nRegionsIns)
+                        }
+                        
+                        if !nRegions.isEmpty && !deletionRanges.isEmpty {
+                            // combine nearly adjacent deletion ranges
+                            var di : Int = 0
+                            while di < deletionRanges.count-1 {
+                                if deletionRanges[di+1].0 - deletionRanges[di].1 < 5 {
+                                    deletionRanges[di].1 = deletionRanges[di+1].1
+                                    deletionRanges.remove(at: di+1)
+                                }
+                                else {
+                                    di += 1
+                                }
+                            }
+                            
+                            var verticalPos : [Int] = []
+                            for i in 0..<100 {
+                                if lineN[greaterPosition+i] == verticalChar {
+                                    verticalPos.append(greaterPosition+i)
+                                    if verticalPos.count > 1 {
+                                        break
+                                    }
+                                }
+                            }
+                            var accNumber : Int = 0
+                            if verticalPos.count == 2 {
+                                accNumber = intA(verticalPos[0]+9..<verticalPos[1])
+                            }
+                            let nContent : Double = isoDict[accNumber] ?? 0.0
+                            let nCount : Int = Int(nContent*Double(VDBProtein.SARS2_nucleotide_refLength))
+                            var currentN : Int = 0
+                            for i in stride(from: 0, to: nRegions.count, by: 2) {
+                                currentN += Int(nRegions[i+1]) - Int(nRegions[i]) + 1
+                            }
+                            var missing = nCount - currentN
+//                            let missing0 = missing
+                         delLoop: for deletionRange in deletionRanges {
+                            if missing <= 0 || deletionRange.1 - deletionRange.0 < minDeletionToNLength {
+                                continue
+                            }
+                            for i in stride(from: 0, to: nRegions.count, by: 2) {
+                                if abs(deletionRange.0 - Int(nRegions[i])) < 11 || abs(deletionRange.1 - Int(nRegions[i+1])) < 11 || (deletionRange.0 < nRegions[i] && nRegions[i] < deletionRange.1) {
+                                    
+                                    let oldNCount = Int(nRegions[i+1]) - Int(nRegions[i]) + 1
+                                    let nRegionsI = min(Int16(deletionRange.0),nRegions[i])
+                                    let nRegionsI1 = max(Int16(deletionRange.1),nRegions[i+1])
+                                    let newNCount = Int(nRegionsI1) - Int(nRegionsI) + 1
+                                    
+                                    if abs(missing) > abs(missing - newNCount + oldNCount) {
+                                        nRegions[i] = nRegionsI
+                                        nRegions[i+1] = nRegionsI1
+                                        missing = missing - newNCount + oldNCount
+                                        for del in deletionRange.0...deletionRange.1 {
+                                            keep[del] = false
+                                        }
+                                        continue delLoop
+                                    }
+                                }
+/*
+                                if nRegions[i] == nRegions[i+1] {
+                                    if nRegions[i] == deletionRange.0 - 1 {
+                                        nRegions[i+1] = Int16(deletionRange.1)
+ //                                       rangesToDelete.append((deletionRange.2,deletionRange.2+deletionRange.1-deletionRange.0+1))
+                                        for del in deletionRange.0...deletionRange.1 {
+                                            keep[del] = false
+                                        }
+                                        continue delLoop
+                                    }
+                                    else if nRegions[i] == deletionRange.1 + 1 {
+                                        nRegions[i] = Int16(deletionRange.0)
+//                                        rangesToDelete.append((deletionRange.2,deletionRange.2+deletionRange.1-deletionRange.0+1))
+                                        for del in deletionRange.0...deletionRange.1 {
+                                            keep[del] = false
+                                        }
+                                        continue delLoop
+                                    }
+                                }
+*/
+                            }
+
+                            if deletionRange.1 - deletionRange.0 + 1 >= minDeletionToNLength {
+                                if abs(missing) > abs(missing - (deletionRange.1 - deletionRange.0 + 1)) {
+                                    var insertionPos : Int = nRegions.count
+                                    for i in stride(from: 0, to: nRegions.count, by: 2) {
+                                        if nRegions[i] > deletionRange.0 {
+                                            insertionPos = i
+                                            break
+                                        }
+                                    }
+                                    nRegions.insert(contentsOf: [Int16(deletionRange.0),Int16(deletionRange.1)], at: insertionPos)
+                                    for del in deletionRange.0...deletionRange.1 {
+                                        keep[del] = false
+                                    }
+                                    missing = missing - (deletionRange.1 - deletionRange.0 + 1)
+                                }
+                            }
+
+                        }
+                            
+                            var removeInsN : [Int] = []
+                            for i in stride(from: 0, to: nRegions.count, by: 2) {
+                                if nRegions[i] == nRegions[i+1] {
+                                    for (mIndex,mutation) in mutations.enumerated() {
+                                        if mutation.pos == nRegions[i] && mutation.wt >= insertionChar {
+                                            var allN : Bool = true
+                                            for mutPos in mutationRange[2*mIndex]+4..<mutationRange[2*mIndex+1] {
+                                                if lineN[mutPos] != nuclN {
+                                                    allN = false
+                                                    break
+                                                }
+                                            }
+                                            if allN {
+                                                removeInsN.append(i)
+                                            }
+                                            break
+                                        }
+                                    }
+                                }
+                            }
+                            removeInsN.sort { $0 > $1 }
+                            for ri in removeInsN {
+                                nRegions.remove(at: ri)
+                                nRegions.remove(at: ri)
+                            }
+                            
+                            var finalN : Int = 0
+                            for i in stride(from: 0, to: nRegions.count, by: 2) {
+                                finalN += Int(nRegions[i+1]) - Int(nRegions[i]) + 1
+                            }
+//                            if abs(missing) > 10 {
+//                                print("acc \(accNumber) nCount \(nCount)  currentN = \(currentN)  \(missing0) \(finalN) \(missing)")
+//                            }
+/*
+                            var delMax : Int = 0
+                            var delMaxRange : (Int,Int) = (0,0)
+                            for deletionRange in deletionRanges {
+                                let d = deletionRange.1 - deletionRange.0
+                                if d > delMax {
+                                    delMax = d
+                                    delMaxRange = deletionRange
+                                }
+                            }
+                            if delMax > 20 {
+                                var verticalPos : [Int] = []
+                                for i in 0..<100 {
+                                    if lineN[greaterPosition+i] == verticalChar {
+                                        verticalPos.append(greaterPosition+i)
+                                        if verticalPos.count > 1 {
+                                            break
+                                        }
+                                    }
+                                }
+                                var isoAcc : String = ""
+                                if verticalPos.count == 2 {
+                                    var bytes : [UInt8] = []
+                                    for i in verticalPos[0]+1..<verticalPos[1] {
+                                        bytes.append(lineN[i])
+                                    }
+                                    if let string = String(bytes: bytes, encoding: .utf8) {
+                                        isoAcc = string
+                                    }
+                                }
+                                print("Isolate #\(isoCounter.value)  \(isoAcc)  delMax = \(delMax)  \(delMaxRange)")
+                            }
+*/
+                        }
+//                        rangesToDelete.sort { $0.0 > $1.0 }
+//                        for range in rangesToDelete {
+//                            mutations.removeSubrange(range.0..<range.1)
+//                        }
+                    }
+                    
                     var mCounter : Int = 0
                     for mutation in mutations {
                         if keep[mutation.pos] {
@@ -4421,6 +4941,18 @@ final class VDB {
                     mutations = []
                     mutationCounter = 0
                     lineCount += 1
+                    var nRegionCount : Int16 = Int16(nRegions.count)
+                    withUnsafeBytes(of: &nRegionCount) { unsafeRawBufferPtr in
+                        outBuffer2[outBuffer2Position] = unsafeRawBufferPtr[0]
+                        outBuffer2Position += 1
+                        outBuffer2[outBuffer2Position] = unsafeRawBufferPtr[1]
+                        outBuffer2Position += 1
+                    }
+                    let bytesToCopy : Int = nRegions.count * MemoryLayout<Int16>.size
+                    nRegions.withUnsafeBytes { unsafeRawBufferPtr in
+                        memmove(&outBuffer2[outBuffer2Position], unsafeRawBufferPtr.baseAddress!, bytesToCopy)
+                        outBuffer2Position += bytesToCopy
+                    }
                 case greaterChar:
                     greaterPosition = pos
                 case commaChar:
@@ -4556,7 +5088,7 @@ final class VDB {
                     ranges.append((cuts[i],cuts[i+1]))
                 }
                 DispatchQueue.concurrentPerform(iterations: mp_number) { index in
-                    let linesTrimmed : Int = loadAndTrimMutationDB_MP_task(mp_index: index, mp_range: ranges[index], mutationRange: &mutationRangesMP[index], outBuffer: &outBufferMP[index], outBufferPosition: &outBufferPositionMP[index])
+                    let linesTrimmed : Int = loadAndTrimMutationDB_MP_task(mp_index: index, mp_range: ranges[index], mutationRange: &mutationRangesMP[index], outBuffer: &outBufferMP[index], outBufferPosition: &outBufferPositionMP[index], outBuffer2: &outBuffer2MP[index], outBuffer2Position: &outBuffer2PositionMP[index])
                     if index != 0 {
                         sema[index-1].wait()
                     }
@@ -4565,6 +5097,11 @@ final class VDB {
                     }
                     outBufferPositionAll += outBufferPositionMP[index]
                     outBufferPositionMP[index] = 0
+                    _ = outBuffer2MP[index].withUnsafeBufferPointer { outBuffer2MPPointer in
+                        memmove(&outBuffer2All[outBuffer2PositionAll], outBuffer2MPPointer.baseAddress!, outBuffer2PositionMP[index])
+                    }
+                    outBuffer2PositionAll += outBuffer2PositionMP[index]
+                    outBuffer2PositionMP[index] = 0
                     totalLinesTrimmed += linesTrimmed
                     if index != mp_number - 1 {
                         sema[index].signal()
@@ -4584,6 +5121,8 @@ final class VDB {
                 if #available(iOS 13.0,*) {
                     try outFileHandle.synchronize()
                     try outFileHandle.close()
+                    try outFileHandle2.synchronize()
+                    try outFileHandle2.close()
                 }
             }
             catch {
@@ -4595,10 +5134,255 @@ final class VDB {
         }
     }
     
+    class func loadNregionsData(_ trimmedFileName: String, isolates: [Isolate]) {
+        let fileName : String = "\(basePath)/\(trimmedFileName)\(nRegionsFileExt)"
+        if !FileManager.default.fileExists(atPath: fileName) {
+            return
+        }
+        var data : Data
+        do {
+            data = try Data(contentsOf: URL(fileURLWithPath: fileName))
+        }
+        catch {
+            print("Error - unable to read N regions data from file \(fileName)")
+            return
+        }
+        if data.isEmpty {
+            print("Error - N regions data count = 0 from file \(fileName)")
+            return
+        }
+        
+        func loadNregionsFromPointer(_ dataBufferPointer : UnsafeMutableBufferPointer<Int16>) {
+            var i : Int = 0
+            var pos : Int = 0
+            while pos < dataBufferPointer.count {
+                if i >= isolates.count {
+                    print("Error loading N regions - N regions may be incorrect")
+                    continue
+                }
+                for j in pos+1..<pos+1+Int(dataBufferPointer[pos]) {
+                    isolates[i].nRegions.append(dataBufferPointer[j])
+                }
+                pos += Int(dataBufferPointer[pos]) + 1
+                i += 1
+            }
+/*
+            print("*** N regions load for isolates.count = \(isolates.count) ***")
+            print("i = \(i)  pos = \(pos)  dataBufferPointer.count = \(dataBufferPointer.count)")
+            // power spectrum
+            var nCounts : [Int16:Int] = [:]
+            for isolate in isolates {
+                for i in stride(from: 0, to: isolate.nRegions.count, by: 2) {
+                    let len : Int16 = isolate.nRegions[i+1] - isolate.nRegions[i] + 1
+                    nCounts[len, default: 0] += 1
+                }
+            }
+            let nCountsArray : [(Int16,Int)] = Array(nCounts).sorted { $0.0 < $1.0 }
+            for (len,count) in nCountsArray {
+                print("\(len): \(count)")
+            }
+*/
+        }
+        
+        var loaded : Bool = false
+        data.withUnsafeMutableBytes { ptr in
+            let alignmentInt16 : Int = MemoryLayout<Int16>.alignment
+            let address : Int = Int(bitPattern: ptr.baseAddress)
+            if address % alignmentInt16 == 0 {
+                let dataBufferPointer : UnsafeMutableBufferPointer<Int16> = ptr.bindMemory(to: Int16.self)
+                loadNregionsFromPointer(dataBufferPointer)
+                loaded = true
+            }
+        }
+        if loaded {
+            return
+        }
+        let dataArrayCount : Int = data.count/MemoryLayout<Int16>.size
+        let dataPointer : UnsafeMutablePointer<Int16> = UnsafeMutablePointer<Int16>.allocate(capacity: dataArrayCount)
+        let dataBufferPointer : UnsafeMutableBufferPointer<Int16> = UnsafeMutableBufferPointer(start: dataPointer, count: dataArrayCount)
+        let bytesCopied : Int = data.copyBytes(to: dataBufferPointer)
+        if bytesCopied != data.count {
+            print("Error copying bytes for N regions  \(bytesCopied) != \(data.count)")
+            return
+        }
+        loadNregionsFromPointer(dataBufferPointer)
+    }
+    
+    // loads a dictionary with key=accession number value=N-content
+    // reads metadata.tsv file downloaded from GISAID
+    class func loadMutationDBTSV_MP_N_Content() -> [Int:Double] {
+        // Metadata read in 6.2 sec
+        var isoDict : [Int:Double] = [:]
+        let metadataFile : String = "\(basePath)/\(altMetadataFileName)"
+        var metadata : [UInt8] = []
+        var metaFields : [String] = []
+
+        do {
+            let data : Data = try Data(contentsOf: URL(fileURLWithPath: metadataFile))
+            metadata = [UInt8](data)
+        }
+        catch {
+            print("Error reading large tsv file \(metadataFile)")
+            return [:]
+        }
+
+        let lf : UInt8 = 10     // \n
+        let tabChar : UInt8 = 9
+        
+        var idField : Int = -1
+        var nContentField : Int = -1
+        
+        // setup multithreaded processing
+        var mp_number : Int = mpNumber
+        if metadata.count < 100_000 {
+            mp_number = 1
+        }
+        var sema : [DispatchSemaphore] = []
+        for _ in 0..<mp_number-1 {
+            sema.append(DispatchSemaphore(value: 0))
+        }
+        var cuts : [Int] = [0]
+        let cutSize : Int = metadata.count/mp_number
+        for i in 1..<mp_number {
+            var cutPos : Int = i*cutSize
+            while metadata[cutPos] != lf {
+                cutPos += 1
+            }
+            cuts.append(cutPos+1)
+        }
+        cuts.append(metadata.count)
+        var ranges : [(Int,Int)] = []
+        for i in 0..<mp_number {
+            ranges.append((cuts[i],cuts[i+1]))
+        }
+        var lineageArrayMP : [[(Int,Double)]] = Array(repeating: [], count: mp_number)
+        if mp_number > 3 {
+            let arrayCapacity : Int = 1_200_000
+            for i in 0..<mp_number {
+                lineageArrayMP[i].reserveCapacity(arrayCapacity)
+            }
+        }
+        DispatchQueue.concurrentPerform(iterations: mp_number) { index in
+            if index != 0 {
+                sema[index-1].wait()
+            }
+            read_MP_task(mp_index: index, mp_range: ranges[index], firstLine: index == 0)
+            if index != 0 {
+                sema[index-1].wait()
+            }
+            if index != mp_number - 1 {
+                sema[index].signal()
+            }
+        }
+        for i in 0..<mp_number {
+            for (accNumber,nContent) in lineageArrayMP[i] {
+                isoDict[accNumber] = nContent
+            }
+        }
+        
+        func read_MP_task(mp_index: Int, mp_range: (Int,Int), firstLine: Bool) { // -> [(Int,String)] {
+            
+        var buf : UnsafeMutablePointer<CChar>? = nil
+        buf = UnsafeMutablePointer<CChar>.allocate(capacity: 1000)
+
+        // extract integer from byte stream
+        func intA(_ range : CountableRange<Int>) -> Int {
+            var counter : Int = 0
+            for i in range {
+                if metadata[i] > 127 {
+                    return 0
+                }
+                buf?[counter] = CChar(metadata[i])
+                counter += 1
+            }
+            buf?[counter] = 0 // zero terminate
+            return strtol(buf!,nil,10)
+        }
+        
+        // extract string from byte stream
+        func stringA(_ range : CountableRange<Int>) -> String {
+            var counter : Int = 0
+            for i in range {
+                buf?[counter] = CChar(metadata[i])
+                counter += 1
+            }
+            buf?[counter] = 0 // zero terminate
+            let s = String(cString: buf!)
+            return s
+        }
+        
+        var tabCount : Int = 0
+        var firstLine : Bool = firstLine
+        var lastTabPos : Int = -1
+        
+        let idFieldName : String = "Accession ID"
+        let nContentFieldName : String = "N-Content"
+        var epiIslNumber : Int = 0
+        var nContent : Double = 0.0
+
+        for pos in mp_range.0..<mp_range.1 {
+            switch metadata[pos] {
+            case lf:
+                if firstLine {
+                    let fieldName : String = stringA(lastTabPos+1..<pos)
+                    metaFields.append(fieldName)
+                    firstLine = false
+                    for i in 0..<metaFields.count {
+                        switch metaFields[i] {
+                        case idFieldName:
+                            idField = i
+                        case nContentFieldName:
+                            nContentField = i
+                        default:
+                            break
+                        }
+                    }
+                    if [idField,nContentField].contains(-1) {
+                        print("Error - Missing tsv field")
+                        return
+                    }
+                    for si in 0..<mp_number-1 {
+                        sema[si].signal()
+                    }
+                }
+                else {
+                    if epiIslNumber != 0 {
+                        lineageArrayMP[mp_index].append((epiIslNumber,nContent))
+                    }
+                }
+                tabCount = 0
+                lastTabPos = pos
+            case tabChar:
+                if firstLine {
+                    let fieldName : String = stringA(lastTabPos+1..<pos)
+                    metaFields.append(fieldName)
+                }
+                else {
+                    switch tabCount {
+                    case idField:
+                        epiIslNumber = intA(lastTabPos+1+8..<pos)
+                    case nContentField:
+                        let nContentString = stringA(lastTabPos+1..<pos)
+                        nContent = Double(nContentString) ?? 0.0
+                    default:
+                        break
+                    }
+                }
+                lastTabPos = pos
+                tabCount += 1
+            default:
+                break
+            }
+        }
+        buf?.deallocate()
+    }
+        return isoDict
+    }
+    
     // MARK: - VDB VQL internal methods
         
     // lists the frequencies of mutations in the given cluster
-    class func mutationFrequenciesInCluster(_ cluster: [Isolate], vdb: VDB, quiet: Bool = false) -> List {
+    class func mutationFrequenciesInCluster(_ cluster: [Isolate], vdb: VDB, quiet: Bool = false, forConsensus: Bool = false) -> List {
 /*
         var allMutations : Set<Mutation> = []
         for isolate in cluster {
@@ -4768,7 +5552,21 @@ final class VDB {
             }
             print(vdb: vdb, headerString)
         }
-        let numberOfMutationsToList : Int = min(vdb.maxMutationsInFreqList,mutationCounts.count)
+        let numberOfMutationsToList : Int
+        if !forConsensus {
+            let minCountToInclude : Int = cluster.count/2 - 1
+            var minToList1 : Int = 0
+            for (mIndex,mCount) in mutationCounts.enumerated() {
+                if mCount.1 < minCountToInclude {
+                    minToList1 = mIndex + 1
+                    break
+                }
+            }
+            numberOfMutationsToList = min(max(vdb.maxMutationsInFreqList,minToList1),mutationCounts.count)
+        }
+        else {
+            numberOfMutationsToList = mutationCounts.count
+        }
         var otherLineages : [[(String,Int)]] = Array(repeating: [], count: numberOfMutationsToList)
         var otherLineagesList : String = "\nOther Lineages with Mutations:\n"
         let otherLineagesMaxNumberToList : Int = 5
@@ -4813,7 +5611,7 @@ final class VDB {
             }
             
             let counterString : String = "\(i+1)"
-            let mutNameString : String = ": \(m.0.string)"
+            let mutNameString : String = ": \(m.0.string(vdb: vdb))"
             let freqPlusString : String = "\(freqString)%"
             let counterStringSp : String = padString(counterString, length: 3, left: false)
             let mutNameStringSp : String = padString(mutNameString, length: 11, left: false)
@@ -4845,7 +5643,7 @@ final class VDB {
                 let tmpIsolate : Isolate = Isolate(country: "tmp", state: "tmp", date: Date(), epiIslNumber: 0, mutations: [m.0])
                 mutLine = proteinMutationsForIsolate(tmpIsolate,true,vdb:vdb,quiet:quiet)
             }
-            var aListItem : [CustomStringConvertible] = [m.0,freq]
+            var aListItem : [CustomStringConvertible] = [MutationStruct(mutation: m.0, vdb: vdb),freq]
             if vdb.listSpecificity {
                 aListItem.append(spec)
                 aListItem.append(linConsensusCount)
@@ -4914,7 +5712,7 @@ final class VDB {
             }
             print(vdb: vdb, "    mutations    # not in cluster    % in cluster")
             for (index,pair) in pairs.enumerated() {
-                let pairName : String = stringForMutations(pair.0)
+                let pairName : String = stringForMutations(pair.0, vdb: vdb)
                 let freqClusterString : String = String(format:"%5.3f",Double(pair.2)/Double(cluster.count)*100.0)
                 print(vdb: vdb, "\(index+1): \(pairName)  \(pair.1)  \(freqClusterString)%   \(pair.3)")
             }
@@ -4963,9 +5761,9 @@ final class VDB {
         }
         var mutationCounts : [(Mutation,Int)] = posMutationCounts.flatMap { $0 }
 */
-        let freqList : ListStruct = mutationFrequenciesInCluster(cluster, vdb: vdb, quiet: true)
+        let freqList : ListStruct = mutationFrequenciesInCluster(cluster, vdb: vdb, quiet: true, forConsensus: true)
         let freqInfo : [(Mutation,Double)] = freqList.items.map { item in
-            (item[0] as? Mutation ?? Mutation(wt: 0, pos: 0, aa: 0),item[1] as? Double ?? -1.0)
+            ((item[0] as? MutationStruct ?? MutationStruct(mutation: Mutation(wt: 0, pos: 0, aa: 0), vdb: vdb)).mutation,item[1] as? Double ?? -1.0)
         }.filter { $0.0.pos != 0 }
         var mutationCounts : [(Mutation,Int)] = freqInfo.map { ($0.0,Int($0.1*Double(cluster.count))) }
         mutationCounts.sort { $0.0.pos < $1.0.pos }
@@ -4985,7 +5783,7 @@ final class VDB {
             vdb.secondConsensus = mutationCounts.filter { $0.1 > half2 }.map { $0.0 }
         }
         if !quiet {
-            let conString = stringForMutations(con)
+            let conString = stringForMutations(con, vdb: vdb)
             print(vdb: vdb, "Consensus mutations \(conString) for set of size \(nf(cluster.count))")
             if vdb.nucleotideMode {
                 let tmpIsolate : Isolate = Isolate(country: "con", state: "tmp", date: Date(), epiIslNumber: 0, mutations: con)
@@ -5847,10 +6645,10 @@ plot
         numberToList = min(numberToList,maximumNumberOfIsolatesToList)
         for i in 0..<numberToList {
             if !vdb.printISL {
-                print(vdb: vdb, "\(i+1) : \(cluster[i].string(dateFormatter))")
+                print(vdb: vdb, "\(i+1) : \(cluster[i].string(dateFormatter, vdb: vdb))")
             }
             else {
-                print(vdb: vdb, "EPI_ISL_\(cluster[i].epiIslNumber), \(cluster[i].string(dateFormatter))")
+                print(vdb: vdb, "EPI_ISL_\(cluster[i].epiIslNumber), \(cluster[i].string(dateFormatter, vdb: vdb))")
             }
             if vdb.nucleotideMode {
                 VDB.proteinMutationsForIsolate(cluster[i],vdb:vdb)
@@ -5908,6 +6706,58 @@ plot
         }
         variants.sort { $0.3 < $1.3 }
         let all : [Isolate] = vdb.clusters[allIsolatesKeyword] ?? []
+        
+        print(vdb: vdb, "Counting variants ...")
+        var variantCountsMP : [[Int]] = Array(repeating: Array(repeating:0, count: variants.count), count: mpNumber)
+        var cuts : [Int] = [0]
+        let cutSize : Int = all.count/mpNumber
+        for i in 1..<mpNumber {
+            let cutPos : Int = i*cutSize
+            cuts.append(cutPos)
+        }
+        cuts.append(all.count)
+        var ranges : [(Int,Int)] = []
+        for i in 0..<mpNumber {
+            ranges.append((cuts[i],cuts[i+1]))
+        }
+        
+        func countVariants_MP_task(mp_index: Int) {
+            for i in ranges[mp_index].0..<ranges[mp_index].1 {
+                let iso : Isolate = all[i]
+                vLoop: for (vIndex,v) in variants.enumerated() {
+                    for lName in v.2 {
+                        if vdb.includeSublineages {
+                            if iso.pangoLineage.hasPrefix(lName) {
+                                if iso.pangoLineage.count != lName.count {
+                                    if iso.pangoLineage[iso.pangoLineage.index(iso.pangoLineage.startIndex, offsetBy: lName.count)] != "." {
+                                        continue
+                                    }
+                                }
+                                variantCountsMP[mp_index][vIndex] += 1
+                                break vLoop
+                            }
+                        }
+                        else {
+                            if lName == iso.pangoLineage {
+                                variantCountsMP[mp_index][vIndex] += 1
+                                break vLoop
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        DispatchQueue.concurrentPerform(iterations: mpNumber) { index in
+            countVariants_MP_task(mp_index: index)
+        }
+
+        for mp_index in 0..<mpNumber {
+            for vIndex in 0..<variants.count {
+                variants[vIndex].4 += variantCountsMP[mp_index][vIndex]
+            }
+        }
+/*
         for iso in all {
             vLoop: for (vIndex,v) in variants.enumerated() {
                 for lName in v.2 {
@@ -5931,6 +6781,7 @@ plot
                 }
             }
         }
+*/
         var table : [[String]] = []
         table.append(["WHO Name","Pango Lineage Name","Count"])
         let leftAlign : [Bool] = [true,true,false]
@@ -5946,6 +6797,7 @@ plot
         }
         else {
             print(vdb: vdb, "\(vdb.TColor.reset)\nConsensus mutations")
+            let insertWHO : Bool = !vdb.isCountry("WHO")
             vLoop: for (vIndex,v) in variants.enumerated() {
                 var cluster : [Isolate] = VDB.isolatesInLineage(v.2[0], inCluster: all, vdb: vdb, quiet: true)
                 if v.5 > 1 {
@@ -5957,15 +6809,19 @@ plot
                     print(vdb: vdb, "Error - count mismatch for \(v.0)  \(cluster.count)  \(v.4)")
                 }
                 let consensus : [Mutation] = VDB.consensusMutationsFor(cluster, vdb: vdb, quiet: true)
-                let mutString : String = VDB.stringForMutations(consensus)
+                let mutString : String = VDB.stringForMutations(consensus, vdb: vdb)
                 let spacer : String = "      "
                 let spaces : String = String(spacer.prefix(8-v.0.count))
                 print(vdb: vdb, "\(vdb.TColor.lightCyan)\(v.0)\(vdb.TColor.reset)\(spaces)\(mutString)")
-                let whoIsolate : Isolate = Isolate(country: "WHO", state: v.0, date: Date.distantFuture, epiIslNumber: missingAccessionNumberBase+vIndex, mutations: consensus, pangoLineage: v.1, age: 0)
-                vdb.isolates.append(whoIsolate)
+                if insertWHO {
+                    let whoIsolate : Isolate = Isolate(country: "WHO", state: v.0, date: Date.distantFuture, epiIslNumber: missingAccessionNumberBase+vIndex, mutations: consensus, pangoLineage: v.1, age: 0)
+                    vdb.isolates.append(whoIsolate)
+                }
             }
-            vdb.clusters[allIsolatesKeyword] = vdb.isolates
-            vdb.countries.append("WHO")
+            if insertWHO {
+                vdb.clusters[allIsolatesKeyword] = vdb.isolates
+                vdb.countries.append("WHO")
+            }
             print(vdb: vdb, "")
         }
         let list : List = List(type: .variants, command: vdb.currentCommand, items: listItems)
@@ -6107,7 +6963,7 @@ plot
             case 2:
                 return PMutation(mutString: mutString)
             default:
-                return Mutation(mutString: mutString)
+                return Mutation(mutString: mutString, vdb: vdb)
             }
         }
         mutationPs.sort { $0.pos < $1.pos }
@@ -6204,7 +7060,7 @@ plot
             }
         }
         else {
-            mutations = mutationsStrings.map { Mutation(mutString: $0) }
+            mutations = mutationsStrings.map { Mutation(mutString: $0, vdb: vdb) }
         }
         
         let mut_isolates : [Isolate]
@@ -6232,7 +7088,7 @@ plot
                 }
                 else {
                     if let plainMutation = mutationPs[0] as? Mutation {
-                        pMutationString = "Spike:\(plainMutation.string)"
+                        pMutationString = "Spike:\(plainMutation.string(vdb: vdb))"
                     }
                 }
                 var bestSet : [Mutation] = []
@@ -6254,11 +7110,11 @@ plot
                     else {
                         fracString = String(format: "%6.4f", frac*100.0)
                     }
-                    let mutationString = stringForMutations(nMutations)
+                    let mutationString = stringForMutations(nMutations, vdb: vdb)
                     print(vdb: vdb, "\(pMutationString)   \(mutationString)  \(fracString)%")
                 }
                 if coercePMutationString {
-                    print(vdb: vdb, "Mutation \(mutationPatternString) converted to \(stringForMutations(bestSet))   fraction: \(String(format: "%6.4f", bestFrac*100.0))")
+                    print(vdb: vdb, "Mutation \(mutationPatternString) converted to \(stringForMutations(bestSet, vdb: vdb))   fraction: \(String(format: "%6.4f", bestFrac*100.0))")
                     let tmpIsolate : Isolate = Isolate(country: "", state: "", date: Date(), epiIslNumber: 0, mutations: bestSet)
                     return [tmpIsolate]
                 }
@@ -6276,7 +7132,7 @@ plot
         if !quiet {
             listIsolates(mut_isolates, vdb: vdb,n: 10)
             let mut_consensus : [Mutation] = consensusMutationsFor(mut_isolates, vdb: vdb)
-            let mut_consensusString : String = mut_consensus.map { $0.string }.joined(separator: " ")
+            let mut_consensusString : String = mut_consensus.map { $0.string(vdb: vdb) }.joined(separator: " ")
             print(vdb: vdb, "\(mutationPatternString) consensus: \(mut_consensusString)")
             _ = listCountries(mut_isolates, vdb: vdb)
             _ = mutationFrequenciesInCluster(mut_isolates, vdb: vdb)
@@ -6508,13 +7364,13 @@ plot
             else {
                 lineageInfo = ""
             }
-            print(vdb: vdb, "\(i+1) : \(stringForMutations(mutationPatternCounts[i].0))   \(mutationPatternCounts[i].1)\(lineageInfo)")
+            print(vdb: vdb, "\(i+1) : \(stringForMutations(mutationPatternCounts[i].0, vdb: vdb))   \(mutationPatternCounts[i].1)\(lineageInfo)")
             if vdb.nucleotideMode {
                 printJoin(vdb: vdb, vdb.TColor.cyan, terminator:"")
                 VDB.proteinMutationsForIsolate(mutationPatternCounts[i].2[0],vdb:vdb)
                 printJoin(vdb: vdb, vdb.TColor.reset, terminator:"")
             }
-            let patternStruct : PatternStruct = PatternStruct(mutations: mutationPatternCounts[i].0, name: "pattern \(i+1)")
+            let patternStruct : PatternStruct = PatternStruct(mutations: mutationPatternCounts[i].0, name: "pattern \(i+1)", vdb: vdb)
             var aListItem : [CustomStringConvertible] = [patternStruct,mutationPatternCounts[i].1]
             if !lineageInfo.isEmpty {
                 aListItem.append(lineageInfo)
@@ -6533,7 +7389,6 @@ plot
     // prints information about the given cluster
     // list number of isolates having differnet number of mutations
     // prints average number of mutatations
-    // prints the average age of those from whom the isolates were collected
     class func infoForCluster(_ cluster: [Isolate], vdb:VDB) {
         var totalCount : Int = 0
         var mutCounts : [Int] = [] // Array(repeating: 0, count: maxMutations+1)
@@ -6563,8 +7418,49 @@ plot
             print(vdb: vdb, "     \(mc.0)       \(mc.1)")
         }
         print(vdb: vdb, "Average number of mutations: \(String(format:"%4.2f",averageCount))")
-        let (averAge,ageCount) : (Double,Int) = averageAge(cluster)
-        print(vdb: vdb, "Average age: \(String(format:"%4.2f",averAge)) (n=\(ageCount))")
+//        let (averAge,ageCount) : (Double,Int) = averageAge(cluster)
+//        print(vdb: vdb, "Average age: \(String(format:"%4.2f",averAge)) (n=\(ageCount))")
+    }
+    
+    // prints information about the given isolate
+    class func infoForIsolate(_ isolate: Isolate, vdb:VDB) {
+        print(vdb: vdb,"  Accession #:    \(isolate.epiIslNumber)")
+        print(vdb: vdb,"  Country:        \(isolate.country)")
+        print(vdb: vdb,"  Name:           \(isolate.state)")
+        print(vdb: vdb,"  Date:           \(dateFormatter.string(from: isolate.date))")
+        print(vdb: vdb,"  Lineage:        \(isolate.pangoLineage)")
+        print(vdb: vdb,"  # of Mutations: \(isolate.mutations.count)")
+        var numberOfDeleted : Int = 0
+        var numberOfDeletions : Int = 0
+        var lastDelPos : Int = -1
+        let dashCharacter : UInt8 = 45
+        for mutation in isolate.mutations {
+            if mutation.aa == dashCharacter {
+                if lastDelPos+1 != mutation.pos {
+                    numberOfDeletions += 1
+                }
+                numberOfDeleted += 1
+                lastDelPos = mutation.pos
+            }
+        }
+        print(vdb: vdb,"  # of Deletions: \(numberOfDeletions)")
+        print(vdb: vdb,"  Deleted \(vdb.nucleotideMode ? "bases: " : "residues:") \(numberOfDeleted)")
+        if vdb.nucleotideMode {
+            var nRegionStrings : [String] = []
+            var nCount : Int = 0
+            for i in stride(from: 0, to: isolate.nRegions.count, by: 2) {
+                nCount += Int(isolate.nRegions[i+1] - isolate.nRegions[i]) + 1
+                if isolate.nRegions[i] == isolate.nRegions[i+1] {
+                    nRegionStrings.append("\(isolate.nRegions[i])")
+                }
+                else {
+                    nRegionStrings.append("\(isolate.nRegions[i])-\(isolate.nRegions[i+1])")
+                }
+            }
+            print(vdb: vdb,"  N regions:      \(nRegionStrings.joined(separator: ", "))")
+            let nContent : Double = Double(nCount)/Double(VDBProtein.SARS2_nucleotide_refLength)
+            print(vdb: vdb,"  N content:      \(String(format:"%5.3f",nContent))")
+        }
     }
     
     // prints information about mutations at a given position
@@ -6576,8 +7472,21 @@ plot
         let mutations : [Mutation] = isolates.flatMap { $0.mutations }.filter { $0.pos == pos }
         let totalCount : Int = isolates.count
         var aaCounts : [Int] = Array(repeating: 0, count: 91)
+        var insCounts : [String:Int] = [:]
+        let insDict : [[UInt8]:UInt16] = vdb.insertionsDict[pos] ?? [:]
+        var revDict : [UInt16:String] = [:]
+        for (key,value) in insDict {
+            revDict[value] = String(bytes: key, encoding: .utf8) ?? ""
+        }
         for m in mutations {
-            aaCounts[Int(m.aa)] += 1
+            if m.wt < insertionChar {
+                aaCounts[Int(m.aa)] += 1
+            }
+            else {
+                let code16 : UInt16 = (UInt16(m.wt - insertionChar) << 8) + UInt16(m.aa)
+                let insertion : String = revDict[code16] ?? "missing insertion \(m.aa)"
+                insCounts[insertion, default: 0] += 1
+            }
         }
         var aaFreqs : [(String,Int,Double)] = []
         let mutCount : Int = aaCounts.reduce(0,+)
@@ -6591,6 +7500,9 @@ plot
                 aaFreqs.append((aa,aaCounts[i],freq))
             }
         }
+        for (key,value) in insCounts {
+            aaFreqs.append(("insertion \(key)",value,100.0*Double(value)/Double(totalCount)))
+        }
         aaFreqs.sort { $0.1 > $1.1 }
         for i in 0..<aaFreqs.count {
             let f : (String,Int,Double) = aaFreqs[i]
@@ -6598,7 +7510,12 @@ plot
                 print(vdb: vdb, "  \(wt)\(pos)    \(f.1)   \(String(format:"%4.2f",f.2))%")
             }
             else {
-                print(vdb: vdb, "  \(wt)\(pos)\(f.0)   \(f.1)   \(String(format:"%4.2f",f.2))%")
+                if f.0.prefix(3) != "ins" {
+                    print(vdb: vdb, "  \(wt)\(pos)\(f.0)   \(f.1)   \(String(format:"%4.2f",f.2))%")
+                }
+                else {
+                    print(vdb: vdb, "    \(f.0)   \(f.1)   \(String(format:"%4.2f",f.2))%")
+                }
             }
         }
     }
@@ -6781,7 +7698,7 @@ plot
         let sum : Int = cluster.reduce(0) { $0 + $1.mutations.count }
         return Double(sum)/Double(cluster.count)
     }
-
+/*
     // returns the average age and the number of isolates with age information
     class func averageAge(_ cluster: [Isolate]) -> (Double,Int) {
         var sum : Int = 0
@@ -6794,7 +7711,7 @@ plot
         }
         return (Double(sum)/Double(count),count)
     }
-    
+*/
     // returns the parent lineage name and the cluster isolates belonging to the parent lineage
     class func parentLineageFor(_ lineageName: String, inCluster isolates:[Isolate], vdb: VDB) -> (String,[Isolate]) {
         let lineageName : String = lineageName.uppercased()
@@ -6916,7 +7833,7 @@ plot
             else {
                 mutationsString += oldStyle
             }
-            mutationsString += mutation.string
+            mutationsString += mutation.string(vdb: vdb)
             if newMuation {
                 mutationsString += vdb.TColor.reset
             }
@@ -6967,7 +7884,7 @@ plot
         }
         
         let lineage : [Isolate] = isolates.filter { $0.pangoLineage ~~ lineageName }
-        if lineage.isEmpty {
+        if lineage.isEmpty && lineageName != "B.1.1.529" {
             return
         }
         let sublineages : [(String,[Isolate])] = sublineagesOf(lineageName, vdb: vdb)
@@ -6987,7 +7904,7 @@ plot
             lineageLabel = vdb.TColor.lightMagenta + "\(lineageName): " + vdb.TColor.reset
         }
         let consensusLineage : [Mutation] = consensusMutationsFor(lineage, vdb: vdb, quiet: true)
-        let consensusMutationsString = stringForMutations(consensusLineage)
+        let consensusMutationsString = stringForMutations(consensusLineage, vdb: vdb)
         print(vdb: vdb, "\(lineageLabel)Consensus mutations for lineage \(lineageName): \(consensusMutationsString)")
         if vdb.nucleotideMode {
             let tmpIsolate : Isolate = Isolate(country: "con", state: "tmp", date: Date(), epiIslNumber: 0, mutations: consensusLineage)
@@ -7010,7 +7927,7 @@ plot
                 else {
                     mutationsString += oldStyle
                 }
-                mutationsString += mutation.string
+                mutationsString += mutation.string(vdb: vdb)
                 if newMuation {
                     mutationsString += vdb.TColor.reset
                 }
@@ -7344,14 +8261,27 @@ plot
         }
         
         var mutString : String {
-            let aa : UInt8 = VDB.translateCodon(nucl)
-            if aa != wt && aa != 88 {   // not wt or aaX
-                let aaChar : Character = Character(UnicodeScalar(aa))
-                let wtChar : Character = Character(UnicodeScalar(wt))
-                return "\(wtChar)\(aaPos)\(aaChar)"
+            if wt < insertionChar {
+                let aa : UInt8 = VDB.translateCodon(nucl)
+                if aa != wt && aa != 88 {   // not wt or aaX
+                    let aaChar : Character = Character(UnicodeScalar(aa))
+                    let wtChar : Character = Character(UnicodeScalar(wt))
+                    return "\(wtChar)\(aaPos)\(aaChar)"
+                }
+                else {
+                    return ""
+                }
             }
             else {
-                return ""
+                var insertionString : String = "ins\(aaPos)"
+                for i in stride(from: 0, to: nucl.count, by: 3) {
+                    if i+3 <= nucl.count {
+                        let subCodon : [UInt8] = Array(nucl[i..<i+3])
+                        let aa : UInt8 = VDB.translateCodon(subCodon)
+                        insertionString.append(Character(UnicodeScalar(aa)))
+                    }
+                }
+                return insertionString
             }
         }
         
@@ -7395,7 +8325,7 @@ plot
                     let mutPos : Int = mut.pos - codonStart
                     var found : Bool = false
                     for j in 0..<codons.count {
-                        if codons[j].pos == pos && codons[j].protein == protein {
+                        if codons[j].pos == pos && codons[j].protein == protein && mut.wt < insertionChar {
                             var oldNucl : [UInt8] = codons[j].nucl
                             oldNucl[mutPos] = mut.aa
                             codons[j].nucl = oldNucl
@@ -7407,9 +8337,17 @@ plot
                         }
                     }
                     if !found {
-                        var orig : [UInt8] = Array(nuclRef[codonStart..<(codonStart+3)])
-                        let wt : UInt8 = translateCodon(orig)
-                        orig[mutPos] = mut.aa
+                        var orig : [UInt8]
+                        let wt : UInt8
+                        if mut.wt < insertionChar {
+                            orig = Array(nuclRef[codonStart..<(codonStart+3)])
+                            wt = translateCodon(orig)
+                            orig[mutPos] = mut.aa
+                        }
+                        else {
+                            orig = vdb.insertionForMutation(mut)
+                            wt = mut.wt
+                        }
                         var aCodon : Codon = Codon(protein: protein, nucl: orig, pos: pos, wt: wt)
                         if !oldMutations.contains(mut) {
                             aCodon.new = true
@@ -7494,16 +8432,21 @@ plot
             }
             else {
                 if codons.count == 1 {
-                    let aa : UInt8 = VDB.translateCodon(codons[0].nucl)
-                    let wtChar : Character = Character(UnicodeScalar(codons[0].wt))
-                    if codons[0].wt == aa {
-                        mutLine = "synonymous mutation in \(codons[0].protein)_\(wtChar)\(codons[0].aaPos)"
-                    }
-                    else if isolate.mutations.count == 1 && isolate.mutations[0].aa == 45 {
-                        mutLine = "part of deletion \(codons[0].protein)_\(wtChar)\(codons[0].aaPos)-"
+                    if isolate.mutations.count == 1 && isolate.mutations[0].wt >= insertionChar {
+                        mutLine = "insertion at position \(codons[0].protein)_\(codons[0].aaPos)"
                     }
                     else {
-                        mutLine = ""
+                        let aa : UInt8 = VDB.translateCodon(codons[0].nucl)
+                        let wtChar : Character = Character(UnicodeScalar(codons[0].wt))
+                        if codons[0].wt == aa {
+                            mutLine = "synonymous mutation in \(codons[0].protein)_\(wtChar)\(codons[0].aaPos)"
+                        }
+                        else if isolate.mutations.count == 1 && isolate.mutations[0].aa == 45 {
+                            mutLine = "part of deletion \(codons[0].protein)_\(wtChar)\(codons[0].aaPos)-"
+                        }
+                        else {
+                            mutLine = ""
+                        }
                     }
                 }
                 else {
@@ -7538,7 +8481,7 @@ plot
     // prints protein mutations for a given mutation pattern
     class func proteinMutationsForNuclPattern(_ mutations: [Mutation], vdb: VDB) {
         let tmpIsolate : Isolate = Isolate(country: "tmp", state: "tmp", date: Date(), epiIslNumber: 0, mutations: mutations)
-        let mutationString = stringForMutations(mutations)
+        let mutationString = stringForMutations(mutations, vdb: vdb)
         printJoin(vdb: vdb, "Mutation \(mutationString):", terminator:"")
         proteinMutationsForIsolate(tmpIsolate,true,vdb:vdb)
     }
@@ -7617,10 +8560,20 @@ plot
     }
     
     // save a defined cluster to a file
-    class func saveCluster(_ cluster: [Isolate], toFile fileName: String, vdb: VDB) {
+    class func saveCluster(_ cluster: [Isolate], toFile fileName: String, fasta: Bool, vdb: VDB) {
         var outString : String = ""
+        let printToStdOut : Bool = fileName.suffix(2) == "/-"
+        let ref : String = fasta ? String(bytes: vdb.referenceArray, encoding: .utf8) ?? "" : ""
         for isolate in cluster {
-            outString += isolate.vdbString(dateFormatter)
+            outString += isolate.vdbString(dateFormatter, includeLineage: printToStdOut, ref: ref, vdb: vdb)
+        }
+        if printToStdOut {
+            let batchSetting : Bool = vdb.batchMode
+            vdb.batchMode = true
+            print(vdb: vdb, outString)
+            print(vdb: vdb, "#END")
+            vdb.batchMode = batchSetting
+            return
         }
         do {
             try outString.write(toFile: fileName, atomically: true, encoding: .ascii)
@@ -7643,10 +8596,11 @@ plot
         let idFieldName : String = "Accession ID"
         let dateFieldName : String = "Collection date"
         let locationFieldName : String = "Location"
-        let ageFieldName : String = "Patient age"
+//        let ageFieldName : String = "Patient age"
         let pangoFieldName : String = "Pango lineage"
         let aaFieldName : String = "AA Substitutions"
-        let fields : [String] = [nameFieldName,idFieldName,pangoFieldName,ageFieldName,dateFieldName,locationFieldName,aaFieldName]
+//        let fields : [String] = [nameFieldName,idFieldName,pangoFieldName,ageFieldName,dateFieldName,locationFieldName,aaFieldName]
+        let fields : [String] = [nameFieldName,idFieldName,pangoFieldName,dateFieldName,locationFieldName,aaFieldName]
         var metadataString : String = ""
         for field in fields {
             metadataString += "\(field)\t"
@@ -7654,7 +8608,8 @@ plot
         metadataString += "\n"
         guard let cluster = vdb.clusters[clusterName] else { return }
         for iso in cluster {
-            metadataString += "\tEPI_ISL_\(iso.epiIslNumber)\t\(iso.pangoLineage)\t\(iso.age)\t\t\t\t\n"
+//            metadataString += "\tEPI_ISL_\(iso.epiIslNumber)\t\(iso.pangoLineage)\t\(iso.age)\t\t\t\t\n"
+            metadataString += "\tEPI_ISL_\(iso.epiIslNumber)\t\(iso.pangoLineage)\t\t\t\t\t\n"
         }
         do {
             try metadataString.write(toFile: fileName, atomically: true, encoding: .utf8)
@@ -7666,7 +8621,15 @@ plot
 
     // save a defined pattern to a file
     class func savePattern(_ pattern: [Mutation], toFile fileName: String, vdb: VDB) {
-        let outString : String = stringForMutations(pattern)
+        let outString : String = stringForMutations(pattern, vdb: vdb)
+        if fileName.suffix(2) == "/-" {
+            let batchSetting : Bool = vdb.batchMode
+            vdb.batchMode = true
+            print(vdb: vdb, outString)
+            print(vdb: vdb, "#END")
+            vdb.batchMode = batchSetting
+            return
+        }
         do {
             try outString.write(toFile: fileName, atomically: true, encoding: .ascii)
             print(vdb: vdb, "Pattern with \(pattern.count) mutations saved to \(fileName)")
@@ -7682,6 +8645,14 @@ plot
         var outString : String = "# List saved by vdb on \(dateString) from command \(list.command)\n"
         for item in list.items {
             outString += item.map { $0.description }.joined(separator: listSep) + "\n"
+        }
+        if fileName.suffix(2) == "/-" {
+            let batchSetting : Bool = vdb.batchMode
+            vdb.batchMode = true
+            print(vdb: vdb, outString)
+            print(vdb: vdb, "#END")
+            vdb.batchMode = batchSetting
+            return
         }
         do {
             try outString.write(toFile: fileName, atomically: true, encoding: .ascii)
@@ -7744,7 +8715,7 @@ plot
             }
             let newIsolate = Isolate(country: iso.country, state: iso.state, date: iso.date, epiIslNumber: iso.epiIslNumber, mutations: mutations)
             newIsolate.pangoLineage = iso.pangoLineage
-            newIsolate.age = iso.age
+//            newIsolate.age = iso.age
             trimmed.append(newIsolate)
         }
         let oldMutationCount : Int = vdb.isolates.reduce(0, { sum, iso in sum + iso.mutations.count })
@@ -8021,7 +8992,7 @@ plot
         print(vdb: vdb, "Making pango cluster")
         var pangoCluster : [Isolate] = []
         for (pLin,p) in vdb.pangoList {
-            let newIsolate : Isolate = Isolate(country: p.country, state: p.state, date: p.date, epiIslNumber: p.epiIslNumber, mutations: p.mutations, pangoLineage: pLin, age: p.age)
+            let newIsolate : Isolate = Isolate(country: p.country, state: p.state, date: p.date, epiIslNumber: p.epiIslNumber, mutations: p.mutations, pangoLineage: pLin)
             pangoCluster.append(newIsolate)
         }
         vdb.clusters["pango"] = pangoCluster
@@ -8161,7 +9132,7 @@ plot
         vdb.whoConsensusArray = []
         var allPango : [Isolate] = [] // vdb.pangoList.map { $0.1 }
         for (pLin,p) in vdb.pangoList {
-            let newIsolate : Isolate = Isolate(country: p.country, state: p.state, date: p.date, epiIslNumber: p.epiIslNumber, mutations: p.mutations, pangoLineage: pLin, age: p.age)
+            let newIsolate : Isolate = Isolate(country: p.country, state: p.state, date: p.date, epiIslNumber: p.epiIslNumber, mutations: p.mutations, pangoLineage: pLin)
             allPango.append(newIsolate)
         }
         let allSet : Set<Isolate> = Set(allPango)
@@ -8386,7 +9357,7 @@ plot
                 for pos in mp_range.0..<mp_range.1 {
                     let p : Isolate = cluster1[pos]
                     let (lNameCon,_) : (String,Int) = closestLineageCon(a: p.mutations)
-                    let newIsolate : Isolate = Isolate(country: p.country, state: p.state, date: p.date, epiIslNumber: p.epiIslNumber, mutations: p.mutations, pangoLineage: lNameCon, age: p.age)
+                    let newIsolate : Isolate = Isolate(country: p.country, state: p.state, date: p.date, epiIslNumber: p.epiIslNumber, mutations: p.mutations, pangoLineage: lNameCon)
                     newCluster.append(newIsolate)
                     if newCluster.count - lastPercentLocal > tenPercentLocal {
                         vdb.assignmentCount += newCluster.count - lastPercentLocal
@@ -8455,7 +9426,7 @@ plot
                 print(vdb: vdb, "Lineage assignment patterns for \(lName):")
                 func patternString(_ mutationSet: Set<Mutation>) -> String {
                     let mArray : [Mutation] = Array(mutationSet).sorted { $0.pos < $1.pos }
-                    return stringForMutations(mArray)
+                    return stringForMutations(mArray, vdb: vdb)
                 }
                 for pattern in lInfo {
                     print(vdb: vdb, "  \(patternString(pattern.0))    Match Count: \(pattern.1)   Char. Pattern: \(patternString(pattern.2))")
@@ -8768,14 +9739,23 @@ plot
     // MARK: - Utility methods
     
     // returns a string description of a mutation pattern
-    class func stringForMutations(_ mutations: [Mutation]) -> String {
+    class func stringForMutations(_ mutations: [Mutation], vdb: VDB) -> String {
         var mutationsString : String = ""
         for mutation in mutations {
-            mutationsString += mutation.string + " "
+            mutationsString += mutation.string(vdb: vdb) + " "
         }
         return mutationsString
     }
 
+    // returns a string description of a mutation pattern without insertion sequences
+    class func stringForMutationsWithoutInsertions(_ mutations: [Mutation]) -> String {
+        var mutationsString : String = ""
+        for mutation in mutations {
+            mutationsString += mutation.stringWithoutInsertion() + " "
+        }
+        return mutationsString
+    }
+    
     // returns a string description of a PMutation pattern
     class func stringForPMutations(_ mutations: [PMutation]) -> String {
         var mutationsString : String = ""
@@ -8786,9 +9766,9 @@ plot
     }
     
     // converts a string to a mutation pattern
-    class func mutationsFromString(_ mutationPatternString: String) -> [Mutation] {
+    class func mutationsFromString(_ mutationPatternString: String, vdb: VDB) -> [Mutation] {
         let mutationsStrings : [String] = mutationPatternString.components(separatedBy: CharacterSet(charactersIn: " ,")).filter { $0.count > 0}
-        var mutations : [Mutation] = mutationsStrings.map { Mutation(mutString: $0) }
+        var mutations : [Mutation] = mutationsStrings.map { Mutation(mutString: $0, vdb: vdb) }
         mutations.sort { $0.pos < $1.pos }
         return mutations
     }
@@ -8806,7 +9786,7 @@ plot
                     }
                 }
             if !coercePMutation {
-                mutations.append(Mutation(mutString: mutationString))
+                mutations.append(Mutation(mutString: mutationString, vdb: vdb))
             }
             else {
                 mutations.append(contentsOf: coercePMutationStringToMutations(mutationString, vdb: vdb))
@@ -8841,6 +9821,31 @@ plot
                 if subparts.count > 2 {
                     return false
                 }
+            }
+            if part.prefix(3) == "INS" {
+                if part.count > 4 {
+                    var firstNumberPos : Int = 0
+                    var lastNumberPos : Int = 0
+                    for (charIndex,char) in part.enumerated() {
+                        if char >= "0" && char <= "9" {
+                            if firstNumberPos == 0 {
+                                firstNumberPos = charIndex
+                            }
+                            lastNumberPos = charIndex
+                        }
+                    }
+                    if firstNumberPos == 0 || lastNumberPos == part.count - 1 {
+                        return false
+                    }
+                    let pos : Int = Int(String(Array(part)[firstNumberPos...lastNumberPos])) ?? 0
+                    if pos <= 0 || pos > vdb.refLength {
+                        return false
+                    }
+                }
+                else {
+                    return false
+                }
+                continue
             }
             let firstChar : UInt8 = part.first?.asciiValue ?? 0
             let lastChar : UInt8 = part.last?.asciiValue ?? 0
@@ -8902,7 +9907,7 @@ plot
         }
         if let list = vdb.lists[parts[0]] {
             if let index = Int(parts[1]) {
-                let index2 : Int = index - 1
+                let index2 : Int = index - vdb.arrayBase
                 if index2 >= 0 && index2 < list.items.count {
                     return list.items[index2]
                 }
@@ -8916,7 +9921,7 @@ plot
         if let listItem : [CustomStringConvertible] = listItemFromString(string, vdb: vdb) {
             if !listItem.isEmpty {
                 if let patternStruct : PatternStruct = listItem[0] as? PatternStruct {
-                    var patternString : String = stringForMutations(patternStruct.mutations)
+                    var patternString : String = stringForMutations(patternStruct.mutations, vdb: vdb)
                     if patternString.last == " " {
                         patternString = String(patternString.dropLast())
                     }
@@ -8929,9 +9934,25 @@ plot
         return nil
     }
     
-    // returns whether a given string appears to be a single mutation string
+    // returns whether a given string appears to be a single mutation string, used in variable name validation
     class func isPatternLike(_ string: String) -> Bool {
         let part : String = string.uppercased()
+        if part.prefix(3) == "INS" {
+            if part.count > 4 {
+                var firstNumberPos : Int = 0
+                var lastNumberPos : Int = 0
+                for (charIndex,char) in part.enumerated() {
+                    if char >= "0" && char <= "9" {
+                        if firstNumberPos == 0 {
+                            firstNumberPos = charIndex
+                        }
+                        lastNumberPos = charIndex
+                    }
+                }
+                return firstNumberPos > 2 && lastNumberPos < part.count - 1
+            }
+            return false
+        }
         let firstChar : UInt8 = part.first?.asciiValue ?? 0
         let lastChar : UInt8 = part.last?.asciiValue ?? 0
         let middle : String = String(part.dropFirst().dropLast())
@@ -9144,6 +10165,7 @@ plot
     var nucleotideMode : Bool = false           // set when data is loaded
     var refLength : Int = VDBProtein.SARS2_Spike_protein_refLength
     var referenceArray : [UInt8] = []
+    var insertionsDict : AtomicDict = AtomicDict<Int,Dictionary<[UInt8],UInt16>>()
     var lastExpr : Expr? = nil
     var lineageGroups : [[String]] = []
     var displayWeeklyTrends : Bool = false      // temporary flag used to control trends command
@@ -9191,6 +10213,7 @@ plot
     static let defaultListSpecificity : Bool = false
     static let defaultConsensusPercentage : Int = 50
     static let defaultCaseMatching : CaseMatching = .all
+    static let defaultArrayBase : Int = 0
     
     // user adjustable switches:
     var debug : Bool = defaultDebug                               // print debug messages
@@ -9212,6 +10235,7 @@ plot
     var maxMutationsInFreqList : Int = defaultMaxMutationsInFreqList    // number of mutations to freq list
     var consensusPercentage : Int = defaultConsensusPercentage    // mutation frequency must exceed this to be included in consensus pattern
     var caseMatching : CaseMatching = defaultCaseMatching         // case matching used by the 'named' command
+    var arrayBase : Int = defaultArrayBase                        // zero- or one-based arrays
 
     // metadata information
     var metadata : [UInt8] = []
@@ -9374,6 +10398,7 @@ plot
             self.nucleotideMode = true
             self.refLength = VDBProtein.SARS2_nucleotide_refLength
             self.referenceArray = VDB.nucleotideReference(vdb: self, firstCall: true)
+            VDB.loadNregionsData(fileName, isolates: isolates)
         }
         else {
             self.refLength = VDBProtein.SARS2_Spike_protein_refLength
@@ -9456,7 +10481,7 @@ plot
         let keys : [String] = Array(patterns.keys).sorted()
         for key in keys {
             if let value = patterns[key] {
-                let mutationsString : String = VDB.stringForMutations(value)
+                let mutationsString : String = VDB.stringForMutations(value, vdb: self)
                 var info = ""
                 if let note = patternNotes[key] {
                     info += " (\(note))"
@@ -9588,6 +10613,7 @@ plot
         maxMutationsInFreqList = VDB.defaultMaxMutationsInFreqList
         consensusPercentage = VDB.defaultConsensusPercentage
         caseMatching = VDB.defaultCaseMatching
+        arrayBase = VDB.defaultArrayBase
     }
     
     // prints the current state of a switch
@@ -9619,12 +10645,13 @@ plot
         print(vdb: self, "\(maxMutationsInFreqListKeyword) = \(maxMutationsInFreqList)")
         print(vdb: self, "\(consensusPercentageKeyword) = \(consensusPercentage)")
         print(vdb: self, "\(caseMatchingKeyword) = \(caseMatching)")
+        print(vdb: self, "\(arrayBaseKeyword) = \(arrayBase)")
     }
     
     func offerCompletions(_ offer: Bool, _ ln: LineNoise?) {
         if offer {
             var countriesStates : [String] = []
-            var completions : [String] = [beforeKeyword,afterKeyword,namedKeyword,lineageKeyword,consensusKeyword,patternsKeyword,countriesKeyword,statesKeyword,trendsKeyword,monthlyKeyword,weeklyKeyword,"clusters","proteins","history","settings","includeSublineages","excludeSublineages","simpleNuclPatterns","excludeNFromCounts","sixel","trendGraphs","stackGraphs","completions","displayTextWithColor",minimumPatternsCountKeyword,trendsLineageCountKeyword,containingKeyword,"group","reset",variantsKeyword,maxMutationsInFreqListKeyword,"listSpecificity",consensusPercentageKeyword,"sublineages",caseMatchingKeyword]
+            var completions : [String] = [beforeKeyword,afterKeyword,namedKeyword,lineageKeyword,consensusKeyword,patternsKeyword,countriesKeyword,statesKeyword,trendsKeyword,monthlyKeyword,weeklyKeyword,"clusters","proteins","history","settings","includeSublineages","excludeSublineages","simpleNuclPatterns","excludeNFromCounts","sixel","trendGraphs","stackGraphs","completions","displayTextWithColor",minimumPatternsCountKeyword,trendsLineageCountKeyword,containingKeyword,"group","reset",variantsKeyword,maxMutationsInFreqListKeyword,"listSpecificity",consensusPercentageKeyword,"sublineages",caseMatchingKeyword,arrayBaseKeyword]
             completions.append(contentsOf:Array(VDB.whoVariants.keys))
             if self.countriesStates.isEmpty {
                 var countrySet : Set<String> = []
@@ -9714,6 +10741,53 @@ plot
         }
     }
     
+    func insertionCodeForPosition(_ pos: Int, withInsertion insertion:[UInt8]) -> (UInt8,UInt8) {
+        var code16 : UInt16 = UInt16(insertionCodeStart)
+//      var insertionsDict : AtomicDict = AtomicDict<Int,Dictionary<[UInt8],UInt16>>()
+        if let existingCode = insertionsDict[pos]?[insertion] {
+            code16 = existingCode
+        }
+        else {
+            // This copies and replaces the existing dictionary to add a new code.
+            // It would be more performant to insert into the existing dictionary.
+            // This will require a second version of AtomicDict that knows its value type is a dictionary.
+            if var existingDict = insertionsDict[pos] {
+                if let maxValue = existingDict.values.max() {
+                    code16 = maxValue + 1
+                    existingDict[insertion] = code16
+                    insertionsDict[pos] = existingDict
+                }
+            }
+            else {
+                insertionsDict[pos] = [insertion:code16]
+            }
+        }
+        let code : UInt8 = UInt8(code16 & 0x00ff)
+        let shift : UInt8 = UInt8(code16 >> 8)
+        return (code,shift)
+    }
+    
+    func insertionStringForMutation(_ m: Mutation) -> String {
+        if let insertion : String = String(bytes: insertionForMutation(m), encoding: .utf8) {
+            return insertion
+        }
+        return ""
+    }
+
+    func insertionForMutation(_ m: Mutation) -> [UInt8] {
+        if m.wt >= insertionChar {
+            let code16 : UInt16 = (UInt16(m.wt - insertionChar) << 8) + UInt16(m.aa)
+            if let insDict : [[UInt8]:UInt16] = insertionsDict[m.pos] {
+                for (key,value) in insDict {
+                    if value == code16 {
+                        return key
+                    }
+                }
+            }
+        }
+        return []
+    }
+    
     // MARK: - main VDB methods
     
     // called by run() - loads sequence data, metadata, and built-in patterns
@@ -9751,6 +10825,7 @@ plot
             print(vdb: self, "   Loading database from file \(fileNameToDisplay) ... ", terminator:"")
             clusters[allIsolatesKeyword] = existingVDB.isolates
             isolates = existingVDB.isolates
+            insertionsDict = existingVDB.insertionsDict.copyObject()
             print(vdb: self, "  \(nf(self.isolates.count)) isolates loaded")
             self.nucleotideMode = existingVDB.nucleotideMode
             self.refLength = existingVDB.refLength
@@ -9809,12 +10884,12 @@ plot
             }
         }
         
-        let tripleMutation : [Mutation] = VDB.mutationsFromString("N501Y E484K K417N")
-        let ukVariant : [Mutation] = VDB.mutationsFromString("H69- V70- Y144- N501Y A570D D614G P681H T716I S982A D1118H")
-        let saVariant : [Mutation] = VDB.mutationsFromString("L18F D80A D215G L242- A243- L244- R246I K417N E484K N501Y D614G A701V")
-        let brVariant : [Mutation] = VDB.mutationsFromString("L18F T20N P26S D138Y R190S K417T E484K N501Y D614G H655Y T1027I V1176F")
-        let caVariant : [Mutation] = VDB.mutationsFromString("S13I W152C L452R D614G")
-        let nyVariant : [Mutation] = VDB.mutationsFromString("L5F T95I D253G E484K D614G A701V")
+        let tripleMutation : [Mutation] = VDB.mutationsFromString("N501Y E484K K417N", vdb: self)
+        let ukVariant : [Mutation] = VDB.mutationsFromString("H69- V70- Y144- N501Y A570D D614G P681H T716I S982A D1118H", vdb: self)
+        let saVariant : [Mutation] = VDB.mutationsFromString("L18F D80A D215G L242- A243- L244- R246I K417N E484K N501Y D614G A701V", vdb: self)
+        let brVariant : [Mutation] = VDB.mutationsFromString("L18F T20N P26S D138Y R190S K417T E484K N501Y D614G H655Y T1027I V1176F", vdb: self)
+        let caVariant : [Mutation] = VDB.mutationsFromString("S13I W152C L452R D614G", vdb: self)
+        let nyVariant : [Mutation] = VDB.mutationsFromString("L5F T95I D253G E484K D614G A701V", vdb: self)
         let ukPatternName : String = "b117"
         let saPatternName : String = "b1351"
         let brPatternName : String = "p1"
@@ -9857,6 +10932,7 @@ plot
             line = line.replacingOccurrences(of: op, with: " "+op+" ")
         }
         line = line.replacingOccurrences(of: " =  = ", with: " == ")
+        line = line.replacingOccurrences(of: ".. < ", with: "..<")
         if line.contains("-") {
             var changed : Bool = true
             while changed {
@@ -9883,6 +10959,9 @@ plot
                                         continue
                                     }
                                 }
+                            }
+                            if i < chars.count-2 && chars[i-1] >= "0" && chars[i-1] <= "9" && chars[i+1] >= "0" && chars[i+1] <= "9" && line.contains("[") && line.contains("]") {
+                                continue
                             }
                         }
                         if line.replacingOccurrences(of: "-", with: "").count == line.count - 2 {
@@ -9977,8 +11056,9 @@ plot
     
     // converts input line into a sequence of strings and handles aliases
     func processLine( _ line: String) -> [String] {
-        var parts : [String] = line.components(separatedBy: " ")
-
+//        var parts : [String] = line.components(separatedBy: " ")
+        var parts : [String] = line.split(separator: " ").map { String( $0) }
+        
         if let diffIndex = parts.firstIndex(where: { $0 ~~ diffKeyword }) {
             if diffIndex < parts.count-1 {
                 var splitsFound : Int = 0
@@ -10307,7 +11387,7 @@ plot
                 }
             }
         }
-        if parts.count == 2 && [minimumPatternsCountKeyword,trendsLineageCountKeyword,maxMutationsInFreqListKeyword,consensusPercentageKeyword,caseMatchingKeyword].contains(where: { $0 ~~ parts[0] }) {
+        if parts.count == 2 && [minimumPatternsCountKeyword,trendsLineageCountKeyword,maxMutationsInFreqListKeyword,consensusPercentageKeyword,caseMatchingKeyword,arrayBaseKeyword].contains(where: { $0 ~~ parts[0] }) {
             parts.insert("=", at: 1)
         }
         if debug {
@@ -10619,13 +11699,26 @@ plot
         if topLevel && tokens.count == 1 {
             switch tokens[0] {
             case let .textBlock(identifier):
+                if identifier.last == "]" {
+                    let parts : [String] = identifier.dropLast().components(separatedBy: "[")
+                    if parts.count == 2 {
+                        if let cluster = clusters[parts[0]], let indexTmp = Int(parts[1]) {
+                            let index = indexTmp - arrayBase
+                            if index >= 0 && index < cluster.count {
+                                print(vdb: self, "Isolate \(index+1) of \(nf(cluster.count)) from cluster \(parts[0])")
+                                VDB.infoForIsolate(cluster[index], vdb: self)
+                                return ([],nil)
+                            }
+                        }
+                    }
+                }
                 if let cluster = clusters[identifier] {
                     print(vdb: self, "\(identifier) = cluster of \(nf(cluster.count)) isolates")
                     VDB.infoForCluster(cluster, vdb: self)
                     return ([],nil)
                 }
                 else if let pattern = patterns[identifier] {
-                    let patternString = VDB.stringForMutations(pattern)
+                    let patternString = VDB.stringForMutations(pattern, vdb: self)
                     print(vdb: self, "\(identifier) = mutation pattern \(patternString)")
                     if nucleotideMode {
                         let tmpIsolate : Isolate = Isolate(country: "con", state: "", date: Date(), epiIslNumber: 0, mutations: pattern)
@@ -11392,6 +12485,7 @@ trendsLineageCount = <n>
 maxMutationsInFreqList = <n>
 consensusPercentage = <n>
 caseMatching = all/exact/uppercase
+arrayBase = <0 or 1>
 
 """)
             }
@@ -11463,6 +12557,7 @@ trendsLineageCount = <n>
 maxMutationsInFreqList = <n>
 consensusPercentage = <n>
 caseMatching = all/exact/uppercase
+arrayBase = <0 or 1>
 
 """)
             }
@@ -11687,8 +12782,18 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
                     clusters[allIsolatesKeyword] = isolates
                 }
             case 2:
-                let clusterName : String = loadCmdParts[0]
+                var clusterName : String = loadCmdParts[0]
                 let fileName : String = loadCmdParts[1]
+                if clusterName == "importX" {
+                    var importNumber : Int = 1
+                    while true {
+                        clusterName = "import\(importNumber)"
+                        if clusters[clusterName] == nil {
+                            break
+                        }
+                        importNumber += 1
+                    }
+                }
                 if patterns[clusterName] == nil {
                     VDB.loadCluster(clusterName, fromFile: fileName, vdb: self)
                 }
@@ -11697,14 +12802,18 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
             }
         case _ where lowercaseLine.hasPrefix("save ") && !serverMode:
             let names : String = line.replacingOccurrences(of: "save ", with: "", options: .caseInsensitive, range: nil)
-            let saveCmdParts : [String] = names.components(separatedBy: " ")
+            var saveCmdParts : [String] = names.components(separatedBy: " ")
+            let fasta : Bool = saveCmdParts[0].lowercased() == "fasta"
+            if fasta {
+                saveCmdParts.removeFirst()
+            }
             switch saveCmdParts.count {
             case 2,3:
                 let clusterName : String = saveCmdParts[0]
                 let fileName : String = "\(basePath)/\(saveCmdParts[1])"
                 if let cluster = clusters[clusterName] {
                     if !cluster.isEmpty {
-                        VDB.saveCluster(cluster, toFile: fileName, vdb:self)
+                        VDB.saveCluster(cluster, toFile: fileName, fasta: fasta, vdb:self)
                         if saveCmdParts.count == 3 && !saveCmdParts[2].isEmpty {
                             VDB.writeMetadataForCluster(clusterName, metadataFileName: saveCmdParts[2], vdb: self)
                         }
@@ -12360,6 +13469,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
         let maxMutationsInFreqListSetting : Int = maxMutationsInFreqList
         let consensusPercentageSetting : Int = consensusPercentage
         let caseMatchingSetting : CaseMatching = caseMatching
+        let arrayBaseSetting : Int = arrayBase
         
         let existingClusterNames : [String] = Array(clusters.keys)
 /*
@@ -12550,6 +13660,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
         maxMutationsInFreqList = maxMutationsInFreqListSetting
         consensusPercentage = consensusPercentageSetting
         caseMatching = caseMatchingSetting
+        arrayBase = arrayBaseSetting
         
         for key in clusters.keys {
             if !existingClusterNames.contains(key) {
@@ -12583,6 +13694,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
         let maxMutationsInFreqListSetting : Int = maxMutationsInFreqList
         let consensusPercentageSetting : Int = consensusPercentage
         let caseMatchingSetting : CaseMatching = caseMatching
+        let arrayBaseSetting : Int = arrayBase
 
         let existingClusterNames : [String] = Array(clusters.keys)
         reset()
@@ -12701,6 +13813,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
         maxMutationsInFreqList = maxMutationsInFreqListSetting
         consensusPercentage = consensusPercentageSetting
         caseMatching = caseMatchingSetting
+        arrayBase = arrayBaseSetting
 
         for key in clusters.keys {
             if !existingClusterNames.contains(key) {
@@ -13180,7 +14293,7 @@ indirect enum Expr {
                 case let .Pattern(pattern):
                     if identifierAvailable(identifier: identifier, variableType: .PatternVar) {
                         vdb.patterns[identifier] = pattern
-                        print(vdb: vdb, "Pattern \(identifier) defined as \(VDB.stringForMutations(pattern))")
+                        print(vdb: vdb, "Pattern \(identifier) defined as \(VDB.stringForMutations(pattern, vdb: vdb))")
                     }
                     break
                 case let .Identifier(identifier2):
@@ -13214,6 +14327,17 @@ indirect enum Expr {
                         }
                         break
                     }
+                    if identifier ~~ arrayBaseKeyword && vdb.isNumber(identifier2) {
+                        let newValue : Int = Int(identifier2) ?? VDB.defaultArrayBase
+                        if newValue == 0 || newValue == 1 {
+                            vdb.arrayBase = newValue
+                            print(vdb: vdb, "\(arrayBaseKeyword) set to \(vdb.arrayBase)")
+                        }
+                        else {
+                            print(vdb: vdb, "Error - \(arrayBaseKeyword) must be 0 or 1. The current value is \(vdb.arrayBase)")
+                        }
+                        break
+                    }
                     if VDB.isPattern(identifier2, vdb: vdb) {
                         var coercePMutation : Bool = false
                         if vdb.nucleotideMode {
@@ -13226,7 +14350,7 @@ indirect enum Expr {
                         }
                         let mutList : [Mutation]
                         if !coercePMutation {
-                            mutList = VDB.mutationsFromString(identifier2)
+                            mutList = VDB.mutationsFromString(identifier2, vdb: vdb)
                         }
                         else {
                             mutList = VDB.mutationsFromStringCoercing(identifier2, vdb: vdb)
@@ -13234,7 +14358,7 @@ indirect enum Expr {
                         if (mutList.count == identifier2.components(separatedBy: " ").count || coercePMutation) && mutList.count > 0 {
                             if identifierAvailable(identifier: identifier, variableType: .PatternVar) {
                                 vdb.patterns[identifier] = mutList
-                                print(vdb: vdb, "Pattern \(identifier) defined as \(VDB.stringForMutations(mutList))")
+                                print(vdb: vdb, "Pattern \(identifier) defined as \(VDB.stringForMutations(mutList, vdb: vdb))")
                             }
                         }
                     }
@@ -13262,20 +14386,20 @@ indirect enum Expr {
                                     var shift : Int = 0
                                     var rParts : [String] = parts[1].components(separatedBy: "...")
                                     if rParts.count == 1 {
-                                        rParts = parts[1].components(separatedBy: "..")
-                                    }
-                                    if rParts.count == 1 {
-                                        rParts = parts[1].components(separatedBy: "-")
-                                    }
-                                    if rParts.count == 1 {
                                         rParts = parts[1].components(separatedBy: "..<")
                                         if rParts.count == 2 {
                                             shift = 1
                                         }
                                     }
+                                    if rParts.count == 1 {
+                                        rParts = parts[1].components(separatedBy: "..")
+                                    }
+                                    if rParts.count == 1 {
+                                        rParts = parts[1].components(separatedBy: "-")
+                                    }
                                     if rParts.count == 2, let r0 = Int(rParts[0]), let r1 = Int(rParts[1]) {
-                                        let start : Int = r0-1
-                                        let end : Int = r1-shift-1
+                                        let start : Int = r0-vdb.arrayBase
+                                        let end : Int = r1-shift-vdb.arrayBase
                                         if start >= 0 && start <= end {
                                             closedRange = start...end
                                             listID = parts[0]
@@ -13409,8 +14533,15 @@ indirect enum Expr {
                 let cluster1 : [Isolate] = evalExp1.clusterFromExpr(vdb: vdb)
                 let cluster2 : [Isolate] = evalExp2.clusterFromExpr(vdb: vdb)
                 if cluster1.count != 0 || cluster2.count != 0 {
-                    var plusCluster : Set<Isolate> = Set(cluster1)
-                    plusCluster.formUnion(cluster2)
+                    var plusCluster : Set<Isolate>
+                    if cluster1.count > cluster2.count {
+                        plusCluster = Set(cluster1)
+                        plusCluster.formUnion(cluster2)
+                    }
+                    else {
+                        plusCluster = Set(cluster2)
+                        plusCluster.formUnion(cluster1)
+                    }
                     print(vdb: vdb, "Sum of clusters has \(nf(plusCluster.count)) isolates")
                     return Expr.Cluster(Array(plusCluster))
                 }
@@ -13558,7 +14689,7 @@ indirect enum Expr {
                 for item in list.items {
                     if let oldClusterStruct : ClusterStruct = item[0] as? ClusterStruct {
                         let pattern = VDB.consensusMutationsFor(oldClusterStruct.isolates, vdb: vdb)
-                        let patternStruct : PatternStruct = PatternStruct(mutations: pattern, name: oldClusterStruct.name)
+                        let patternStruct : PatternStruct = PatternStruct(mutations: pattern, name: oldClusterStruct.name, vdb: vdb)
                         let aListItem : [CustomStringConvertible] = [oldClusterStruct.name,patternStruct]
                         listItems.append(aListItem)
                     }
@@ -13583,7 +14714,7 @@ indirect enum Expr {
                         let (pattern,patternList) : ([Mutation],List) = VDB.frequentMutationPatternsInCluster(oldClusterStruct.isolates, vdb: vdb, n: n)
                         let aListItem : [CustomStringConvertible]
                         if n == 0 {
-                            let patternStruct : PatternStruct = PatternStruct(mutations: pattern, name: oldClusterStruct.name)
+                            let patternStruct : PatternStruct = PatternStruct(mutations: pattern, name: oldClusterStruct.name, vdb: vdb)
                             aListItem = [oldClusterStruct.name,patternStruct]
                         }
                         else {
@@ -13637,7 +14768,7 @@ indirect enum Expr {
                 }
             }
             let pattern = exprPattern.patternFromExpr(vdb: vdb)
-            let patternString = VDB.stringForMutations(pattern)
+            let patternString = VDB.stringForMutations(pattern, vdb: vdb)
             let cluster2 = VDB.isolatesContainingMutations(patternString, inCluster: cluster, vdb: vdb, quiet: true, negate: false, n: n)
             return Expr.Cluster(cluster2)
         case let .NotContaining(exprCluster, exprPattern, n):
@@ -13658,7 +14789,7 @@ indirect enum Expr {
                 }
             }
             let pattern = exprPattern.patternFromExpr(vdb: vdb)
-            let patternString = VDB.stringForMutations(pattern)
+            let patternString = VDB.stringForMutations(pattern, vdb: vdb)
             let cluster2 = VDB.isolatesContainingMutations(patternString, inCluster: cluster, vdb: vdb, quiet: true, negate: true, n: n)
             return Expr.Cluster(cluster2)
         case let .Before(exprCluster,date):
@@ -13777,13 +14908,13 @@ indirect enum Expr {
             func listForEquality() -> Expr {
                 print(vdb: vdb, "\(name1) and \(name2) are identical")
                 var listItems : [[CustomStringConvertible]] = []
-                let patternStruct12 : PatternStruct = PatternStruct(mutations: [], name: name12)
+                let patternStruct12 : PatternStruct = PatternStruct(mutations: [], name: name12, vdb: vdb)
                 let aListItem12 : [CustomStringConvertible] = [patternStruct12,name12]
                 listItems.append(aListItem12)
-                let patternStruct21 : PatternStruct = PatternStruct(mutations: [], name: name21)
+                let patternStruct21 : PatternStruct = PatternStruct(mutations: [], name: name21, vdb: vdb)
                 let aListItem21 : [CustomStringConvertible] = [patternStruct21,name21]
                 listItems.append(aListItem21)
-                let patternStruct12Shared : PatternStruct = PatternStruct(mutations: pattern1 ?? [], name: nameShared)
+                let patternStruct12Shared : PatternStruct = PatternStruct(mutations: pattern1 ?? [], name: nameShared, vdb: vdb)
                 let aListItem12Shared : [CustomStringConvertible] = [patternStruct12Shared,nameShared]
                 listItems.append(aListItem12Shared)
                 let list : List = ListStruct(type: .patterns, command: vdb.currentCommand, items: listItems, baseCluster: [])
@@ -13853,13 +14984,13 @@ indirect enum Expr {
                     }
                 }
                 print(vdb: vdb, "\(name1) - \(name2) has \(minusPattern12.count) mutations:")
-                let patternString12 = VDB.stringForMutations(minusPattern12)
+                let patternString12 = VDB.stringForMutations(minusPattern12, vdb: vdb)
                 print(vdb: vdb, "\(patternString12)")
                 if vdb.nucleotideMode {
                     let tmpIsolate : Isolate = Isolate(country: "con", state: "", date: Date(), epiIslNumber: 0, mutations: minusPattern12)
                     VDB.proteinMutationsForIsolate(tmpIsolate,vdb:vdb)
                 }
-                let patternStruct12 : PatternStruct = PatternStruct(mutations: minusPattern12, name: name12)
+                let patternStruct12 : PatternStruct = PatternStruct(mutations: minusPattern12, name: name12, vdb: vdb)
                 let aListItem12 : [CustomStringConvertible] = [patternStruct12,name12]
                 listItems.append(aListItem12)
                 
@@ -13870,13 +15001,13 @@ indirect enum Expr {
                     }
                 }
                 print(vdb: vdb, "\(name2) - \(name1) has \(minusPattern21.count) mutations:")
-                let patternString21 = VDB.stringForMutations(minusPattern21)
+                let patternString21 = VDB.stringForMutations(minusPattern21, vdb: vdb)
                 print(vdb: vdb, "\(patternString21)")
                 if vdb.nucleotideMode {
                     let tmpIsolate : Isolate = Isolate(country: "con", state: "", date: Date(), epiIslNumber: 0, mutations: minusPattern21)
                     VDB.proteinMutationsForIsolate(tmpIsolate,vdb:vdb)
                 }
-                let patternStruct21 : PatternStruct = PatternStruct(mutations: minusPattern21, name: name21)
+                let patternStruct21 : PatternStruct = PatternStruct(mutations: minusPattern21, name: name21, vdb: vdb)
                 let aListItem21 : [CustomStringConvertible] = [patternStruct21,name21]
                 listItems.append(aListItem21)
 
@@ -13887,13 +15018,13 @@ indirect enum Expr {
                     }
                 }
                 print(vdb: vdb, "\(name1) and \(name2) share \(intersectionPattern.count) mutations:")
-                let patternString12Shared = VDB.stringForMutations(intersectionPattern)
+                let patternString12Shared = VDB.stringForMutations(intersectionPattern, vdb: vdb)
                 print(vdb: vdb, "\(patternString12Shared)")
                 if vdb.nucleotideMode {
                     let tmpIsolate : Isolate = Isolate(country: "con", state: "", date: Date(), epiIslNumber: 0, mutations: intersectionPattern)
                     VDB.proteinMutationsForIsolate(tmpIsolate,vdb:vdb)
                 }
-                let patternStruct12Shared : PatternStruct = PatternStruct(mutations: intersectionPattern, name: nameShared)
+                let patternStruct12Shared : PatternStruct = PatternStruct(mutations: intersectionPattern, name: nameShared, vdb: vdb)
                 let aListItem12Shared : [CustomStringConvertible] = [patternStruct12Shared,nameShared]
                 listItems.append(aListItem12Shared)
                 
@@ -13915,6 +15046,43 @@ indirect enum Expr {
             }
             if let cluster = vdb.clusters[identifier] {
                 return cluster
+            }
+            else if identifier.last == "]" {
+                let parts : [String] = identifier.dropLast().components(separatedBy: "[")
+                if parts.count == 2 {
+                    if let cluster = vdb.clusters[parts[0]] {
+                        var shift : Int = 0
+                        var rParts : [String] = parts[1].components(separatedBy: "...")
+                        if rParts.count == 1 {
+                            if let _ = Int(parts[1]) {
+                                rParts = [parts[1],parts[1]]
+                            }
+                        }
+                        if rParts.count == 1 {
+                            rParts = parts[1].components(separatedBy: "..<")
+                            if rParts.count == 2 {
+                                shift = 1
+                            }
+                        }
+                        if rParts.count == 1 {
+                            rParts = parts[1].components(separatedBy: "..")
+                        }
+                        if rParts.count == 1 {
+                            rParts = parts[1].components(separatedBy: "-")
+                        }
+                        if rParts.count == 2, let r0 = Int(rParts[0]), let r1 = Int(rParts[1]) {
+                            let start : Int = r0-vdb.arrayBase
+                            let end : Int = r1-shift-vdb.arrayBase
+                            if start >= 0 && start <= end {
+                                let closedRange = start...end
+                                if end < cluster.count {
+                                    let clusterSlice = cluster[closedRange]
+                                    return Array(clusterSlice)
+                                }
+                            }
+                        }
+                    }
+                }
             }
             else {
                 return VDB.isolatesFromCountry(identifier, inCluster: vdb.isolates, vdb: vdb)
@@ -14053,14 +15221,14 @@ indirect enum Expr {
             }
             else {
                 if VDB.isPattern(identifier, vdb: vdb) {
-                    return VDB.mutationsFromString(identifier)
+                    return VDB.mutationsFromString(identifier, vdb: vdb)
                 }
                 else if let patternString = VDB.patternListItemFrom(identifier, vdb: vdb) {
                     var patternString2 : String = patternString
                     if patternString2.last == " " {
                         patternString2 = String(patternString.dropLast())
                     }
-                    let mutations : [Mutation] = VDB.mutationsFromString(patternString2)
+                    let mutations : [Mutation] = VDB.mutationsFromString(patternString2, vdb: vdb)
                     return mutations
                 }
             }
@@ -14351,7 +15519,7 @@ else {
             trimmedFileName = clFileNames[0].replacingOccurrences(of: "nucl", with: "tnucl")
         }
     }
-    VDB.loadAndTrimMutationDB_MP(inputFileName,trimmedFileName)
+    VDB.loadAndTrimMutationDB_MP(inputFileName,trimmedFileName,extendN: trimExtendN)
 }
 #endif
 
