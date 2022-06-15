@@ -3,14 +3,14 @@
 //  VDBCreate
 //
 //  Copyright (c) 2022  Anthony West, Caltech
-//  Last modified 4/8/22
+//  Last modified 6/12/22
 
 import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
 
-let version : String = "2.7"
+let version : String = "2.8"
 let checkForVDBUpdate : Bool = true
 let mpNumberDefault : Int = 12
 let basePath : String = FileManager.default.currentDirectoryPath
@@ -236,6 +236,7 @@ final class VDBCreate {
         }
         else {
             vdbFileName = "vdb_msa.txt"
+            let fileName = fileName.replacingOccurrences(of: "Codon", with: "")
             if fileName.count == 14 {
                 if fileName.prefix(4) == "msa_" && fileName.suffix(6) == ".fasta" {
                     let dateString = fileName.prefix(8).suffix(4)
@@ -334,7 +335,7 @@ final class VDBCreate {
                     if lfAfterGreaterPosition == 0 {
                         lfAfterGreaterPosition = pos
                         checkCount += 1
-                        if checkCount % 100000 == 0 {
+                        if checkCount % 100000 == 0 && !pipeOutput {
                             print("isolate count \(checkCount)")
                         }
                         if refNameArray.count == pos-greaterPosition {
@@ -463,17 +464,103 @@ final class VDBCreate {
         // removes insertions from tmpBuffer while copying into cdsBuffer, then translates
         func condenseAndTranslate(cdsBuffer: inout [UInt8], cdsBufferPosition: inout Int, outBuffer: inout [UInt8], outBufferPosition: inout Int, tmpBuffer: inout [UInt8], tmpBufferPosition: inout Int) {
             // condense based on reference sequence - this ignores insertions
+            var insertions : [(Int,[UInt8])] = []
+            var currentInsertion : (Int,[UInt8]) = (0,[])
             for pos in 0..<tmpBufferPosition {
                 if refNoGap[pos] {
                     cdsBuffer[cdsBufferPosition] = tmpBuffer[pos]
                     cdsBufferPosition += 1
                 }
+                else if tmpBuffer[pos] != dashChar {
+                    if cdsBufferPosition != currentInsertion.0 {
+                        if currentInsertion.0 != 0 {
+//                            var allN : Bool = true
+//                            for val in currentInsertion.1 {
+//                                if val != nuclN {
+//                                    allN = false
+//                                    break
+//                                }
+//                            }
+//                            if !allN {
+                                insertions.append(currentInsertion)
+//                            }
+                        }
+                        currentInsertion.0 = cdsBufferPosition
+                        currentInsertion.1 = [tmpBuffer[pos]]
+                    }
+                    else {
+                        currentInsertion.1.append(tmpBuffer[pos])
+                    }
+                }
             }
+            if currentInsertion.0 != 0 {
+//                var allN : Bool = true
+//                for val in currentInsertion.1 {
+//                    if val != nuclN {
+//                        allN = false
+//                        break
+//                    }
+//                }
+//                if !allN {
+                    insertions.append(currentInsertion)
+//                }
+            }
+//            if !insertions.isEmpty {
+//                let insertionsMap = insertions.map { ($0.0,String($0.1.map { Character(UnicodeScalar($0)) })) }
+//                print("insertions = \(insertionsMap)")
+//            }
             if !nucl {
-                translate(cdsBuffer: &cdsBuffer, outBuffer: &outBuffer, outBufferPosition: &outBufferPosition)
+                var translatedInsertions : [(Int,[UInt8])] = []
+                for i in 0..<insertions.count {
+                    if insertions[i].0 > startSRef && insertions[i].0 < endSRef {
+                        let trans : [UInt8] = translateInsertion(&insertions[i].1)
+                        if !trans.isEmpty {
+                            let pos : Int = (insertions[i].0 - startSRef) / 3
+                            var insName : [UInt8] = [105,110,115]   // ins
+                            var p : Int = pos // outBufferPosition - startBufPos
+                            var tmpBuf : [UInt8] = []
+                            repeat {
+                                let pd : Int = p / 10
+                                let pr : Int = p % 10
+                                tmpBuf.append(UInt8(pr) + 48)
+                                p = pd
+                            } while p != 0
+                            insName.append(contentsOf: tmpBuf.reversed())
+                            insName.append(contentsOf: trans)
+                            insName.append(spaceChar)
+                            translatedInsertions.append((pos,insName))
+                        }
+                    }
+                }
+//                if !translatedInsertions.isEmpty {
+//                    let insertionsMap = translatedInsertions.map { ($0.0,String($0.1.map { Character(UnicodeScalar($0)) })) }
+//                    print("translatedInsertions = \(insertionsMap)")
+//                }
+                translate(cdsBuffer: &cdsBuffer, outBuffer: &outBuffer, outBufferPosition: &outBufferPosition, insertions: &translatedInsertions)
             }
             else {
-                nuclMutations(cdsBuffer: &cdsBuffer, outBuffer: &outBuffer, outBufferPosition: &outBufferPosition)
+                var formattedInsertions : [(Int,[UInt8])] = []
+                for i in 0..<insertions.count {
+                    if insertions[i].0 > 0 && insertions[i].0 < refProtein.count {
+                        if !insertions[i].1.isEmpty {
+                            let pos : Int = insertions[i].0
+                            var insName : [UInt8] = [105,110,115]   // ins
+                            var p : Int = pos // outBufferPosition - startBufPos
+                            var tmpBuf : [UInt8] = []
+                            repeat {
+                                let pd : Int = p / 10
+                                let pr : Int = p % 10
+                                tmpBuf.append(UInt8(pr) + 48)
+                                p = pd
+                            } while p != 0
+                            insName.append(contentsOf: tmpBuf.reversed())
+                            insName.append(contentsOf: insertions[i].1)
+                            insName.append(spaceChar)
+                            formattedInsertions.append((pos,insName))
+                        }
+                    }
+                }
+                nuclMutations(cdsBuffer: &cdsBuffer, outBuffer: &outBuffer, outBufferPosition: &outBufferPosition, insertions: &formattedInsertions)
             }
             tmpBufferPosition = 0
             cdsBufferPosition = 0
@@ -511,7 +598,9 @@ final class VDBCreate {
         lastBufferSize = 0
         var shouldRead : Bool = true
         while useStdInput || fileStream2.hasBytesAvailable {
-            updateStatusReadout()
+            if !pipeOutput {
+                updateStatusReadout()
+            }
             if !shouldRead {
                 break
             }
@@ -661,7 +750,7 @@ final class VDBCreate {
                             outBufferPositionMP[mp_index] += 1
                             checkCount += 1
                             checkCountTotal += 1
-                            if checkCountTotal % 100000 == 0 {
+                            if checkCountTotal % 100000 == 0 && !pipeOutput {
                                 print("isolate count \(checkCountTotal)")
                             }
                         }
@@ -816,15 +905,19 @@ final class VDBCreate {
                     }
                     if cdsBuffer[nextBase] == dashChar {
                         // Difficult codon alignment
-                        print("Warning - codon alignment not optimal")
+                        if !pipeOutput {
+                            print("Warning - codon alignment not optimal")
+                        }
                         nextBase -= 2
-                        if cdsBuffer[nextBase] == dashChar {
+                        if cdsBuffer[nextBase] == dashChar && !pipeOutput {
                             print("Warning - codon alignment not possible")
                         }
                     }
                     let ngap : Int = nextBase - 1
                     if ngap < 0 {
-                        print("Warning ngap = \(ngap)  pos = \(pos)")
+                        if !pipeOutput {
+                            print("Warning ngap = \(ngap)  pos = \(pos)")
+                        }
                         continue
                     }
                     cdsBuffer[ngap] = cdsBuffer[pos]
@@ -866,10 +959,15 @@ final class VDBCreate {
         }
         
         // translates sequence in cdsBuffer, compares this to the reference, and writes mutations to outBuffer
-        func translate(cdsBuffer: inout [UInt8], outBuffer: inout [UInt8], outBufferPosition: inout Int) {
+        func translate(cdsBuffer: inout [UInt8], outBuffer: inout [UInt8], outBufferPosition: inout Int, insertions: inout [(Int,[UInt8])]) {
             
             let makeRef : Bool = refProtein.isEmpty
             var aaPos : Int = 0
+            var currentInsertion : Int = 0
+            var currentInsertionPos : Int = Int.max
+            if !insertions.isEmpty {
+                currentInsertionPos = insertions[currentInsertion].0
+            }
 //            var outBufferAA : [UInt8] = Array(repeating: 0, count: bufferSize)
 //            var outBufferAAPosition : Int = 0
             
@@ -1017,6 +1115,19 @@ final class VDBCreate {
                         mutName.append(contentsOf: tmpBuf.reversed())
                         mutName.append(aa)
                         mutName.append(spaceChar)
+                        if aaPos + 1 > currentInsertionPos {
+                            for i in 0..<insertions[currentInsertion].1.count {
+                                outBuffer[outBufferPosition] = insertions[currentInsertion].1[i]
+                                outBufferPosition += 1
+                            }
+                            currentInsertion += 1
+                            if currentInsertion < insertions.count {
+                                currentInsertionPos = insertions[currentInsertion].0
+                            }
+                            else {
+                                currentInsertionPos = Int.max
+                            }
+                        }
                         for i in 0..<mutName.count {
                             outBuffer[outBufferPosition] = mutName[i]
                             outBufferPosition += 1
@@ -1025,14 +1136,167 @@ final class VDBCreate {
                 }
                 aaPos += 1
             }
+            while currentInsertionPos < Int.max {
+                for i in 0..<insertions[currentInsertion].1.count {
+                    outBuffer[outBufferPosition] = insertions[currentInsertion].1[i]
+                    outBufferPosition += 1
+                }
+                currentInsertion += 1
+                if currentInsertion < insertions.count {
+                    currentInsertionPos = insertions[currentInsertion].0
+                }
+                else {
+                    currentInsertionPos = Int.max
+                }
+            }
             outBuffer[outBufferPosition] = lf
             outBufferPosition += 1
         }
+        
+        // return translated insertion
+        func translateInsertion(_ cdsBuffer: inout [UInt8]) -> [UInt8] {
+            var trans : [UInt8] = []
+            let incomplete = cdsBuffer.count % 3
+            let end : Int = cdsBuffer.count - incomplete
+            for pos in stride(from: 0, to: end, by: 3) {
+                var aa : UInt8 = 0
+                switch cdsBuffer[pos] {
+                case a:
+                    switch cdsBuffer[pos+1] {
+                    case a:
+                        switch cdsBuffer[pos+2] {
+                        case a,g:
+                            aa = aaK
+                        case t,c:
+                            aa = aaN
+                        default:
+                            aa = aaX
+                        }
+                    case c:
+                        aa = aaT
+                    case t:
+                        switch cdsBuffer[pos+2] {
+                        case a,c,t:
+                            aa = aaI
+                        case g:
+                            aa = aaM
+                        default:
+                            aa = aaX
+                        }
+                    case g:
+                        switch cdsBuffer[pos+2] {
+                        case a,g:
+                            aa = aaR
+                        case c,t:
+                            aa = aaS
+                        default:
+                            aa = aaX
+                        }
+                    default:
+                        aa = aaX
+                    }
+                case c:
+                    switch cdsBuffer[pos+1] {
+                    case a:
+                        switch cdsBuffer[pos+2] {
+                        case a,g:
+                            aa = aaQ
+                        case t,c:
+                            aa = aaH
+                        default:
+                            aa = aaX
+                        }
+                    case c:
+                        aa = aaP
+                    case t:
+                        aa = aaL
+                    case g:
+                        aa = aaR
+                    default:
+                        aa = aaX
+                    }
+                case t:
+                    switch cdsBuffer[pos+1] {
+                    case a:
+                        switch cdsBuffer[pos+2] {
+                        case a,g:
+                            aa = aaSTOP
+                        case t,c:
+                            aa = aaY
+                        default:
+                            aa = aaX
+                        }
+                    case c:
+                        aa = aaS
+                    case t:
+                        switch cdsBuffer[pos+2] {
+                        case a,g:
+                            aa = aaL
+                        case c,t:
+                            aa = aaF
+                        default:
+                            aa = aaX
+                        }
+                    case g:
+                        switch cdsBuffer[pos+2] {
+                        case a:
+                            aa = aaSTOP
+                        case g:
+                            aa = aaW
+                        case c,t:
+                            aa = aaC
+                        default:
+                            aa = aaX
+                        }
+                    default:
+                        aa = aaX
+                    }
+                case g:
+                    switch cdsBuffer[pos+1] {
+                    case a:
+                        switch cdsBuffer[pos+2] {
+                        case a,g:
+                            aa = aaE
+                        case t,c:
+                            aa = aaD
+                        default:
+                            aa = aaX
+                        }
+                    case c:
+                        aa = aaA
+                    case t:
+                        aa = aaV
+                    case g:
+                        aa = aaG
+                    default:
+                        aa = aaX
+                    }
+                case dashChar:
+                    if cdsBuffer[pos+1] == dashChar && cdsBuffer[pos+2] == dashChar {
+                        aa = dashChar
+                    }
+                    else {
+                        aa = aaX
+                    }
+                default:
+                    aa = aaX
+                }
+                trans.append(aa)
+            }
+            return trans
+        }
+
                 
-        func nuclMutations(cdsBuffer: inout [UInt8], outBuffer: inout [UInt8], outBufferPosition: inout Int) {
+        func nuclMutations(cdsBuffer: inout [UInt8], outBuffer: inout [UInt8], outBufferPosition: inout Int, insertions: inout [(Int,[UInt8])]) {
             
+            // FIXME: Does codonAlign affect insertion position?
             codonAlign(cdsBuffer: &cdsBuffer)
-            
+            var currentInsertion : Int = 0
+            var currentInsertionPos : Int = Int.max
+            if !insertions.isEmpty {
+                currentInsertionPos = insertions[currentInsertion].0
+            }
+
             var minPos : Int = -1
             var maxPos : Int = -1
             var posTmp : Int = 0
@@ -1070,10 +1334,36 @@ final class VDBCreate {
                     mutName.append(contentsOf: tmpBuf.reversed())
                     mutName.append(nucl)
                     mutName.append(spaceChar)
+                    if pos + 1 > currentInsertionPos {
+                        for i in 0..<insertions[currentInsertion].1.count {
+                            outBuffer[outBufferPosition] = insertions[currentInsertion].1[i]
+                            outBufferPosition += 1
+                        }
+                        currentInsertion += 1
+                        if currentInsertion < insertions.count {
+                            currentInsertionPos = insertions[currentInsertion].0
+                        }
+                        else {
+                            currentInsertionPos = Int.max
+                        }
+                    }
                     for i in 0..<mutName.count {
                         outBuffer[outBufferPosition] = mutName[i]
                         outBufferPosition += 1
                     }
+                }
+            }
+            while currentInsertionPos < Int.max {
+                for i in 0..<insertions[currentInsertion].1.count {
+                    outBuffer[outBufferPosition] = insertions[currentInsertion].1[i]
+                    outBufferPosition += 1
+                }
+                currentInsertion += 1
+                if currentInsertion < insertions.count {
+                    currentInsertionPos = insertions[currentInsertion].0
+                }
+                else {
+                    currentInsertionPos = Int.max
                 }
             }
             outBuffer[outBufferPosition] = lf
