@@ -58,7 +58,7 @@ Any questions about the installation process can be sent to vdb_support@icloud.c
 
 The sequence alignment of viral genomes can be downloaded from [GISAID](https://www.gisaid.org). This requires registration with GISAID, agreeing to GISAID terms of use, and an account. Note that among these terms of use are the following requirements: (1) to not share or re-distribute the data to any third party, (2) to make best efforts to collaborate with the originating laboratories who provided the data to GISAID, and (3) to acknowledge the originating and submitting laboratories in any publication with results obtained by analyzing this data.  
 
-On the GISAID EpiCov “Downloads” window, select “MSA full0111 (808MB)” or the latest version in the "Alignment and proteins" section.
+On the GISAID EpiCov “Downloads” window, select “MSA full0608 (1164MB)” or "MSA codon0611 (1177 MB)' or the latest version in the "Alignment and proteins" section.
 Also download the “metadata” file in the "Download packages" section or in the "Genomic epidemiology" section. Uncompress/untar the files and place the FASTA file and the metadata file in the same directory that will be used to run **vdb**. The msa_XXXX.tar.xz file will give a msa_XXXX.fasta file over 200 GB in size. If such a file would be too large, **vdbCreate** can be used without creating this file - see the following section for how to run vdbCreate in this way. One can also download selected sequences from GISAID, add the WIV04 reference sequence, and align these with MAFFT. It is possible to load both the large dataset from the main MSA and a local, manually aligned set. The FASTA sequence identifier lines must have the same format as used by GISAID:
 
 \>hCoV-19/Wuhan/WIV04/2019|EPI_ISL_402124|2019-12-30|China
