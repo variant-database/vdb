@@ -21,7 +21,8 @@ To define a variable for a cluster or pattern:  \<name> `=` cluster or pattern
 Variable names are case sensitive and can included letters or numbers.  
 To check whether two clusters or patterns are equal: \<item1> `==` \<item2>  
 To count a cluster or pattern in a variable: `count` \<variable name>  
-Results of most list commands can be saved to a variable.
+Results of most list commands can be saved to a variable.  
+Subscripts can be applied to cluster variables to extract one or more viruses.  
 
 #### `last`    
 
@@ -336,6 +337,10 @@ Sets the percentage cutoff for mutations to be included by the `consensus` comma
 
 Determines case matching behavior for virus name searches by the `named` command. `all` is a case-insensitive search (slower), `exact` is case-sensitive (faster), and `uppercase` searches for the uppercase form of the specified search. The default value is `all`.  
 <br />
+#### `arrayBase = `\<0 or 1>  
+
+For cluster or list subscripts, this setting determines whether zero- or one-based numbering is used. The default value is `0`.  
+<br />
 
 <br />
-Version 2.7
+Version 2.8
