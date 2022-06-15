@@ -15,6 +15,7 @@ To count a cluster or pattern in a variable: `count` \<variable name>
 Set operations `+`, `-`, and `*` (intersection) can be applied to clusters or patterns  
 The result, if any, of the previous command is available in the variable `last`.  
 Results of most list commands can be assigned to a variable.  
+Subscripts can be applied to cluster variables to extract one or more viruses.  
 
 ## Filtering commands
 \<cluster> `from` \<country or state>    → cluster  
@@ -96,4 +97,5 @@ Results of most list commands can be assigned to a variable.
 `trendsLineageCount = `\<n>       alias `trends` \<n>  
 `maxMutationsInFreqList = `\<n>  
 `consensusPercentage = `\<n>  
-`caseMatching = all/exact/uppercase`
+`caseMatching = all/exact/uppercase`  
+`arrayBase = `\<0 or 1>
