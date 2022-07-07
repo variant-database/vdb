@@ -6,14 +6,14 @@
 //
 //  Created by Anthony West on 1/31/21.
 //  Copyright (c) 2022  Anthony West, Caltech
-//  Last modified 6/12/22
+//  Last modified 7/6/22
 
 import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
 
-let version : String = "2.8"
+let version : String = "2.9"
 let checkForVDBUpdate : Bool = true         // to inform users of updates; the updates are not downloaded
 let allowGitHubDownloads : Bool = true      // to download nucl. ref. and documentation, if missing
 let basePath : String = FileManager.default.currentDirectoryPath
@@ -2248,7 +2248,7 @@ final class Isolate : Equatable, Hashable {
     let state : String
     let date : Date
     let epiIslNumber : Int
-    let mutations : [Mutation]
+    var mutations : [Mutation]
     var pangoLineage : String = ""
 //    var age : Int = 0
     var nRegions : [Int16] = []
@@ -2313,7 +2313,7 @@ final class Isolate : Equatable, Hashable {
                 }
             }
             seq.replaceSubrange(seq.startIndex...seq.startIndex, with: ["\n"])
-            mutationsString = seq
+            mutationsString = seq.replacingOccurrences(of: "-", with: "")
         }
         if includeLineage {
             return ">\(country)/\(state)/\(dateString.prefix(4))|EPI_ISL_\(epiIslNumber)|\(dateString)|\(pangoLineage),\(mutationsString)\n"
@@ -2707,9 +2707,10 @@ final class VDB {
         print(vdb: vdb, "   Loading database from file \(fileName) ... ", terminator:"")
         fflush(stdout)
         
+//        var mDict : AtomicDict<[Mutation],Isolate> = AtomicDict<[Mutation],Isolate>() //  [[Mutation]:Isolate] = [:]
         var lineNMP : [UInt8] = []
         let filePath : String = "\(basePath)/\(fileName)"
-         do {
+        do {
             let vdbData = try Data(contentsOf: URL(fileURLWithPath: filePath))
             lineNMP = [UInt8](vdbData)
 //            let vdbDataSize : Int = vdbData.count
@@ -2885,8 +2886,8 @@ final class VDB {
                     }
                     else {
                         if insertionStartPos > endPos {
-                            print("startPos = \(startPos)  endPos = \(endPos)  \(lineNMP[startPos..<endPos])")
-                            print("insertionStartPos = \(insertionStartPos)")
+                            print(vdb: vdb, "startPos = \(startPos)  endPos = \(endPos)  \(lineNMP[startPos..<endPos])")
+                            print(vdb: vdb, "insertionStartPos = \(insertionStartPos)")
                         }
                         let insertion = Array(lineNMP[insertionStartPos..<endPos])
                         let shift : UInt8
@@ -2933,8 +2934,8 @@ final class VDB {
                     }
                     else {
                         if insertionStartPos > endPos {
-                            print("startPos = \(startPos)  endPos = \(endPos)  \(lineNMP[startPos..<endPos])")
-                            print("insertionStartPos = \(insertionStartPos)")
+                            print(vdb: vdb, "startPos = \(startPos)  endPos = \(endPos)  \(lineNMP[startPos..<endPos])")
+                            print(vdb: vdb, "insertionStartPos = \(insertionStartPos)")
                         }
                         let insertion = Array(lineNMP[insertionStartPos..<endPos])
                         let shift : UInt8
@@ -3825,9 +3826,9 @@ final class VDB {
         }
         return isolates
     }
-
+    
     // loads a list of isolates and their mutations from the given fileName
-    // reads metadata tsv file downloaded from GISAID
+    // reads (via InputStream) metadata.tsv file downloaded from GISAID
     class func loadMutationDBTSV_MP(_ fileName: String, loadMetadataOnly: Bool, vdb: VDB) -> [Isolate] {
         // Metadata read in 4.45 sec
         var isoDict : [Int:Int] = [:]
@@ -3845,42 +3846,16 @@ final class VDB {
         }
         fflush(stdout)
         let metadataFile : String = "\(basePath)/\(fileName)"
-        var fileSize : Int = 0
-        do {
-            let attr = try FileManager.default.attributesOfItem(atPath: metadataFile)
-            if let fileSizeUInt64 : UInt64 = attr[FileAttributeKey.size] as? UInt64 {
-                fileSize = Int(fileSizeUInt64)
-            }
-        } catch {
-            print(vdb: vdb, "Error reading tsv file \(metadataFile)")
-            return []
-        }
-        var metadata : [UInt8] = []
         var metaFields : [String] = []
         var isolates : [Isolate] = []
 
-        if fileSize < maximumFileStreamSize {
-            metadata = Array(repeating: 0, count: fileSize)
-            guard let fileStream : InputStream = InputStream(fileAtPath: metadataFile) else { print(vdb: vdb, "Error reading tsv file \(metadataFile)"); return [] }
-            fileStream.open()
-            let bytesRead : Int = fileStream.read(&metadata, maxLength: fileSize)
-            fileStream.close()
-            if bytesRead < 0 {
-                print(vdb: vdb, "Error 2 reading tsv file \(metadataFile)")
-                return []
-            }
-        }
-        else {
-            do {
-                let data : Data = try Data(contentsOf: URL(fileURLWithPath: metadataFile))
-                metadata = [UInt8](data)
-            }
-            catch {
-                print(vdb: vdb, "Error reading large tsv file \(metadataFile)")
-                return []
-            }
-        }
+        let blockBufferSize : Int = 500_000_000
+        let lastMaxSize : Int = 50_000
+        let metadata : UnsafeMutablePointer<UInt8> = UnsafeMutablePointer<UInt8>.allocate(capacity: blockBufferSize + lastMaxSize)
 
+        guard let fileStream : InputStream = InputStream(fileAtPath: metadataFile) else { print(vdb: vdb, "Error reading tsv file \(metadataFile)"); return [] }
+        fileStream.open()
+        
         let lf : UInt8 = 10     // \n
         let tabChar : UInt8 = 9
         let slashChar : UInt8 = 47
@@ -3897,15 +3872,30 @@ final class VDB {
         
         // setup multithreaded processing
         var mp_number : Int = mpNumber
-        if metadata.count < 100_000 {
-            mp_number = 1
-        }
         var sema : [DispatchSemaphore] = []
-        for _ in 0..<mp_number-1 {
-            sema.append(DispatchSemaphore(value: 0))
+
+        var firstPass : Bool = true
+        while fileStream.hasBytesAvailable {
+        
+            var bytesRead : Int = fileStream.read(&metadata[0], maxLength: blockBufferSize)
+            
+            while fileStream.hasBytesAvailable {
+                let additionalBytesRead : Int = fileStream.read(&metadata[bytesRead], maxLength: 1)
+                bytesRead += additionalBytesRead
+                if metadata[bytesRead-1] == lf {
+                    break
+                }
+            }
+         
+        mp_number = bytesRead < 100_000 ? 1 : mpNumber
+        sema = []
+        if firstPass {
+            for _ in 0..<mp_number-1 {
+                sema.append(DispatchSemaphore(value: 0))
+            }
         }
         var cuts : [Int] = [0]
-        let cutSize : Int = metadata.count/mp_number
+        let cutSize : Int = bytesRead/mp_number
         for i in 1..<mp_number {
             var cutPos : Int = i*cutSize
             while metadata[cutPos] != lf {
@@ -3913,7 +3903,7 @@ final class VDB {
             }
             cuts.append(cutPos+1)
         }
-        cuts.append(metadata.count)
+        cuts.append(bytesRead)
         var ranges : [(Int,Int)] = []
         for i in 0..<mp_number {
             ranges.append((cuts[i],cuts[i+1]))
@@ -3926,18 +3916,18 @@ final class VDB {
             }
         }
         DispatchQueue.concurrentPerform(iterations: mp_number) { index in
-            if index != 0 {
+            if firstPass && index != 0 {
                 sema[index-1].wait()
             }
 //            let lineageArrayMP : [(Int,String)] =
-            read_MP_task(mp_index: index, mp_range: ranges[index], firstLine: index == 0)
-            if index != 0 {
-                sema[index-1].wait()
-            }
+            read_MP_task(mp_index: index, mp_range: ranges[index], firstLine: firstPass && index == 0)
+//            if index != 0 {
+//                sema[index-1].wait()
+//            }
 //            lineageArrayMPAll.append(contentsOf: lineageArrayMP)
-            if index != mp_number - 1 {
-                sema[index].signal()
-            }
+//            if index != mp_number - 1 {
+//                sema[index].signal()
+//            }
         }
         for i in 0..<mp_number {
             for (index,pangoLineage) in lineageArrayMP[i] {
@@ -4004,7 +3994,11 @@ final class VDB {
                 }
                 pos = intA(startPos+3..<insertionStartPos)
                 let shift : UInt8
-                (aa,shift) = vdb.insertionCodeForPosition(pos, withInsertion:Array(metadata[insertionStartPos..<endPos]))
+                var tmpArray : [UInt8] = Array(repeating: 0, count: endPos-insertionStartPos+1)
+                for i in 0..<tmpArray.count {
+                    tmpArray[i] = metadata[insertionStartPos+i]
+                }
+                (aa,shift) = vdb.insertionCodeForPosition(pos, withInsertion:tmpArray)
                 wt += shift
             }
             let mut : Mutation = Mutation(wt: wt, pos: pos, aa: aa)
@@ -4225,7 +4219,10 @@ final class VDB {
         buf?.deallocate()
 //        return lineageArrayMP
     }
-        
+            
+            firstPass = false
+        }
+        fileStream.close()
         if isolates.count > 40_000 {
             print(vdb: vdb, "  \(nf(isolates.count)) isolates loaded")
         }
@@ -4752,7 +4749,7 @@ final class VDB {
 //                        var rangesToDelete : [(Int,Int)] = []
                         
                         if !nRegionsIns.isEmpty {
-  //                          print("nRegionsIns.count = \(nRegionsIns.count)")
+  //                          Swift.print("nRegionsIns.count = \(nRegionsIns.count)")
                             nRegions.append(contentsOf: nRegionsIns)
                         }
                         
@@ -4884,7 +4881,7 @@ final class VDB {
                                 finalN += Int(nRegions[i+1]) - Int(nRegions[i]) + 1
                             }
 //                            if abs(missing) > 10 {
-//                                print("acc \(accNumber) nCount \(nCount)  currentN = \(currentN)  \(missing0) \(finalN) \(missing)")
+//                                Swift.print("acc \(accNumber) nCount \(nCount)  currentN = \(currentN)  \(missing0) \(finalN) \(missing)")
 //                            }
 /*
                             var delMax : Int = 0
@@ -4916,7 +4913,7 @@ final class VDB {
                                         isoAcc = string
                                     }
                                 }
-                                print("Isolate #\(isoCounter.value)  \(isoAcc)  delMax = \(delMax)  \(delMaxRange)")
+                                Swift.print("Isolate #\(isoCounter.value)  \(isoAcc)  delMax = \(delMax)  \(delMaxRange)")
                             }
 */
                         }
@@ -5134,7 +5131,7 @@ final class VDB {
         }
     }
     
-    class func loadNregionsData(_ trimmedFileName: String, isolates: [Isolate]) {
+    class func loadNregionsData(_ trimmedFileName: String, isolates: [Isolate], vdb: VDB) {
         let fileName : String = "\(basePath)/\(trimmedFileName)\(nRegionsFileExt)"
         if !FileManager.default.fileExists(atPath: fileName) {
             return
@@ -5144,11 +5141,11 @@ final class VDB {
             data = try Data(contentsOf: URL(fileURLWithPath: fileName))
         }
         catch {
-            print("Error - unable to read N regions data from file \(fileName)")
+            print(vdb: vdb, "Error - unable to read N regions data from file \(fileName)")
             return
         }
         if data.isEmpty {
-            print("Error - N regions data count = 0 from file \(fileName)")
+            print(vdb: vdb, "Error - N regions data count = 0 from file \(fileName)")
             return
         }
         
@@ -5157,7 +5154,7 @@ final class VDB {
             var pos : Int = 0
             while pos < dataBufferPointer.count {
                 if i >= isolates.count {
-                    print("Error loading N regions - N regions may be incorrect")
+                    print(vdb: vdb, "Error loading N regions - N regions may be incorrect")
                     continue
                 }
                 for j in pos+1..<pos+1+Int(dataBufferPointer[pos]) {
@@ -5167,8 +5164,8 @@ final class VDB {
                 i += 1
             }
 /*
-            print("*** N regions load for isolates.count = \(isolates.count) ***")
-            print("i = \(i)  pos = \(pos)  dataBufferPointer.count = \(dataBufferPointer.count)")
+            print(vdb: vdb, "*** N regions load for isolates.count = \(isolates.count) ***")
+            print(vdb: vdb, "i = \(i)  pos = \(pos)  dataBufferPointer.count = \(dataBufferPointer.count)")
             // power spectrum
             var nCounts : [Int16:Int] = [:]
             for isolate in isolates {
@@ -5179,7 +5176,7 @@ final class VDB {
             }
             let nCountsArray : [(Int16,Int)] = Array(nCounts).sorted { $0.0 < $1.0 }
             for (len,count) in nCountsArray {
-                print("\(len): \(count)")
+                print(vdb: vdb, "\(len): \(count)")
             }
 */
         }
@@ -5202,7 +5199,7 @@ final class VDB {
         let dataBufferPointer : UnsafeMutableBufferPointer<Int16> = UnsafeMutableBufferPointer(start: dataPointer, count: dataArrayCount)
         let bytesCopied : Int = data.copyBytes(to: dataBufferPointer)
         if bytesCopied != data.count {
-            print("Error copying bytes for N regions  \(bytesCopied) != \(data.count)")
+            print(vdb: vdb, "Error copying bytes for N regions  \(bytesCopied) != \(data.count)")
             return
         }
         loadNregionsFromPointer(dataBufferPointer)
@@ -5222,7 +5219,7 @@ final class VDB {
             metadata = [UInt8](data)
         }
         catch {
-            print("Error reading large tsv file \(metadataFile)")
+            Swift.print("Error reading large tsv file \(metadataFile)")
             return [:]
         }
 
@@ -5338,7 +5335,7 @@ final class VDB {
                         }
                     }
                     if [idField,nContentField].contains(-1) {
-                        print("Error - Missing tsv field")
+                        Swift.print("Error - Missing tsv field")
                         return
                     }
                     for si in 0..<mp_number-1 {
@@ -7163,7 +7160,7 @@ plot
     
     // returns isolates whose state field contains the string name
     // if name is a number, return the isolate with that accession number
-    class func isolatesNamed(_ name: String, inCluster isolates:[Isolate], vdb: VDB) -> [Isolate] {
+    class func isolatesNamed(_ name: String, inCluster isolates:[Isolate], vdb: VDB, quiet: Bool = false) -> [Isolate] {
         // isolate names are 93.8% all uppercase, 6.2% mixed case as of 4/4/22
         let namedIsolates : [Isolate]
         if let value = Int(name) {
@@ -7206,8 +7203,24 @@ plot
                 }
             }
         }
-        print(vdb: vdb, "Number of isolates named \(name) = \(nf(namedIsolates.count))")
+        if !quiet {
+            print(vdb: vdb, "Number of isolates named \(name) = \(nf(namedIsolates.count))")
+        }
         return namedIsolates
+    }
+    
+    class func isolatesWithAccessionNumbers(_ numbers: [Int], inCluster cluster: [Isolate], vdb: VDB) -> [Isolate] {
+        var numberedIsolates : [Isolate] = []
+        for number in numbers {
+            let cluster = VDB.isolatesNamed("\(number)", inCluster: cluster, vdb: vdb, quiet: true)
+            if cluster.count == 1 {
+                numberedIsolates.append(cluster[0])
+            }
+            else {
+                print(vdb: vdb,"Error - \(cluster.count) isolates found for number \(number)")
+            }
+        }
+        return numberedIsolates
     }
     
     // returns all cluster isolates of the specified lineage
@@ -7236,7 +7249,7 @@ plot
         return cluster
     }
     
-    // returns isolates with collection dates in the given range inclusive
+    // returns randomly sampled isolates
     class func isolatesSample(_ number: Float, inCluster isolates:[Isolate], vdb: VDB) -> [Isolate] {
         let clusterCount : Int = isolates.count
         let numberToSample : Int = number > 1.0 ? Int(number) : Int(number*Float(clusterCount))
@@ -7461,6 +7474,40 @@ plot
             let nContent : Double = Double(nCount)/Double(VDBProtein.SARS2_nucleotide_refLength)
             print(vdb: vdb,"  N content:      \(String(format:"%5.3f",nContent))")
         }
+    }
+    
+    // returns the sequence of isolate in the specified base/residue range
+    class func sequenceOfIsolate(_ isolate: Isolate, inRange range: ClosedRange<Int>, vdb:VDB) -> [UInt8] {
+        var seq : [UInt8] = []
+        if range.lowerBound < 1 || range.upperBound >= vdb.referenceArray.count {
+            return []
+        }
+        for pos in range {
+            var value : UInt8 = vdb.referenceArray[pos]
+            var insertion : [UInt8] = []
+            for mutation in isolate.mutations {
+                if mutation.pos == pos {
+                    if mutation.wt < insertionChar {
+                        value = mutation.aa
+                    }
+                    else {
+                        insertion = vdb.insertionForMutation(mutation)
+                    }
+                }
+            }
+            if vdb.nucleotideMode && !isolate.nRegions.isEmpty {
+                for n1 in stride(from: 0, to: isolate.nRegions.count, by: 2) {
+                    if pos >= isolate.nRegions[n1] && pos <= isolate.nRegions[n1+1] {
+                        value = nuclN
+                    }
+                }
+            }
+            seq.append(value)
+            if !insertion.isEmpty {
+                seq.append(contentsOf: insertion)
+            }
+        }
+        return seq
     }
     
     // prints information about mutations at a given position
@@ -8325,7 +8372,7 @@ plot
                     let mutPos : Int = mut.pos - codonStart
                     var found : Bool = false
                     for j in 0..<codons.count {
-                        if codons[j].pos == pos && codons[j].protein == protein && mut.wt < insertionChar {
+                        if codons[j].pos == pos && codons[j].protein == protein && mut.wt < insertionChar && codons[j].wt < insertionChar {
                             var oldNucl : [UInt8] = codons[j].nucl
                             oldNucl[mutPos] = mut.aa
                             codons[j].nucl = oldNucl
@@ -8563,10 +8610,41 @@ plot
     class func saveCluster(_ cluster: [Isolate], toFile fileName: String, fasta: Bool, vdb: VDB) {
         var outString : String = ""
         let printToStdOut : Bool = fileName.suffix(2) == "/-"
-        let ref : String = fasta ? String(bytes: vdb.referenceArray, encoding: .utf8) ?? "" : ""
-        for isolate in cluster {
-            outString += isolate.vdbString(dateFormatter, includeLineage: printToStdOut, ref: ref, vdb: vdb)
+        var ref : String = fasta ? String(bytes: vdb.referenceArray, encoding: .utf8) ?? "" : ""
+        if ref.last == "\n" {
+            ref.removeLast()
         }
+        let nRegionsFileName : String = fileName + nRegionsFileExt
+        var nRegionsArray : [UInt8] = []
+        let mp_number : Int = cluster.count > mpNumber ? mpNumber : 1
+        var cuts : [Int] = [0]
+        let cutSize : Int = cluster.count/mp_number
+        for i in 1..<mp_number {
+            let cutPos : Int = i*cutSize
+            cuts.append(cutPos+1)
+        }
+        cuts.append(cluster.count)
+        var outStringMP : [String] = Array(repeating: String(), count: mp_number)
+        var nRegionsArrayMP : [[UInt8]] = Array(repeating: [], count: mp_number)
+        DispatchQueue.concurrentPerform(iterations: mp_number) { index in
+            for isoNum in cuts[index]..<cuts[index+1] {
+                outStringMP[index] += cluster[isoNum].vdbString(dateFormatter, includeLineage: printToStdOut, ref: ref, vdb: vdb)
+                if !fasta {
+                    // copy nRegions data
+                    let nRegionsCount : Int16 = Int16(cluster[isoNum].nRegions.count)
+                    withUnsafeBytes(of: nRegionsCount) { ptr in
+                        nRegionsArrayMP[index].append(ptr[0])
+                        nRegionsArrayMP[index].append(ptr[1])
+                    }
+                    cluster[isoNum].nRegions.withUnsafeMutableBytes { ptr in
+                        let dataBufferPointer : UnsafeMutableBufferPointer<UInt8> = ptr.bindMemory(to: UInt8.self)
+                        nRegionsArrayMP[index].append(contentsOf: dataBufferPointer)
+                    }
+                }
+            }
+        }
+        outString = outStringMP.joined()
+        nRegionsArray = nRegionsArrayMP.flatMap { $0 }
         if printToStdOut {
             let batchSetting : Bool = vdb.batchMode
             vdb.batchMode = true
@@ -8581,6 +8659,15 @@ plot
         }
         catch {
             print(vdb: vdb, "Error writing cluster to file \(fileName)")
+        }
+        if !fasta {
+            do {
+                let nData = Data(nRegionsArray)
+                try nData.write(to: URL(fileURLWithPath: nRegionsFileName))
+            }
+            catch {
+                print(vdb: vdb, "Error writing N regions data for cluster to file \(nRegionsFileName)")
+            }
         }
     }
     
@@ -9877,7 +9964,7 @@ plot
             if vdb.nucleotideMode {
                 let nuclChars : [UInt8] = [65,67,71,84] // A,C,G,T
                 if pos <= VDB.ref.count {
-                    if !(nuclChars.contains(firstChar) && nuclChars.contains(lastChar)) {
+                    if !(nuclChars.contains(firstChar) && (nuclChars.contains(lastChar) || lastChar == 45)) {
                         if !pMutNotSpike {
                             let tmpReferenceArray = [UInt8](VDB.ref.utf8)
                             if tmpReferenceArray[pos-1] != firstChar {
@@ -10254,6 +10341,11 @@ plot
     var consensusDict : [String:[(Set<Mutation>,Int,Set<Mutation>,Set<Mutation>)]] = [:]  // For lineage assignment
     var whoConsensusArray : [(String,Set<Mutation>,[String],[String:[(Set<Mutation>,Int,Set<Mutation>,Set<Mutation>)]])] = []  // For faster lineage assignment of WHO variants
     
+    // fasta load testing
+    var nuclRefForLoading : [UInt8] = []
+    var delScores : [Double] = []
+    var codonStartsForLoading : [Int] = []
+    
     @Atomic var latestVersionString : String = ""
     @Atomic var nuclRefDownloaded : Bool = false
     @Atomic var helpDocDownloaded : Bool = false
@@ -10398,7 +10490,7 @@ plot
             self.nucleotideMode = true
             self.refLength = VDBProtein.SARS2_nucleotide_refLength
             self.referenceArray = VDB.nucleotideReference(vdb: self, firstCall: true)
-            VDB.loadNregionsData(fileName, isolates: isolates)
+            VDB.loadNregionsData(fileName, isolates: isolates, vdb: self)
         }
         else {
             self.refLength = VDBProtein.SARS2_Spike_protein_refLength
@@ -11711,6 +11803,38 @@ plot
                             }
                         }
                     }
+                    else if parts.count == 3 {
+                        if let cluster = clusters[parts[0]], parts[1].last == "]", let indexTmp = Int(parts[1].dropLast()) {
+                            var seqRange : ClosedRange<Int> = 0...0
+                            if let resIndex = Int(parts[2]) {
+                                seqRange = resIndex...resIndex
+                            }
+                            else {
+                                var parts2 : [String] = parts[2].split(separator: "-").map { String($0) }
+                                var shift : Int = 0
+                                if parts2.count == 1 {
+                                    parts2 = parts[2].components(separatedBy: "...")
+                                }
+                                if parts2.count == 1 {
+                                    parts2 = parts[2].components(separatedBy: "..<")
+                                    shift = 1
+                                }
+                                if parts2.count == 2, let lowerBound = Int(parts2[0]), let upperBound = Int(parts2[1]) {
+                                    if lowerBound <= upperBound-shift {
+                                        seqRange = lowerBound...(upperBound-shift)
+                                    }
+                                }
+                            }
+                            let index = indexTmp - arrayBase
+                            if index >= 0 && index < cluster.count && seqRange.lowerBound > 0 && seqRange.upperBound <= self.refLength {
+                                let seqArray : [UInt8] = VDB.sequenceOfIsolate(cluster[index], inRange: seqRange, vdb: self)
+                                if let seq = String(bytes: seqArray, encoding: .utf8) {
+                                    print(vdb: self, seq)
+                                }
+                                return ([],nil)
+                            }
+                        }
+                    }
                 }
                 if let cluster = clusters[identifier] {
                     print(vdb: self, "\(identifier) = cluster of \(nf(cluster.count)) isolates")
@@ -12563,9 +12687,9 @@ arrayBase = <0 or 1>
             }
             VDB.pagerPrint(vdb: self)
         case "license":
-            print(vdb: self, """
+            VDB.pPrintMultiline(vdb: self, """
          
-Copyright (c) 2021  Anthony West, Caltech
+Copyright (c) 2021-2022  Anthony West, Caltech
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 
@@ -12602,8 +12726,33 @@ ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-""")
 
+vdb includes a Swift translation of Martin Šošić's C/C++ Edlib library.
+The C/C++ Edlib library has the following license:
+
+The MIT License (MIT)
+
+Copyright (c) 2014 Martin Šošić
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+""")
+            VDB.pagerPrint(vdb: self)
         case "debug", "debug on":
             debug = true
             printSwitch(lowercaseLine,debug)
@@ -12763,13 +12912,24 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
             }
         case _ where lowercaseLine.hasPrefix("load ") && !serverMode:
             let dbFileName : String = line.replacingOccurrences(of: "load ", with: "", options: .caseInsensitive, range: nil)
-            let loadCmdParts : [String] = dbFileName.components(separatedBy: " ")
+            var loadCmdParts : [String] = dbFileName.components(separatedBy: " ")
+            var fasta : Bool = loadCmdParts[0].lowercased() == "fasta"
+            if fasta {
+                loadCmdParts.removeFirst()
+            }
             switch loadCmdParts.count {
             case 1:
                 if dbFileName ~~ "pango" {
                     VDB.loadPangoListAll(vdb: self)
                 }
+                else if loadCmdParts[0].prefix(7) == "testvdb" {
+                    testLoadFasta(loadCmdParts[0])
+                }
                 else {
+                    if dbFileName.suffix(6).lowercased() == ".fasta" {
+                        print(vdb: self,"Error - fasta files must be processed with vdbCreate or loaded into a named cluster: load <cluster name> <fasta file name>")
+                        break
+                    }
                     if isolates.isEmpty {
                         isolates = VDB.loadMutationDB_MP(dbFileName, mp_number: mpNumber, vdb: self, initialLoad: true)
                     }
@@ -12794,8 +12954,19 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
                         importNumber += 1
                     }
                 }
-                if patterns[clusterName] == nil {
-                    VDB.loadCluster(clusterName, fromFile: fileName, vdb: self)
+                if fileName.suffix(6).lowercased() == ".fasta" {
+                    fasta = true
+                }
+                if patterns[clusterName] == nil && lists[clusterName] == nil {
+                    if !fasta {
+                        VDB.loadCluster(clusterName, fromFile: fileName, vdb: self)
+                    }
+                    else {
+                        VDB.loadCluster(clusterName, fromFastaFile: fileName, vdb: self)
+                    }
+                }
+                else {
+                    print(vdb: self, "Error - \(clusterName) is not available for use as a cluster name")
                 }
             default:
                 break
@@ -12803,7 +12974,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
         case _ where lowercaseLine.hasPrefix("save ") && !serverMode:
             let names : String = line.replacingOccurrences(of: "save ", with: "", options: .caseInsensitive, range: nil)
             var saveCmdParts : [String] = names.components(separatedBy: " ")
-            let fasta : Bool = saveCmdParts[0].lowercased() == "fasta"
+            var fasta : Bool = saveCmdParts[0].lowercased() == "fasta"
             if fasta {
                 saveCmdParts.removeFirst()
             }
@@ -12813,6 +12984,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
                 let fileName : String = "\(basePath)/\(saveCmdParts[1])"
                 if let cluster = clusters[clusterName] {
                     if !cluster.isEmpty {
+                        if fileName.suffix(6).lowercased() == ".fasta" {
+                            fasta = true
+                        }
                         VDB.saveCluster(cluster, toFile: fileName, fasta: fasta, vdb:self)
                         if saveCmdParts.count == 3 && !saveCmdParts[2].isEmpty {
                             VDB.writeMetadataForCluster(clusterName, metadataFileName: saveCmdParts[2], vdb: self)
@@ -12834,6 +13008,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
                 }
             default:
                 break
+            }
+        case "optmem":
+            if !serverMode {
+                optimizeMemory()
             }
 #if VDB_EMBEDDED && swift(>=1)
         case _ where lowercaseLine.hasPrefix("transfer "):
@@ -13281,7 +13459,66 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
             print(vdb: self, "No help available for \(topic)")
         }
     }
+
+    func optimizeMemory() {
         
+        func checkMemory() -> Int {
+#if os(macOS)
+            // swift determine memory usage
+            // https://developer.apple.com/forums/thread/119906
+            // https://stackoverflow.com/questions/48990831/getting-memory-usage-live-dirty-bytes-in-ios-app-programmatically-not-resident
+            let TASK_VM_INFO_COUNT = MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size
+            var vmInfo = task_vm_info_data_t()
+            var vmInfoSize = mach_msg_type_number_t(TASK_VM_INFO_COUNT)
+            let kern: kern_return_t = withUnsafeMutablePointer(to: &vmInfo) {
+                    $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
+                        task_info(mach_task_self_,
+                                  task_flavor_t(TASK_VM_INFO),
+                                  $0,
+                                  &vmInfoSize)
+                        }
+                    }
+            if kern == KERN_SUCCESS {
+                let usedSize = Int(vmInfo.internal + vmInfo.compressed)
+                print(vdb: self, "Memory in use (in bytes): \(usedSize)")
+                return usedSize
+            } else {
+                let errorString = String(cString: mach_error_string(kern), encoding: .ascii) ?? "unknown error"
+                print(vdb: self, "Error with task_info(): \(errorString)")
+                return 0
+            }
+#else
+            return 0
+#endif
+        }
+        
+        print(vdb: self, "Starting memory optimization")
+        // FIXME: determine current memory usage
+        let startMemory : Int = checkMemory()
+        let startTime : DispatchTime = DispatchTime.now()
+        var counter : Int = 0
+        let _ = autoreleasepool { () -> Void in
+            do {
+                var mDict : [[Mutation]:Int] = [:]
+                for (index,isolate) in isolates.enumerated() {
+                     if let existingIndex = mDict[isolate.mutations] {
+                        isolate.mutations = isolates[existingIndex].mutations
+                        counter += 1
+                    }
+                    else {
+                        mDict[isolate.mutations] = index
+                    }
+                }
+            }
+        }
+        let endTime : DispatchTime = DispatchTime.now()
+        let nanoTime : UInt64 = endTime.uptimeNanoseconds - startTime.uptimeNanoseconds
+        let timeInterval : Double = Double(nanoTime) / 1_000_000_000
+        let timeString : String = String(format: "%4.2f seconds", timeInterval)
+        let endMemory : Int = checkMemory()
+        print(vdb: self, "\(nf(startMemory-endMemory)) bytes saved (\(nf(counter)) mutation sets de-duplicated) in \(timeString)")
+    }
+    
     // MARK: - main run loop
     
     // main entry point - loads data and starts REPL
@@ -13298,10 +13535,12 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #endif
         }
 #endif
-        
+
+#if !VDB_EMBEDDED
         if checkForVDBUpdate {
             checkForUpdates()
         }
+#endif
 
         loadVDB(dbFileNames)
         
@@ -13360,6 +13599,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
         loadrc()
         VDB.loadAliases(vdb: self)
         clusterHasBeenAssigned(allIsolatesKeyword)
+//        optimizeMemory()
         mainRunLoop: repeat {
             if !latestVersionString.isEmpty {
                 print(vdb: self, "   Note - updated vdb version \(latestVersionString) is available on GitHub")
@@ -15501,28 +15741,6 @@ indirect enum Expr {
     
 }
 
-// MARK: - start vdb
-
-#if !VDB_EMBEDDED && swift(>=1)
-if !trimMode {
-    VDB().run(clFileNames)
-}
-else {
-    var inputFileName : String = ""
-    var trimmedFileName : String = ""
-    if clFileNames.count > 0 {
-        inputFileName = clFileNames[0]
-        if clFileNames.count > 1 {
-            trimmedFileName = clFileNames[1]
-        }
-        else {
-            trimmedFileName = clFileNames[0].replacingOccurrences(of: "nucl", with: "tnucl")
-        }
-    }
-    VDB.loadAndTrimMutationDB_MP(inputFileName,trimmedFileName,extendN: trimExtendN)
-}
-#endif
-
 public let minimumArrayCountMP : Int = 10_000
 
 extension Array where Element == Isolate {
@@ -15817,3 +16035,2534 @@ extension Array where Element == Isolate {
         }
     }
 }
+
+// MARK: - Swift version of Edlib alignment library
+
+//  SwiftEdlib2.swift
+//    A translation of Martin Šošić's C/C++ Edlib library into Swift.
+//    The original C/C++ library is licensed under an MIT License Copyright (c) 2014 Martin Šošić.
+//    See the "license" command in this file for the full license.
+
+typealias EdlibChar = UInt8 // could be Character, Int8, Int?
+typealias BinaryWord = UInt64
+
+let EDLIB_STATUS_OK : Int = 0
+let EDLIB_STATUS_ERROR : Int = 1
+
+enum EdlibAlignMode: CaseIterable {
+    case NW     // Global method. This is the standard method.
+    case SHW    // Prefix method. Gap at query end is not penalized.
+    case HW     // Infix method. Gaps at query end and start are not penalized.
+                // For bioinformatics, appropriate for aligning read to a sequence.
+    
+    init?(string: String) {
+        for aMode in EdlibAlignMode.allCases {
+            if string == "\(aMode)" {
+                self = aMode
+                return
+            }
+        }
+        return nil
+    }
+    
+}
+
+//  Alignment tasks
+enum EdlibAlignTask {
+    case Distance
+    case Loc
+    case Path
+}
+
+enum EdlibCigarFormat {
+    case Standard   //!< Match: 'M', Insertion: 'I', Deletion: 'D', Mismatch: 'M'.
+    case Extended   //!< Match: '=', Insertion: 'I', Deletion: 'D', Mismatch: 'X'.
+}
+
+// // Edit operations
+let EDLIB_EDOP_MATCH : Int = 0      //!< Match.
+let EDLIB_EDOP_INSERT : Int = 1     //!< Insertion to target = deletion from query.
+let EDLIB_EDOP_DELETE : Int = 2     //!< Deletion from target = insertion to query.
+let EDLIB_EDOP_MISMATCH : Int = 3   //!< Mismatch.
+
+typealias EdlibWord = UInt64
+let EDLIB_WORD_SIZE : Int = MemoryLayout<EdlibWord>.size*8   // Size of Word in bits
+let EDLIB_WORD_1 : EdlibWord = EdlibWord(1)
+let HIGH_BIT_MASK : EdlibWord = EDLIB_WORD_1 << (EDLIB_WORD_SIZE - 1)
+let MAX_UCHAR : Int = 255
+
+enum SwiftEdlib {
+
+    //  Defines two given characters as equal.
+    struct EdlibEqualityPair {
+        let first : EdlibChar
+        let second : EdlibChar
+    }
+
+    //  Configuration object for edlibAlign() function.
+    struct EdlibAlignConfig {
+        var k : Int
+        var mode : EdlibAlignMode
+        var task : EdlibAlignTask
+        var additionalEqualities : [EdlibEqualityPair]
+        var additionalEqualitiesLength : Int
+    }
+
+    // return default configuration object
+    static func edlibDefaultAlignConfig() -> EdlibAlignConfig {
+        return EdlibAlignConfig(k: -1, mode: .NW, task: .Distance, additionalEqualities: [], additionalEqualitiesLength: 0)
+    }
+    
+    struct EdlibAlignResult {
+        var status : Int
+        var editDistance : Int
+        var endLocations : [Int]
+        var startLocations : [Int]
+        var numLocations : Int
+        var alignment : [EdlibChar]
+        var alignmentLength : Int
+        var alphabetLength : Int
+    }
+    
+struct EdlibAlignmentData {
+    var Ps : [EdlibWord]
+    var Ms : [EdlibWord]
+    var scores : [Int]
+    var firstBlocks : [Int]
+    var lastBlocks : [Int]
+    
+    init(maxNumBlocks: Int, targetLength: Int) {
+        self.Ps = Array(repeating: 0, count: maxNumBlocks * targetLength)
+        self.Ms = Array(repeating: 0, count: maxNumBlocks * targetLength)
+        self.scores = Array(repeating: 0, count: maxNumBlocks * targetLength)
+        self.firstBlocks = Array(repeating: 0, count: targetLength)
+        self.lastBlocks = Array(repeating: 0, count: targetLength)
+    }
+    
+    func writeToFile(alignDataFileNumber : inout Int) {
+        Swift.print("Writing alignment data to file")
+        var outString : String = ""
+        for w in Ps {
+            outString += "\(w),"
+        }
+        outString += "\n"
+        for w in Ms {
+            outString += "\(w),"
+        }
+        outString += "\n"
+        for w in scores {
+            outString += "\(w),"
+        }
+        outString += "\n"
+        for w in firstBlocks {
+            outString += "\(w),"
+        }
+        outString += "\n"
+        for w in lastBlocks {
+            outString += "\(w),"
+        }
+        outString += "\n"
+        let alignDataFilePath : String = "edlib_test/test/alignDataSwift_\(alignDataFileNumber)"
+        do {
+            try outString.write(to: URL(fileURLWithPath: alignDataFilePath), atomically: true, encoding: .ascii)
+        }
+        catch {
+            Swift.print("Error writing alignData to \(alignDataFilePath)")
+        }
+        alignDataFileNumber += 1
+    }
+}
+
+struct Block {
+    var P : EdlibWord    // Pvin
+    var M : EdlibWord    // Mvin
+    var score : Int // score of last cell in block
+    
+    init(p: EdlibWord = 0, m: EdlibWord = 0, s: Int = 0) {
+        self.P = p
+        self.M = m
+        self.score = s
+    }
+}
+
+// Defines equality relation on alphabet characters.
+final class EqualityDefinition {
+    var matrix : [[Bool]] = Array(repeating: Array(repeating: false, count: MAX_UCHAR + 1), count: MAX_UCHAR + 1)
+    func EqualityDefinition(alphabet: [EdlibChar], additionalEqualities: [EdlibEqualityPair] = []) {
+        for i in 0..<alphabet.count {
+            matrix[i][i] = true
+        }
+        for pair in additionalEqualities {
+            if let firstTransformed : Int = alphabet.firstIndex(of: pair.first) {
+                if let secondTransformed : Int = alphabet.firstIndex(of: pair.second) {
+                    matrix[firstTransformed][secondTransformed] = true
+                    matrix[secondTransformed][firstTransformed] = true
+                }
+            }
+        }
+    }
+    func areEqual(_ a: EdlibChar, _ b: EdlibChar) -> Bool {
+        return matrix[Int(a)][Int(b)]
+    }
+}
+
+// Takes EdlibChar query and EdlibChar target, recognizes alphabet and transforms them into unsigned EdlibChar sequences where elements in sequences are their index in the alphabet
+// Example: sequences "ACT" and "CGT" have alphabet "ACTG" and become [0,1,2] and [1,3,2]
+static func transformSequences(queryOriginal: [EdlibChar], targetOriginal: [EdlibChar], query queryTransformed: inout [EdlibChar], target targetTransformed: inout [EdlibChar]) -> [EdlibChar] {
+    var alphabet : [EdlibChar] = []
+    var inAlphabet : [Bool] = Array(repeating: false, count: MAX_UCHAR+1)
+    var letterIndex : [EdlibChar] = Array(repeating: 0, count: MAX_UCHAR+1)
+    queryTransformed = Array(repeating: 0, count: queryOriginal.count)
+    targetTransformed = Array(repeating: 0, count: targetOriginal.count)
+    for (index,c) in queryOriginal.enumerated() {
+        if !inAlphabet[Int(c)] {
+            inAlphabet[Int(c)] = true
+            letterIndex[Int(c)] = EdlibChar(alphabet.count)
+            alphabet.append(c)
+        }
+        queryTransformed[index] = letterIndex[Int(c)]
+    }
+    for (index,c) in targetOriginal.enumerated() {
+        if !inAlphabet[Int(c)] {
+            inAlphabet[Int(c)] = true
+            letterIndex[Int(c)] = EdlibChar(alphabet.count)
+            alphabet.append(c)
+        }
+        targetTransformed[index] = letterIndex[Int(c)]
+    }
+    return alphabet
+}
+
+static func ceilDiv(_ x: Int, _ y: Int) -> Int {
+    return x % y != 0 ? x/y + 1 : x/y
+}
+
+// returns values of cells in block, starting with bottom cell in block.
+static func getBlockCellValues(block: Block) -> [Int] {
+    var scores : [Int] = Array(repeating: 0, count: EDLIB_WORD_SIZE)
+    var score : Int = block.score
+    var mask : EdlibWord = HIGH_BIT_MASK
+    for i in 0..<(EDLIB_WORD_SIZE - 1) {
+        scores[i] = score
+        if (block.P & mask) != 0 {
+            score -= 1
+        }
+        if (block.M & mask) != 0 {
+            score += 1
+        }
+        mask >>= 1
+    }
+    scores[EDLIB_WORD_SIZE - 1] = score
+    return scores
+}
+
+// Build Peq table for given query and alphabet.
+// Peq is table of dimensions alphabetLength+1 x maxNumBlocks.
+// Bit i of Peq[s * maxNumBlocks + b] is 1 if i-th symbol from block b of query equals symbol s, otherwise it is 0.
+static func buildPeq(alphabetLength: Int, query: [EdlibChar], queryLength: Int, equalityDefinition: EqualityDefinition) -> [EdlibWord] {
+    let maxNumBlocks : Int = ceilDiv(queryLength, EDLIB_WORD_SIZE)
+    // table of dimensions alphabetLength+1 x maxNumBlocks. Last symbol is wildcard.
+    var Peq : [EdlibWord] = Array(repeating: 0, count: (alphabetLength + 1) * maxNumBlocks)
+    // Build Peq (1 is match, 0 is mismatch). NOTE: last column is wildcard(symbol that matches anything) with just 1s
+    for symbol in 0...alphabetLength {
+        for b in 0..<maxNumBlocks {
+            if symbol < alphabetLength {
+                Peq[symbol &* maxNumBlocks &+ b] = 0
+                var r : Int = (b&+1) * EDLIB_WORD_SIZE &- 1
+                while r >= b &* EDLIB_WORD_SIZE {
+                    Peq[symbol &* maxNumBlocks &+ b] <<= 1
+                    // NOTE: We pretend like query is padded at the end with W wildcard symbols
+                    if (r >= queryLength || equalityDefinition.areEqual(query[r], EdlibChar(symbol))) {
+                        Peq[symbol &* maxNumBlocks &+ b] += 1
+                    }
+                    r &-= 1
+                }
+            }
+            else { // Last symbol is wildcard, so it is all 1s
+                Peq[symbol &* maxNumBlocks &+ b] = EdlibWord.max
+            }
+        }
+    }
+    return Peq
+}
+
+// Returns new sequence that is reverse of given sequence
+static func createReverseCopy(seq : [EdlibChar]) -> [EdlibChar] {
+    return seq.reversed()
+}
+
+// return true if all cells in block have value larger than k, otherwise false
+static func allBlockCellsLarger(block : Block, k: Int) -> Bool {
+    let scores : [Int] = getBlockCellValues(block: block)
+    for i in 0..<EDLIB_WORD_SIZE {
+       if scores[i] <= k {
+            return false
+       }
+   }
+   return true
+}
+
+
+// Corresponds to Advance_Block function from Myers.
+// Calculates one word(block), which is part of a column.
+// Highest bit of word (one most to the left) is most bottom cell of block from column.
+// Pv[i] and Mv[i] define vin of cell[i]: vin = cell[i] - cell[i-1].
+static func calculateBlock(b: inout Block, Eq: EdlibWord, hin: Int) -> Int {
+    // let Pv : EdlibWord = b.P  // could check whether faster with these assignments
+    // let Mv : EdlibWord = b.M
+    // hin can be 1, -1 or 0.
+    // 1  -> 00...01
+    // 0  -> 00...00
+    // -1 -> 11...11 (2-complement)
+    var Eq : EdlibWord = Eq
+    
+    let hinIsNeg : EdlibWord = EdlibWord(bitPattern:Int64(hin) >> 2) & EDLIB_WORD_1 // 00...001 if hin is -1, 00...000 if 0 or 1
+
+    let Xv : EdlibWord = Eq | b.M
+    // This is instruction below written using 'if': if (hin < 0) Eq |= (EdlibWord)1
+    Eq |= hinIsNeg
+    // FIX?? - arithmetic overflow allowed to prevent crash
+    let Xh : EdlibWord = (((Eq & b.P) &+ b.P) ^ b.P) | Eq
+
+    var Ph : EdlibWord = b.M | ~(Xh | b.P)
+    var Mh : EdlibWord = b.P & Xh
+
+    var hout : Int = 0
+    // This is instruction below written using 'if': if (Ph & HIGH_BIT_MASK) hout = 1
+    hout = Int((Ph & HIGH_BIT_MASK) >> (EDLIB_WORD_SIZE - 1))
+    // This is instruction below written using 'if': if (Mh & HIGH_BIT_MASK) hout = -1
+    hout -= Int((Mh & HIGH_BIT_MASK) >> (EDLIB_WORD_SIZE - 1))
+
+    Ph <<= 1
+    Mh <<= 1
+
+    // This is instruction below written using 'if': if (hin < 0) Mh |= (EdlibWord)1
+    Mh |= hinIsNeg
+    // This is instruction below written using 'if': if (hin > 0) Ph |= (EdlibWord)1
+    Ph |= EdlibWord(((hin + 1) >> 1))
+
+    b.P = Mh | ~(Xv | Ph)
+    b.M = Ph & Xv
+    return hout
+}
+
+// Uses Myers' bit-vector algorithm to find edit distance for one of semi-global alignment methods
+@discardableResult
+static func myersCalcEditDistanceSemiGlobal(Peq: [EdlibWord], W: Int, maxNumBlocks: Int, queryLength: Int, target: [EdlibChar], targetLength: Int, k: Int, mode: EdlibAlignMode, bestScore_: inout Int, positions_: inout [Int], numPositions_: inout Int) -> Int {
+    positions_ = []
+    numPositions_ = 0
+    
+    // firstBlock is 0-based index of first block in Ukkonen band.
+    // lastBlock is 0-based index of last block in Ukkonen band.
+    var firstBlock : Int = 0
+    var lastBlock = min(ceilDiv(k + 1, EDLIB_WORD_SIZE), maxNumBlocks) - 1 // y in Myers
+    let blocks : UnsafeMutableBufferPointer<Block> = UnsafeMutableBufferPointer<Block>.allocate(capacity: maxNumBlocks)
+    blocks.initialize(repeating: Block(p: 0, m: 0, s: 0))
+
+    // For HW, solution will never be larger then queryLength.
+    var k : Int = k
+    if mode == .HW {
+        k = min(queryLength, k)
+    }
+
+    // Each STRONG_REDUCE_NUM column is reduced in more expensive way.
+    // This gives speed up of about 2 times for small k.
+    let STRONG_REDUCE_NUM : Int = 2048
+
+    // Initialize P, M and score
+    guard var bl : UnsafeMutablePointer<Block> = blocks.baseAddress else { NSLog("Error with block allocation"); exit(9) }
+    for b in 0...lastBlock {
+        bl.pointee.score = (b + 1) * EDLIB_WORD_SIZE
+        bl.pointee.P = EdlibWord.max // All 1s
+        bl.pointee.M = EdlibWord(0)
+        bl += 1
+    }
+
+    var bestScore : Int = -1
+    var positions : [Int] = []
+    let startHout : Int = mode == .HW ? 0 : 1  // If 0 then gap before query is not penalized
+    var targetCharIndex : Int = 0
+    for c in 0..<targetLength { // for each column
+//        let Peq_c : EdlibWord = Peq[Int(target[targetCharIndex]) * maxNumBlocks]
+        var Peq_cIndex : Int = Int(target[targetCharIndex]) * maxNumBlocks
+     
+        //----------------------- Calculate column -------------------------//
+        var hout : Int = startHout
+        bl = blocks.baseAddress! + firstBlock
+        Peq_cIndex += firstBlock
+        for _ in firstBlock...lastBlock {
+            hout = calculateBlock(b: &bl.pointee, Eq: Peq[Peq_cIndex], hin: hout)
+            bl.pointee.score += hout
+            bl += 1
+            Peq_cIndex += 1
+        }
+        bl -= 1
+        Peq_cIndex -= 1
+        
+        
+        //---------- Adjust number of blocks according to Ukkonen ----------//
+        if (lastBlock < maxNumBlocks - 1) && (bl.pointee.score - hout <= k) // bl is pointing to last block
+            && (((Peq[Peq_cIndex + 1] & EDLIB_WORD_1) != 0) || hout < 0) { // Peq_c is pointing to last block
+            // If score of left block is not too big, calculate one more block
+            lastBlock += 1
+            bl += 1
+            Peq_cIndex += 1
+            bl.pointee.P = EdlibWord.max // All 1s
+            bl.pointee.M = EdlibWord(0)
+            bl.pointee.score = (bl - 1).pointee.score - hout + EDLIB_WORD_SIZE + calculateBlock(b: &bl.pointee, Eq: Peq[Peq_cIndex], hin: hout)
+        } else {
+            while (lastBlock >= firstBlock && bl.pointee.score >= k + EDLIB_WORD_SIZE) {
+                lastBlock -= 1
+                bl -= 1
+                Peq_cIndex -= 1
+            }
+        }
+
+        // Every some columns, do some expensive but also more efficient block reducing.
+        // This is important!
+        //
+        // Reduce the band by decreasing last block if possible.
+        if (c % STRONG_REDUCE_NUM == 0) {
+            while (lastBlock >= 0 && lastBlock >= firstBlock && allBlockCellsLarger(block: bl.pointee, k: k)) {
+                lastBlock -= 1
+                bl -= 1
+                Peq_cIndex -= 1
+            }
+        }
+        // For HW, even if all cells are > k, there still may be solution in next
+        // column because starting conditions at upper boundary are 0.
+        // That means that first block is always candidate for solution,
+        // and we can never end calculation before last column.
+        if mode == .HW && lastBlock == -1 {
+            lastBlock += 1
+            bl += 1
+            Peq_cIndex += 1
+        }
+
+        // Reduce band by increasing first block if possible. Not applicable to HW.
+        if mode != .HW {
+            while (firstBlock <= lastBlock && blocks[firstBlock].score >= k + EDLIB_WORD_SIZE) {
+                firstBlock += 1
+            }
+            if (c % STRONG_REDUCE_NUM == 0) { // Do strong reduction every some blocks
+                while (firstBlock <= lastBlock && allBlockCellsLarger(block: blocks[firstBlock], k: k)) {
+                    firstBlock += 1
+                }
+            }
+        }
+
+        // If band stops to exist finish
+        if (lastBlock < firstBlock) {
+            bestScore_ = bestScore
+            if bestScore != -1 {
+                positions_ = positions
+                numPositions_ = positions.count
+            }
+            blocks.deallocate()
+            return EDLIB_STATUS_OK
+        }
+        //------------------------------------------------------------------//
+
+        //------------------------- Update best score ----------------------//
+        if lastBlock == maxNumBlocks - 1 {
+            let colScore : Int = bl.pointee.score
+            if colScore <= k { // Scores > k dont have correct values (so we cannot use them), but are certainly > k.
+                // NOTE: Score that I find in column c is actually score from column c-W
+                if bestScore == -1 || colScore <= bestScore {
+                    if colScore != bestScore {
+                        positions = []
+                        bestScore = colScore
+                        // Change k so we will look only for equal or better
+                        // scores then the best found so far.
+                        k = bestScore
+                    }
+                    positions.append(c - W)
+                }
+            }
+        }
+        //------------------------------------------------------------------//
+        
+        targetCharIndex += 1
+    }
+    
+    // Obtain results for last W columns from last column.
+    if lastBlock == maxNumBlocks - 1 {
+        let blockScores : [Int] = getBlockCellValues(block: bl.pointee)
+        for i in 0..<W {
+            let colScore : Int = blockScores[i + 1]
+            if (colScore <= k && (bestScore == -1 || colScore <= bestScore)) {
+                if colScore != bestScore {
+                    positions = []
+                    bestScore = colScore
+                    k = colScore
+                }
+                positions.append(targetLength - W + i)
+            }
+        }
+    }
+
+    bestScore_ = bestScore
+    if bestScore != -1 {
+        positions_ = positions
+        numPositions_ = positions.count
+    }
+    
+    blocks.deallocate()
+    return EDLIB_STATUS_OK
+}
+
+// Uses Myers' bit-vector algorithm to find edit distance for global(NW) alignment method
+@discardableResult
+static func myersCalcEditDistanceNW(Peq: [EdlibWord], W: Int, maxNumBlocks: Int, queryLength: Int, target: [EdlibChar], targetLength: Int, k: Int, bestScore_: inout Int, position_: inout Int, findAlignment: Bool, alignData: inout EdlibAlignmentData, targetStopPosition: Int) -> Int {
+
+    if targetStopPosition > -1 && findAlignment {
+        // They can not be both set at the same time!
+        return EDLIB_STATUS_ERROR
+    }
+
+    // Each STRONG_REDUCE_NUM column is reduced in more expensive way.
+    let STRONG_REDUCE_NUM : Int = 2048 // TODO: Choose this number dinamically (based on query and target lengths?), so it does not affect speed of computation
+
+    if k < abs(targetLength - queryLength) {
+        position_ = -1
+        bestScore_ = -1
+        return EDLIB_STATUS_OK
+    }
+
+    var k :  Int = min(k, max(queryLength, targetLength))  // Upper bound for k
+
+    // firstBlock is 0-based index of first block in Ukkonen band.
+    // lastBlock is 0-based index of last block in Ukkonen band.
+    var firstBlock : Int = 0
+    // This is optimal now, by my formula.
+    var lastBlock : Int = min(maxNumBlocks, ceilDiv(min(k, (k + queryLength - targetLength) / 2) + 1, EDLIB_WORD_SIZE)) - 1
+    let blocks : UnsafeMutableBufferPointer<Block> = UnsafeMutableBufferPointer<Block>.allocate(capacity: maxNumBlocks)
+    blocks.initialize(repeating: Block(p: 0, m: 0, s: 0))
+
+    // Initialize P, M and score
+    guard var bl : UnsafeMutablePointer<Block> = blocks.baseAddress else { NSLog("Error with block allocation"); exit(9) }
+    for b in 0...lastBlock {
+        bl.pointee.score = (b + 1) * EDLIB_WORD_SIZE
+        bl.pointee.P = EdlibWord.max // All 1s
+        bl.pointee.M = EdlibWord(0)
+        bl += 1
+    }
+    
+    // If we want to find alignment, we have to store needed data
+    if findAlignment {
+        alignData = EdlibAlignmentData(maxNumBlocks: maxNumBlocks, targetLength: targetLength)
+    }
+    else if targetStopPosition > -1 {
+        alignData = EdlibAlignmentData(maxNumBlocks: maxNumBlocks, targetLength: 1)
+    }
+    else {
+        alignData = EdlibAlignmentData(maxNumBlocks: 0, targetLength: 0)
+    }
+    
+    var targetCharIndex : Int = 0
+    for c in 0..<targetLength { // for each column
+//        let Peq_c : EdlibWord = Peq[Int(target[targetCharIndex]) * maxNumBlocks]
+        let Peq_cIndex : Int = Int(target[targetCharIndex]) * maxNumBlocks
+     
+        //----------------------- Calculate column -------------------------//
+        var hout : Int = 1
+        bl = blocks.baseAddress! + firstBlock
+//        Peq_cIndex += firstBlock
+        for i in firstBlock...lastBlock {
+            hout = calculateBlock(b: &bl.pointee, Eq: Peq[Peq_cIndex+i], hin: hout)
+            bl.pointee.score += hout
+            bl += 1
+//            Peq_cIndex += 1
+        }
+        bl -= 1
+//        Peq_cIndex -= 1+lastBlock-firstBlock-firstBlock
+        //------------------------------------------------------------------//
+        // bl now points to last block
+        
+        // Update k. I do it only on end of column because it would slow calculation too much otherwise.
+        // NOTICE: I add W when in last block because it is actually result from W cells to the left and W cells up.
+        k = min(k, bl.pointee.score
+                + max(targetLength - c - 1, queryLength - ((1 + lastBlock) * EDLIB_WORD_SIZE - 1) - 1)
+                + (lastBlock == maxNumBlocks - 1 ? W : 0))
+        
+        //---------- Adjust number of blocks according to Ukkonen ----------//
+        //--- Adjust last block ---//
+        // If block is not beneath band, calculate next block. Only next because others are certainly beneath band.
+        if (lastBlock + 1 < maxNumBlocks
+            && !(//score[lastBlock] >= k + EDLIB_WORD_SIZE ||  // NOTICE: this condition could be satisfied if above block also!
+                 ((lastBlock + 1) * EDLIB_WORD_SIZE - 1
+                  > k - bl.pointee.score + 2 * EDLIB_WORD_SIZE - 2 - targetLength + c + queryLength))) {
+            lastBlock += 1
+            bl += 1
+            bl.pointee.P = EdlibWord.max // All 1s
+            bl.pointee.M = EdlibWord(0)
+            let newHout : Int = calculateBlock(b: &bl.pointee, Eq: Peq[Peq_cIndex+lastBlock], hin: hout)
+//            let newHout : Int = calculateBlock(b: &bl.pointee, Eq: Peq[Peq_cIndex-1], hin: hout)
+            bl.pointee.score = (bl - 1).pointee.score - hout + EDLIB_WORD_SIZE + newHout
+            hout = newHout
+        }
+                        
+        // While block is out of band, move one block up.
+        // NOTE: Condition used here is more loose than the one from the article, since I simplified the max() part of it.
+        // I could consider adding that max part, for optimal performance.
+        while (lastBlock >= firstBlock
+               && (bl.pointee.score >= k + EDLIB_WORD_SIZE
+                   || ((lastBlock + 1) * EDLIB_WORD_SIZE - 1 >
+                       // TODO: Does not work if do not put +1! Why???
+                       k - bl.pointee.score + 2 * EDLIB_WORD_SIZE - 2 - targetLength + c + queryLength + 1))) {
+            lastBlock -= 1
+            bl -= 1
+        }
+        //-------------------------//
+
+        //--- Adjust first block ---//
+        // While outside of band, advance block
+        while (firstBlock <= lastBlock
+               && (blocks[firstBlock].score >= k + EDLIB_WORD_SIZE
+                   || ((firstBlock + 1) * EDLIB_WORD_SIZE - 1 <
+                       blocks[firstBlock].score - k - targetLength + queryLength + c))) {
+            firstBlock += 1
+        }
+        //--------------------------/
+
+        // TODO: consider if this part is useful, it does not seem to help much
+        if (c % STRONG_REDUCE_NUM == 0) { // Every some columns do more expensive but more efficient reduction
+            while (lastBlock >= firstBlock) {
+                // If all cells outside of band, remove block
+                let scores : [Int] = getBlockCellValues(block: bl.pointee)
+                let numCells : Int = lastBlock == maxNumBlocks - 1 ? EDLIB_WORD_SIZE - W : EDLIB_WORD_SIZE
+                var r : Int = lastBlock * EDLIB_WORD_SIZE + numCells - 1
+                var reduce : Bool = true
+                for i in (EDLIB_WORD_SIZE - numCells)..<EDLIB_WORD_SIZE {
+                    // TODO: Does not work if do not put +1! Why???
+                    if (scores[i] <= k && r <= k - scores[i] - targetLength + c + queryLength + 1) {
+                        reduce = false
+                        break
+                    }
+                    r -= 1
+                }
+                if !reduce {
+                    break
+                }
+                lastBlock -= 1
+                bl -= 1
+            }
+
+            while (firstBlock <= lastBlock) {
+                // If all cells outside of band, remove block
+                let scores : [Int] = getBlockCellValues(block: blocks[firstBlock])
+                let numCells : Int = firstBlock == maxNumBlocks - 1 ? EDLIB_WORD_SIZE - W : EDLIB_WORD_SIZE
+                var r : Int = firstBlock * EDLIB_WORD_SIZE + numCells - 1
+                var reduce : Bool = true
+                for i in (EDLIB_WORD_SIZE - numCells)..<EDLIB_WORD_SIZE {
+                    if (scores[i] <= k && r >= scores[i] - k - targetLength + c + queryLength) {
+                        reduce = false
+                        break
+                    }
+                    r -= 1
+                }
+                if !reduce {
+                    break
+                }
+                firstBlock += 1
+            }
+        }
+
+        // If band stops to exist finish
+        if lastBlock < firstBlock {
+            bestScore_ = -1
+            position_ = -1
+            blocks.deallocate()
+            return EDLIB_STATUS_OK
+        }
+        //------------------------------------------------------------------//
+
+        //---- Save column so it can be used for reconstruction ----//
+        if (findAlignment && c < targetLength) {
+            bl = blocks.baseAddress! + firstBlock
+            for b in firstBlock...lastBlock {
+                alignData.Ps[maxNumBlocks * c + b] = bl.pointee.P
+                alignData.Ms[maxNumBlocks * c + b] = bl.pointee.M
+                alignData.scores[maxNumBlocks * c + b] = bl.pointee.score
+                alignData.firstBlocks[c] = firstBlock
+                alignData.lastBlocks[c] = lastBlock
+                bl += 1
+            }
+//            alignData.writeToFile()
+        }
+        //----------------------------------------------------------//
+        //---- If this is stop column, save it and finish ----//
+        if c == targetStopPosition {
+            for b in firstBlock...lastBlock {
+                alignData.Ps[b] = (blocks.baseAddress! + b).pointee.P
+                alignData.Ms[b] = (blocks.baseAddress! + b).pointee.M
+                alignData.scores[b] = (blocks.baseAddress! + b).pointee.score
+                alignData.firstBlocks[0] = firstBlock
+                alignData.lastBlocks[0] = lastBlock
+            }
+            bestScore_ = -1
+            position_ = targetStopPosition
+            blocks.deallocate()
+            return EDLIB_STATUS_OK
+        }
+        //----------------------------------------------------//
+
+//        Peq_cIndex -= 1+lastBlock-firstBlock
+        targetCharIndex += 1
+    }
+    if lastBlock == maxNumBlocks - 1 { // If last block of last column was calculated
+        // Obtain best score from block -> it is complicated because query is padded with W cells
+        let bestScore : Int = getBlockCellValues(block: blocks[lastBlock])[W]
+        if bestScore <= k {
+            bestScore_ = bestScore
+            position_ = targetLength - 1
+            blocks.deallocate()
+            return EDLIB_STATUS_OK
+        }
+    }
+
+    position_ = -1
+    bestScore_ = -1
+    blocks.deallocate()
+    return EDLIB_STATUS_OK
+}
+
+//  Finds one possible alignment that gives optimal score by moving back through the dynamic programming matrix, that is stored in alignData. Consumes large amount of memory: O(queryLength * targetLength).
+static func obtainAlignmentTraceback(queryLength: Int, targetLength: Int, bestScore: Int, alignData: EdlibAlignmentData, alignment : inout [EdlibChar], alignmentLength: inout Int) -> Int {
+   
+    let maxNumBlocks : Int = ceilDiv(queryLength, EDLIB_WORD_SIZE)
+    let W : Int = maxNumBlocks * EDLIB_WORD_SIZE - queryLength
+
+    alignment = Array(repeating: 0, count: queryLength + targetLength - 1)
+    alignmentLength = 0
+    var c : Int = targetLength - 1 // index of column
+    var b : Int = maxNumBlocks - 1 // index of block in column
+    var currScore : Int = bestScore // Score of current cell
+    var lScore : Int = -1 // Score of left cell
+    var uScore : Int = -1 // Score of upper cell
+    var ulScore : Int = -1 // Score of upper left cell
+    var currP : EdlibWord = alignData.Ps[c * maxNumBlocks + b] // P of current block
+    var currM : EdlibWord = alignData.Ms[c * maxNumBlocks + b] // M of current block
+    // True if block to left exists and is in band
+    var thereIsLeftBlock : Bool = c > 0 && b >= alignData.firstBlocks[c-1] && b <= alignData.lastBlocks[c-1]
+    // We set initial values of lP and lM to 0 only to avoid compiler warnings, they should not affect the
+    // calculation as both lP and lM should be initialized at some moment later (but compiler can not
+    // detect it since this initialization is guaranteed by "business" logic).
+    var lP : EdlibWord = 0
+    var lM : EdlibWord = 0
+    if thereIsLeftBlock {
+        lP = alignData.Ps[(c - 1) * maxNumBlocks + b] // P of block to the left
+        lM = alignData.Ms[(c - 1) * maxNumBlocks + b] // M of block to the left
+    }
+    currP <<= W
+    currM <<= W
+    var blockPos : Int = EDLIB_WORD_SIZE - W - 1 // 0 based index of current cell in blockPos
+
+    // TODO(martin): refactor this whole piece of code. There are too many if-else statements,
+    // it is too easy for a bug to hide and to hard to effectively cover all the edge-cases.
+    // We need better separation of logic and responsibilities.
+    while true {
+        if c == 0 {
+            thereIsLeftBlock = true
+            lScore = b * EDLIB_WORD_SIZE + blockPos + 1
+            ulScore = lScore - 1
+        }
+
+        // TODO: improvement: calculate only those cells that are needed,
+        //       for example if I calculate upper cell and can move up,
+        //       there is no need to calculate left and upper left cell
+        //---------- Calculate scores ---------//
+        if (lScore == -1 && thereIsLeftBlock) {
+            lScore = alignData.scores[(c - 1) * maxNumBlocks + b] // score of block to the left
+            for _ in 0..<EDLIB_WORD_SIZE - blockPos - 1 {
+                if ((lP & HIGH_BIT_MASK) != 0) {
+                    lScore -= 1
+                }
+                if ((lM & HIGH_BIT_MASK) != 0) {
+                    lScore += 1
+                }
+                lP <<= 1
+                lM <<= 1
+            }
+        }
+        if ulScore == -1 {
+            if lScore != -1 {
+                ulScore = lScore
+                if ((lP & HIGH_BIT_MASK) != 0) {
+                    ulScore -= 1
+                }
+                if ((lM & HIGH_BIT_MASK) != 0) {
+                    ulScore += 1
+                }
+            }
+            else if (c > 0 && b-1 >= alignData.firstBlocks[c-1] && b-1 <= alignData.lastBlocks[c-1]) {
+                // This is the case when upper left cell is last cell in block,
+                // and block to left is not in band so lScore is -1.
+                ulScore = alignData.scores[(c - 1) * maxNumBlocks + b - 1]
+            }
+        }
+        if (uScore == -1) {
+            uScore = currScore
+            if ((currP & HIGH_BIT_MASK) != 0) {
+                uScore -= 1
+            }
+            if ((currM & HIGH_BIT_MASK) != 0) {
+                uScore += 1
+            }
+            currP <<= 1
+            currM <<= 1
+        }
+        //-------------------------------------//
+
+        // TODO: should I check if there is upper block?
+
+        //-------------- Move --------------//
+        // Move up - insertion to target - deletion from query
+        if (uScore != -1 && uScore + 1 == currScore) {
+            currScore = uScore
+            lScore = ulScore
+            ulScore = -1
+            uScore = -1
+            if (blockPos == 0) { // If entering new (upper) block
+                if (b == 0) { // If there are no cells above (only boundary cells)
+                    alignment[alignmentLength] = EdlibChar(EDLIB_EDOP_INSERT) // Move up
+                    alignmentLength += 1
+                    for _ in 0..<(c + 1) { // Move left until end
+                        alignment[alignmentLength] = EdlibChar(EDLIB_EDOP_DELETE)
+                        alignmentLength += 1
+                    }
+                    break
+                } else {
+                    blockPos = EDLIB_WORD_SIZE - 1
+                    b -= 1
+                    currP = alignData.Ps[c * maxNumBlocks + b]
+                    currM = alignData.Ms[c * maxNumBlocks + b]
+                    if (c > 0 && b >= alignData.firstBlocks[c-1] && b <= alignData.lastBlocks[c-1]) {
+                        thereIsLeftBlock = true
+                        lP = alignData.Ps[(c - 1) * maxNumBlocks + b] // TODO: improve this, too many operations
+                        lM = alignData.Ms[(c - 1) * maxNumBlocks + b]
+                    } else {
+                        thereIsLeftBlock = false
+                        // TODO(martin): There may not be left block, but there can be left boundary - do we
+                        // handle this correctly then? Are l and ul score set correctly? I should check that / refactor this.
+                    }
+                }
+            } else {
+                blockPos -= 1
+                lP <<= 1
+                lM <<= 1
+            }
+            // Mark move
+            alignment[alignmentLength] = EdlibChar(EDLIB_EDOP_INSERT)
+            alignmentLength += 1
+        }
+        // Move left - deletion from target - insertion to query
+        else if (lScore != -1 && lScore + 1 == currScore) {
+            currScore = lScore
+            uScore = ulScore
+            ulScore = -1
+            lScore = -1
+            c -= 1
+            if c == -1 { // If there are no cells to the left (only boundary cells)
+                alignment[alignmentLength] = EdlibChar(EDLIB_EDOP_DELETE) // Move left
+                alignmentLength += 1
+                let numUp : Int = b * EDLIB_WORD_SIZE + blockPos + 1
+                for _ in 0..<numUp { // Move up until end
+                    alignment[alignmentLength] = EdlibChar(EDLIB_EDOP_INSERT)
+                    alignmentLength += 1
+                }
+                break
+            }
+            currP = lP
+            currM = lM
+            if (c > 0 && b >= alignData.firstBlocks[c-1] && b <= alignData.lastBlocks[c-1]) {
+                thereIsLeftBlock = true
+                lP = alignData.Ps[(c - 1) * maxNumBlocks + b]
+                lM = alignData.Ms[(c - 1) * maxNumBlocks + b]
+            } else {
+                if c == 0 { // If there are no cells to the left (only boundary cells)
+                    thereIsLeftBlock = true
+                    lScore = b * EDLIB_WORD_SIZE + blockPos + 1
+                    ulScore = lScore - 1
+                } else {
+                    thereIsLeftBlock = false
+                }
+            }
+            // Mark move
+            alignment[alignmentLength] = EdlibChar(EDLIB_EDOP_DELETE)
+            alignmentLength += 1
+        }
+        // Move up left - (mis)match
+        else if ulScore != -1 {
+            let moveCode : EdlibChar = EdlibChar(ulScore == currScore ? EDLIB_EDOP_MATCH : EDLIB_EDOP_MISMATCH)
+            currScore = ulScore
+            ulScore = -1
+            lScore = -1
+            uScore = -1
+            c -= 1
+            if c == -1 { // If there are no cells to the left (only boundary cells)
+                alignment[alignmentLength] = moveCode // Move left
+                alignmentLength += 1
+                let numUp: Int = b * EDLIB_WORD_SIZE + blockPos
+                for _ in 0..<numUp { // Move up until end
+                    alignment[alignmentLength] = EdlibChar(EDLIB_EDOP_INSERT)
+                    alignmentLength += 1
+                }
+                break
+            }
+            if (blockPos == 0) { // If entering upper left block
+                if (b == 0) { // If there are no more cells above (only boundary cells)
+                    alignment[alignmentLength] = moveCode // Move up left
+                    alignmentLength += 1
+                    for _ in 0..<(c + 1) { // Move left until end
+                        alignment[alignmentLength] = EdlibChar(EDLIB_EDOP_DELETE)
+                        alignmentLength += 1
+                    }
+                    break
+                }
+                blockPos = EDLIB_WORD_SIZE - 1
+                b -= 1
+                currP = alignData.Ps[c * maxNumBlocks + b]
+                currM = alignData.Ms[c * maxNumBlocks + b]
+            } else { // If entering left block
+                blockPos -= 1
+                currP = lP
+                currM = lM
+                currP <<= 1
+                currM <<= 1
+            }
+            // Set new left block
+            if (c > 0 && b >= alignData.firstBlocks[c-1] && b <= alignData.lastBlocks[c-1]) {
+                thereIsLeftBlock = true
+                lP = alignData.Ps[(c - 1) * maxNumBlocks + b]
+                lM = alignData.Ms[(c - 1) * maxNumBlocks + b]
+            } else {
+                if c == 0 { // If there are no cells to the left (only boundary cells)
+                    thereIsLeftBlock = true
+                    lScore = b * EDLIB_WORD_SIZE + blockPos + 1
+                    ulScore = lScore - 1
+                } else {
+                    thereIsLeftBlock = false
+                }
+            }
+            // Mark move
+            alignment[alignmentLength] = moveCode
+            alignmentLength += 1
+        } else {
+            // Reached end - finished!
+            break
+        }
+        //----------------------------------//
+    }
+
+    alignment.removeLast(alignment.count-alignmentLength)
+    alignment.reverse()
+    return EDLIB_STATUS_OK
+}
+
+// Writes values of cells in block into given array, starting with first/top cell.
+// @param [in] block  @param [out] dest  Array into which cell values are written. Must have size of at least EDLIB_WORD_SIZE.
+static func readBlock(block: Block, dest: UnsafeMutablePointer<Int>) {
+    var score : Int = block.score
+    var mask : EdlibWord = HIGH_BIT_MASK
+    for i in 0..<(EDLIB_WORD_SIZE - 1) {
+        dest[EDLIB_WORD_SIZE - 1 - i] = score
+        if ((block.P & mask) != 0) {
+            score -= 1
+        }
+        if ((block.M & mask) != 0) {
+            score += 1
+        }
+        mask >>= 1
+    }
+    dest[0] = score
+}
+
+// Writes values of cells in block into given array, starting with last/bottom cell.
+// @param [in] block  @param [out] dest  Array into which cell values are written. Must have size of at least EDLIB_WORD_SIZE.
+static func readBlockReverse(block: Block, dest: UnsafeMutablePointer<Int>) {
+    var score : Int = block.score
+    var mask : EdlibWord = HIGH_BIT_MASK
+    for i in 0..<(EDLIB_WORD_SIZE - 1) {
+        dest[i] = score
+        if ((block.P & mask) != 0) {
+            score -= 1
+        }
+        if ((block.M & mask) != 0) {
+            score += 1
+        }
+        mask >>= 1
+    }
+    dest[EDLIB_WORD_SIZE - 1] = score
+}
+
+
+// Finds one possible alignment that gives optimal score (bestScore).
+// Uses Hirschberg's algorithm to split problem into two sub-problems, solve them and combine them together.
+static func obtainAlignmentHirschberg(query: [EdlibChar], rQuery: [EdlibChar], queryLength: Int, target: [EdlibChar], rTarget: [EdlibChar], targetLength: Int, equalityDefinition: EqualityDefinition, alphabetLength: Int, bestScore: Int, alignment: inout [EdlibChar], alignmentLength: inout Int) -> Int {
+
+    let maxNumBlocks : Int = ceilDiv(queryLength, EDLIB_WORD_SIZE)
+    let W : Int = maxNumBlocks * EDLIB_WORD_SIZE - queryLength
+
+    let Peq : [EdlibWord] = buildPeq(alphabetLength: alphabetLength, query: query, queryLength: queryLength, equalityDefinition: equalityDefinition)
+    let rPeq : [EdlibWord] = buildPeq(alphabetLength: alphabetLength, query: rQuery, queryLength: queryLength, equalityDefinition: equalityDefinition)
+
+    // Used only to call functions.
+    var score_ : Int = 0
+    var endLocation_ : Int = 0
+
+    // Divide dynamic matrix into two halfs, left and right.
+    let leftHalfWidth : Int = targetLength / 2
+    let rightHalfWidth : Int = targetLength - leftHalfWidth
+
+    // Calculate left half.
+    var alignDataLeftHalf : EdlibAlignmentData = EdlibAlignmentData(maxNumBlocks: maxNumBlocks, targetLength: leftHalfWidth)
+    let leftHalfCalcStatus : Int = myersCalcEditDistanceNW(
+        Peq: Peq, W: W, maxNumBlocks: maxNumBlocks, queryLength: queryLength, target: target, targetLength: targetLength, k: bestScore,
+        bestScore_: &score_, position_: &endLocation_, findAlignment: false, alignData: &alignDataLeftHalf, targetStopPosition: leftHalfWidth - 1)
+
+    // Calculate right half.
+    var alignDataRightHalf : EdlibAlignmentData = EdlibAlignmentData(maxNumBlocks: maxNumBlocks, targetLength: rightHalfWidth)
+    let rightHalfCalcStatus : Int = myersCalcEditDistanceNW(
+        Peq: rPeq, W: W, maxNumBlocks: maxNumBlocks, queryLength: queryLength, target: rTarget, targetLength: targetLength, k: bestScore,
+        bestScore_: &score_, position_: &endLocation_, findAlignment: false, alignData: &alignDataRightHalf, targetStopPosition: rightHalfWidth - 1)
+
+    if (leftHalfCalcStatus == EDLIB_STATUS_ERROR || rightHalfCalcStatus == EDLIB_STATUS_ERROR) {
+        return EDLIB_STATUS_ERROR
+    }
+
+    // Unwrap the left half.
+    let firstBlockIdxLeft : Int = alignDataLeftHalf.firstBlocks[0]
+    let lastBlockIdxLeft : Int = alignDataLeftHalf.lastBlocks[0]
+    // TODO: avoid this allocation by using some shared array?
+    // scoresLeft contains scores from left column, starting with scoresLeftStartIdx row (query index)
+    // and ending with scoresLeftEndIdx row (0-indexed).
+    var scoresLeftLength : Int = (lastBlockIdxLeft - firstBlockIdxLeft + 1) * EDLIB_WORD_SIZE
+    let scoresLeft : UnsafeMutablePointer<Int> = UnsafeMutablePointer<Int>.allocate(capacity: scoresLeftLength)
+    scoresLeft.initialize(repeating: 0, count: scoresLeftLength)
+    for blockIdx in firstBlockIdxLeft...lastBlockIdxLeft {
+        let block : Block = Block(p: alignDataLeftHalf.Ps[blockIdx], m: alignDataLeftHalf.Ms[blockIdx],
+                                  s: alignDataLeftHalf.scores[blockIdx])
+        readBlock(block: block, dest: scoresLeft + (blockIdx - firstBlockIdxLeft) * EDLIB_WORD_SIZE)
+    }
+    let scoresLeftStartIdx : Int = firstBlockIdxLeft * EDLIB_WORD_SIZE
+    // If last block contains padding, shorten the length of scores for the length of padding.
+    if lastBlockIdxLeft == maxNumBlocks - 1 {
+        scoresLeftLength -= W
+    }
+
+    // Unwrap the right half (I also reverse it while unwraping).
+    let firstBlockIdxRight : Int = alignDataRightHalf.firstBlocks[0]
+    let lastBlockIdxRight : Int = alignDataRightHalf.lastBlocks[0]
+    var scoresRightLength : Int = (lastBlockIdxRight - firstBlockIdxRight + 1) * EDLIB_WORD_SIZE
+    var scoresRight : UnsafeMutablePointer<Int> = UnsafeMutablePointer<Int>.allocate(capacity:scoresRightLength)
+//    let scoresRightOriginalStart : UnsafeMutablePointer<Int> = scoresRight
+    for blockIdx in firstBlockIdxRight...lastBlockIdxRight {
+        let block : Block = Block(p: alignDataRightHalf.Ps[blockIdx], m: alignDataRightHalf.Ms[blockIdx],
+                                  s: alignDataRightHalf.scores[blockIdx])
+        readBlockReverse(block: block, dest: scoresRight + (lastBlockIdxRight - blockIdx) * EDLIB_WORD_SIZE)
+    }
+    var scoresRightStartIdx : Int = queryLength - (lastBlockIdxRight + 1) * EDLIB_WORD_SIZE
+    // If there is padding at the beginning of scoresRight (that can happen because of reversing that we do),
+    // move pointer forward to remove the padding (that is why we remember originalStart).
+    if scoresRightStartIdx < 0 {
+        //assert(scoresRightStartIdx == -1 * W)
+        scoresRight += W
+        scoresRightStartIdx += W
+        scoresRightLength -= W
+    }
+
+    //--------------------- Find the best move ----------------//
+    // Find the query/row index of cell in left column which together with its lower right neighbour
+    // from right column gives the best score (when summed). We also have to consider boundary cells
+    // (those cells at -1 indexes).
+    //  x|
+    //  -+-
+    //   |x
+    let queryIdxLeftStart : Int = max(scoresLeftStartIdx, scoresRightStartIdx - 1)
+    let queryIdxLeftEnd : Int = min(scoresLeftStartIdx + scoresLeftLength - 1,
+                          scoresRightStartIdx + scoresRightLength - 2)
+    var leftScore : Int = -1
+    var rightScore : Int = -1
+    var queryIdxLeftAlignment : Int = -1  // Query/row index of cell in left column where alignment is passing through.
+    var queryIdxLeftAlignmentFound : Bool = false
+    for queryIdx in queryIdxLeftStart...queryIdxLeftEnd {
+        leftScore = scoresLeft[queryIdx - scoresLeftStartIdx]
+        rightScore = scoresRight[queryIdx + 1 - scoresRightStartIdx]
+        if (leftScore + rightScore == bestScore) {
+            queryIdxLeftAlignment = queryIdx
+            queryIdxLeftAlignmentFound = true
+            break
+        }
+    }
+    // Check boundary cells.
+    if (!queryIdxLeftAlignmentFound && scoresLeftStartIdx == 0 && scoresRightStartIdx == 0) {
+        leftScore = leftHalfWidth
+        rightScore = scoresRight[0]
+        if (leftScore + rightScore == bestScore) {
+            queryIdxLeftAlignment = -1
+            queryIdxLeftAlignmentFound = true
+        }
+    }
+    if (!queryIdxLeftAlignmentFound && scoresLeftStartIdx + scoresLeftLength == queryLength
+        && scoresRightStartIdx + scoresRightLength == queryLength) {
+        leftScore = scoresLeft[scoresLeftLength - 1]
+        rightScore = rightHalfWidth
+        if (leftScore + rightScore == bestScore) {
+            queryIdxLeftAlignment = queryLength - 1
+            queryIdxLeftAlignmentFound = true
+        }
+    }
+
+    if (queryIdxLeftAlignmentFound == false) {
+        // If there was no move that is part of optimal alignment, then there is no such alignment
+        // or given bestScore is not correct!
+        return EDLIB_STATUS_ERROR
+    }
+    //----------------------------------------------------------//
+
+    // Calculate alignments for upper half of left half (upper left - ul)
+    // and lower half of right half (lower right - lr).
+    let ulHeight : Int = queryIdxLeftAlignment + 1
+    let lrHeight : Int = queryLength - ulHeight
+    let ulWidth : Int = leftHalfWidth
+    let lrWidth : Int = rightHalfWidth
+    var ulAlignment : [EdlibChar] = []
+    var ulAlignmentLength : Int = 0
+    // rQuery: rQuery + lrHeight, rTarget: rTarget + lrWidth
+    let ulStatusCode : Int = obtainAlignment(query: query, rQuery: Array(rQuery[lrHeight..<rQuery.endIndex]), queryLength: ulHeight,
+                                             target: target, rTarget: Array(rTarget[lrWidth..<rTarget.endIndex]), targetLength: ulWidth,
+                                             equalityDefinition: equalityDefinition, alphabetLength: alphabetLength, bestScore: leftScore,
+                                             alignment: &ulAlignment, alignmentLength: &ulAlignmentLength)
+    var lrAlignment : [EdlibChar] = []
+    var lrAlignmentLength : Int = 0
+    // query: query + ulHeight, target: target + ulWidth
+    let lrStatusCode : Int = obtainAlignment(query: Array(query[ulHeight..<query.endIndex]), rQuery: rQuery, queryLength: lrHeight,
+                                             target: Array(target[ulWidth..<target.endIndex]), rTarget: rTarget, targetLength: lrWidth,
+                                             equalityDefinition: equalityDefinition, alphabetLength: alphabetLength, bestScore: rightScore,
+                                             alignment: &lrAlignment, alignmentLength: &lrAlignmentLength)
+    if (ulStatusCode == EDLIB_STATUS_ERROR || lrStatusCode == EDLIB_STATUS_ERROR) {
+        return EDLIB_STATUS_ERROR
+    }
+     
+    // Build alignment by concatenating upper left alignment with lower right alignment.
+    alignmentLength = ulAlignmentLength + lrAlignmentLength
+    alignment = Array(repeating: 0, count: alignmentLength)
+//    memcpy(alignment, ulAlignment, ulAlignmentLength)
+    for i in 0..<ulAlignmentLength {
+        alignment[i] = ulAlignment[i]
+    }
+//    memcpy(alignment + ulAlignmentLength, lrAlignment, lrAlignmentLength)
+    for i in 0..<lrAlignmentLength {
+        alignment[i+ulAlignmentLength] = lrAlignment[i]
+    }
+/*
+    alignment.reserveCapacity(alignmentLength)
+    alignment.append(contentsOf: Array(repeating: 0, count: lrAlignmentLength))
+    alignment.withUnsafeMutableBytes { destBytes in
+        lrAlignment.withUnsafeMutableBytes { srcBytes in
+                let destOffset = destBytes.baseAddress! + ulAlignmentLength
+                let srcOffset = srcBytes.baseAddress!
+                memmove(destOffset, srcOffset, lrAlignmentLength)
+            }
+        }
+ */
+    return EDLIB_STATUS_OK
+}
+
+@discardableResult
+static func obtainAlignment(query: [EdlibChar], rQuery: [EdlibChar], queryLength: Int, target: [EdlibChar], rTarget: [EdlibChar], targetLength: Int, equalityDefinition: EqualityDefinition, alphabetLength: Int, bestScore: Int, alignment: inout [EdlibChar], alignmentLength: inout Int) -> Int {
+
+    // Handle special case when one of sequences has length of 0.
+    if queryLength == 0 || targetLength == 0 {
+        alignmentLength = targetLength + queryLength
+        alignment = Array(repeating: 0, count: alignmentLength)
+        for i in 0..<alignmentLength {
+            alignment[i] = EdlibChar(queryLength == 0 ? EDLIB_EDOP_DELETE : EDLIB_EDOP_INSERT)
+        }
+        return EDLIB_STATUS_OK
+    }
+    
+    let maxNumBlocks : Int = ceilDiv(queryLength, EDLIB_WORD_SIZE)
+    let W : Int = maxNumBlocks * EDLIB_WORD_SIZE - queryLength
+    let statusCode : Int
+
+    // TODO: think about reducing number of memory allocations in alignment functions, probably
+    // by sharing some memory that is allocated only once. That refers to: Peq, columns in Hirschberg,
+    // and it could also be done for alignments - we could have one big array for alignment that would be
+    // sparsely populated by each of steps in recursion, and at the end we would just consolidate those results.
+
+    // If estimated memory consumption for traceback algorithm is smaller than 1MB use it,
+    // otherwise use Hirschberg's algorithm. By running few tests I choose boundary of 1MB as optimal.
+    let modIntSize : Int = MemoryLayout<Int>.size/2 // to pretend Int has the same size as in C++
+    let alignmentDataSize : Int = (2 * MemoryLayout<EdlibWord>.size + modIntSize) * maxNumBlocks * targetLength
+        + 2 * modIntSize * targetLength
+    if alignmentDataSize < 1024 * 1024 {
+        var score_ : Int = 0
+        var endLocation_ : Int = 0  // Used only to call function.
+        var alignData : EdlibAlignmentData = EdlibAlignmentData(maxNumBlocks: maxNumBlocks, targetLength: targetLength)
+        let Peq : [EdlibWord] = buildPeq(alphabetLength: alphabetLength, query: query, queryLength: queryLength, equalityDefinition: equalityDefinition)
+        myersCalcEditDistanceNW(Peq: Peq, W: W, maxNumBlocks: maxNumBlocks,
+                                queryLength: queryLength,
+                                target: target, targetLength: targetLength,
+                                k: bestScore,
+                                bestScore_: &score_, position_: &endLocation_, findAlignment: true, alignData: &alignData, targetStopPosition: -1)
+        //assert(score_ == bestScore)
+        //assert(endLocation_ == targetLength - 1)
+//        alignData.writeToFile()
+        statusCode = obtainAlignmentTraceback(queryLength: queryLength, targetLength: targetLength, bestScore: bestScore, alignData: alignData, alignment: &alignment, alignmentLength: &alignmentLength)
+    }
+    else {
+        statusCode = obtainAlignmentHirschberg(query: query, rQuery: rQuery, queryLength: queryLength,
+                                               target: target, rTarget: rTarget, targetLength: targetLength,
+                                               equalityDefinition: equalityDefinition, alphabetLength: alphabetLength, bestScore: bestScore,
+                                               alignment: &alignment, alignmentLength: &alignmentLength) // 161
+    }
+    return statusCode
+}
+
+// Aligns two sequences (query and target) using edit distance (levenshtein distance)
+static func edlibAlign(query queryOriginal: [EdlibChar], target targetOriginal: [EdlibChar], config: EdlibAlignConfig) -> EdlibAlignResult {
+    let queryLength : Int = queryOriginal.count
+    let targetLength : Int = targetOriginal.count
+    var result : EdlibAlignResult = EdlibAlignResult(status: EDLIB_STATUS_OK, editDistance: -1, endLocations: [], startLocations: [], numLocations: 0, alignment: [], alignmentLength: 0, alphabetLength: 0)
+    var query : [EdlibChar] = []
+    var target : [EdlibChar] = []
+    let alphabet : [EdlibChar] = transformSequences(queryOriginal: queryOriginal, targetOriginal: targetOriginal, query: &query, target: &target)
+    result.alphabetLength = alphabet.count
+    if queryOriginal.isEmpty || targetOriginal.isEmpty {
+        switch config.mode {
+        case .NW:
+            result.editDistance = max(queryLength,targetLength)
+            result.endLocations = [targetLength - 1]
+            result.numLocations = 1
+        case .SHW, .HW:
+            result.editDistance = queryLength
+            result.endLocations = [-1]
+            result.numLocations = 1
+//        default:
+//            result.status = EDLIB_STATUS_ERROR
+        }
+        return result
+    }
+    // INITIALIZATION
+    let maxNumBlocks : Int = ceilDiv(queryLength, EDLIB_WORD_SIZE)  // bmax in Myers
+    let W : Int = maxNumBlocks * EDLIB_WORD_SIZE - queryLength // number of redundant cells in last level blocks
+    let equalityDefinition : EqualityDefinition = EqualityDefinition()
+    equalityDefinition.EqualityDefinition(alphabet: alphabet, additionalEqualities: config.additionalEqualities)
+    let Peq : [EdlibWord] = buildPeq(alphabetLength: alphabet.count, query: query, queryLength: queryLength, equalityDefinition: equalityDefinition)
+    
+    // MAIN CALCULATION
+    var positionNW : Int = 0 // Used only when mode is NW.
+    var alignData : EdlibAlignmentData = EdlibAlignmentData(maxNumBlocks: 0, targetLength: 0)
+    var dynamicK : Bool = false
+    var k : Int = config.k
+    if k < 0 { // If valid k is not given, auto-adjust k until solution is found.
+        dynamicK = true
+        k = EDLIB_WORD_SIZE   // Gives better results than smaller k.
+    }
+    repeat {
+        if config.mode == .HW || config.mode == .SHW {
+            myersCalcEditDistanceSemiGlobal(Peq: Peq, W: W, maxNumBlocks: maxNumBlocks, queryLength: queryLength, target: target, targetLength: targetLength, k: k, mode: config.mode, bestScore_: &(result.editDistance), positions_: &(result.endLocations), numPositions_: &(result.numLocations))
+        } else {  // mode == .NW
+            myersCalcEditDistanceNW(Peq: Peq, W: W, maxNumBlocks: maxNumBlocks, queryLength: queryLength, target: target, targetLength: targetLength, k: k, bestScore_: &(result.editDistance), position_: &positionNW, findAlignment: false, alignData: &alignData, targetStopPosition: -1)
+        }
+        k *= 2
+    } while dynamicK && result.editDistance == -1 && k < Int.max/2
+    
+    if result.editDistance >= 0 {  // If there is solution.
+        // If NW mode, set end location explicitly.
+        if config.mode == .NW {
+            result.endLocations = [targetLength - 1]
+            result.numLocations = 1
+        }
+
+        // Find starting locations.
+        if config.task == .Loc || config.task == .Path {
+            result.startLocations = Array(repeating: 0, count: result.numLocations)
+            if config.mode == .HW {  // If HW, I need to calculate start locations.
+                let rTarget : [EdlibChar] = createReverseCopy(seq: target)
+                let rQuery : [EdlibChar] = createReverseCopy(seq: query)
+                // Peq for reversed query.
+                let rPeq : [EdlibWord] = buildPeq(alphabetLength: alphabet.count, query: rQuery, queryLength: queryLength, equalityDefinition: equalityDefinition)
+                for i in 0..<result.numLocations {
+                    let endLocation : Int = result.endLocations[i]
+                    if endLocation == -1 {
+                        // NOTE: Sometimes one of optimal solutions is that query starts before target, like this:
+                        //                       AAGG <- target
+                        //                   CCTT     <- query
+                        //   It will never be only optimal solution and it does not happen often, however it is
+                        //   possible and in that case end location will be -1. What should we do with that?
+                        //   Should we just skip reporting such end location, although it is a solution?
+                        //   If we do report it, what is the start location? -4? -1? Nothing?
+                        // TODO: Figure this out. This has to do in general with how we think about start
+                        //   and end locations.
+                        //   Also, we have alignment later relying on this locations to limit the space of it's
+                        //   search -> how can it do it right if these locations are negative or incorrect?
+                        result.startLocations[i] = 0  // I put 0 for now, but it does not make much sense.
+                    } else {
+                        var bestScoreSHW : Int = 0
+                        var numPositionsSHW : Int = 0
+                        var positionsSHW : [Int] = []
+                        myersCalcEditDistanceSemiGlobal(
+                            Peq: rPeq, W: W, maxNumBlocks: maxNumBlocks,
+                            queryLength: queryLength, target: Array(rTarget[(targetLength - endLocation - 1)..<targetLength]), targetLength: endLocation + 1,
+                            k: result.editDistance, mode: .SHW,
+                            bestScore_: &bestScoreSHW, positions_: &positionsSHW, numPositions_: &numPositionsSHW)
+                        // Taking last location as start ensures that alignment will not start with insertions
+                        // if it can start with mismatches instead.
+                        result.startLocations[i] = endLocation - positionsSHW[numPositionsSHW - 1]
+                    }
+                }
+            } else {  // If mode is SHW or NW
+                for i in 0..<result.numLocations {
+                    result.startLocations[i] = 0
+                }
+            }
+        }
+
+        // Find alignment -> all comes down to finding alignment for NW.
+        // Currently we return alignment only for first pair of locations.
+        if config.task == .Path {
+            let alnStartLocation : Int = result.startLocations[0]
+            let alnEndLocation : Int = result.endLocations[0]
+            let alnTarget : [EdlibChar]
+            if alnStartLocation <= alnEndLocation {
+                alnTarget = Array(target[alnStartLocation...alnEndLocation])
+            }
+            else {
+                // case where alnEndLocation is probably -1
+//                NSLog("alnStartLocation = \(alnStartLocation)  alnEndLocation = \(alnEndLocation)")
+                alnTarget = []
+            }
+            let rAlnTarget : [EdlibChar] = createReverseCopy(seq: alnTarget)
+            let rQuery : [EdlibChar] = createReverseCopy(seq: query)
+            obtainAlignment(query: query, rQuery: rQuery, queryLength: queryLength,
+                            target: alnTarget, rTarget: rAlnTarget, targetLength: alnTarget.count,
+                            equalityDefinition: equalityDefinition, alphabetLength: alphabet.count, bestScore: result.editDistance,
+                            alignment: &(result.alignment), alignmentLength: &(result.alignmentLength))
+        }
+    }
+    /*-------------------------------------------------------*/
+
+    return result
+}
+
+static func edlibAlignmentToCigar(alignment: [EdlibChar], alignmentLength: Int, cigarFormat: EdlibCigarFormat) -> [EdlibChar] {
+    if cigarFormat != .Extended && cigarFormat != .Standard {
+        return []
+    }
+    // Maps move code from alignment to char in cigar.
+    //                        0    1    2    3
+    let charArray : [String] = ["=" ,"I" ,"D" , "X"]
+    var moveCodeToChar : [EdlibChar] = charArray.map { Array($0.utf8)[0] }
+    if cigarFormat == .Standard {
+        moveCodeToChar[3] = Array("M".utf8)[0]
+        moveCodeToChar[0] = Array("M".utf8)[0]
+    }
+    let zeroChar : EdlibChar = Array("0".utf8)[0]
+    var cigar : [EdlibChar] = []
+    var lastMove : EdlibChar = 0  // Char of last move. 0 if there was no previous move.
+    var numOfSameMoves : Int = 0
+    for i in 0...alignmentLength {
+        // if new sequence of same moves started
+        if i == alignmentLength || (moveCodeToChar[Int(alignment[i])] != lastMove && lastMove != 0) {
+            // Write number of moves to cigar string.
+            var tmpArray : [EdlibChar] = []
+            while numOfSameMoves > 0 {
+                tmpArray.append(zeroChar + EdlibChar(numOfSameMoves % 10))
+                numOfSameMoves /= 10
+            }
+            tmpArray.reverse()
+            cigar.append(contentsOf: tmpArray)
+            // Write code of move to cigar string.
+            cigar.append(lastMove)
+            // If not at the end, start new sequence of moves.
+            if (i < alignmentLength) {
+                // Check if alignment has valid values.
+                if (alignment[i] > 3) {
+                    return []
+                }
+                numOfSameMoves = 0
+            }
+        }
+        if i < alignmentLength {
+            lastMove = moveCodeToChar[Int(alignment[i])]
+            numOfSameMoves += 1
+        }
+    }
+    return cigar
+}
+
+}
+
+// MARK: - VDB load and align fasta sequences
+
+extension VDB {
+    
+    @discardableResult
+    class func loadCluster(_ clusterName: String, fromFastaFile fileName: String, vdb: VDB, verbose: Bool = false) -> Double {
+        if !vdb.nucleotideMode {
+            print(vdb: vdb, "Error - loading fasta sequences is only available in nucleotide mode")
+            return 0.0
+        }
+        let startTime : DispatchTime = DispatchTime.now()
+        var fastaArray : [UInt8] = []
+        do {
+            let fastaData : Data = try Data(contentsOf: URL(fileURLWithPath: "\(basePath)/\(fileName)"))
+            fastaArray = [UInt8](fastaData)
+        }
+        catch {
+            print(vdb: vdb, "Error reading \(fileName)")
+            return -1.0
+        }
+        if vdb.nuclRefForLoading.isEmpty {
+            vdb.nuclRefForLoading = Array(nucleotideReference(vdb: vdb, firstCall: false).dropFirst())
+        }
+        
+        let lf :  UInt8 = 10
+        let greaterChar : UInt8 = 62
+        let spaceChar :  UInt8 = 32
+        let dashChar : UInt8 = 45
+        var pos : Int = 0
+        var startID : Int  = 0
+        var endID : Int = 0
+        var seq : [UInt8] = []
+        var lastLf : Int = 0
+        
+        if vdb.codonStartsForLoading.isEmpty {
+            for protein in VDBProtein.allCases {
+                let frameShift : Bool = protein == .NSP12
+                for i in stride(from: protein.range.lowerBound, to: protein.range.upperBound, by: 3) {
+                    if !frameShift || i < 13468 {
+                        vdb.codonStartsForLoading.append(i)
+                    }
+                    else {
+                        vdb.codonStartsForLoading.append(i-1)
+                    }
+                }
+            }
+        }
+        
+        if vdb.delScores.isEmpty {
+            let delScoresFile : String = "\(basePath)/delScores"
+            let delSeparator : Character = ","
+            if FileManager.default.fileExists(atPath: delScoresFile) {
+                var delScoresString : String = ""
+                do {
+                    delScoresString = try String(contentsOfFile: delScoresFile, encoding: .utf8)
+                }
+                catch {
+                    print(vdb: vdb, "Error reading \(delScoresFile)")
+                }
+                let delParts = delScoresString.split(separator: delSeparator)
+                vdb.delScores = delParts.compactMap { Double($0) }
+                if vdb.delScores.count != VDBProtein.SARS2_nucleotide_refLength+1 {
+                    print(vdb: vdb, "Error - \(vdb.delScores.count) != \(VDBProtein.SARS2_nucleotide_refLength+1)")
+                }
+            }
+            if vdb.delScores.isEmpty {
+                if !vdb.isolates.isEmpty {
+                    let maxIsolatesForDelScores : Int = 100_000
+                    let isolatesForDelScores : [Isolate] = VDB.isolatesSample(Float(maxIsolatesForDelScores), inCluster: vdb.isolates, vdb: vdb)
+                    var delScoresInt : [Int] = Array(repeating: 0, count: VDBProtein.SARS2_nucleotide_refLength+1)
+                    let dashChar : UInt8 = 45
+                    for iso in isolatesForDelScores {
+                        for mut in iso.mutations {
+                            if mut.aa == dashChar {
+                                delScoresInt[mut.pos] += 1
+                            }
+                        }
+                    }
+                    vdb.delScores = delScoresInt.map { 1.0 - Double($0)/Double(isolatesForDelScores.count) }
+                    for x in 21995...21997 {
+                        vdb.delScores[x] -= 0.35
+                    }
+//                  for x in 21632...21634 {
+//                      vdb.delScores[x] -= 0.2
+//                  }
+                    let delString : String = vdb.delScores.map { String($0) }.joined(separator: String(delSeparator))
+                    do {
+                        try delString.write(toFile: delScoresFile, atomically: true, encoding: .utf8)
+                    }
+                    catch {
+                        print(vdb: vdb, "Error writing \(delScoresFile)")
+                    }
+                }
+                else {
+                    vdb.delScores = Array(repeating: 0, count: VDBProtein.SARS2_nucleotide_refLength+1)
+                }
+            }
+        }
+        
+        var codonStartArray : [Int] = codonStarts(referenceLength: vdb.refLength)
+
+        var tmpInsDict = vdb.insertionsDict.copy()
+        tmpInsDict[28268]?[[67, 65, 65, 65]] = nil
+        tmpInsDict[28266]?[[65, 65, 67, 65]] = nil
+        tmpInsDict[28269]?[[65, 65, 65, 67]] = nil
+        tmpInsDict[29859]?[[78]] = nil
+        tmpInsDict[29859]?[[78,78]] = nil
+
+/*
+        func isolateFromAlignment() -> Isolate? {
+            if endID > startID {
+                if let id : String = String(bytes: fastaArray[startID+1..<endID], encoding: .utf8), let seqString = String(bytes: seq, encoding: .utf8) {
+    //                print(vdb: vdb, "id = \(id)")
+    //                print(vdb: vdb, "seqString = \(seqString)")
+                    if seqString.isEmpty {
+                        return nil
+                    }
+                    var alignedQueryArray : [EdlibChar] = []
+                    var alignedTargetArray : [EdlibChar] = []
+                    let (mutations,nRegions) = alignSequences(seq, with: vdb.nuclRefForLoading, alignedQuery: &alignedQueryArray, alignedTarget: &alignedTargetArray, codonStarts: &vdb.codonStartsForLoading, delScores: &vdb.delScores, vdb: vdb, verbose: verbose)
+                    let idParts : [String] =  id.split(separator: "|").map { String($0) }
+                    let id0Parts : [String] = idParts[0].split(separator: "/").map { String($0) }
+                    let country = id0Parts[0]
+                    let state = id0Parts.count > 1 ? id0Parts[1] : "unknown"
+                    let accNumberTmp : Int? = idParts.count > 1 && idParts[1].prefix(8) == "EPI_ISL_" ? Int(idParts[1].suffix(idParts[1].count-8)) : nil
+                    let accNumber : Int
+                    if let accNumberTmp = accNumberTmp {
+                        accNumber = accNumberTmp + missingAccessionNumberBase
+                    }
+                    else {
+                        accNumber = Int.random(in: 50_000_000..<60_000_000)
+                    }
+                    let date : Date = idParts.count > 2 ? dateFormatter.date(from: idParts[2]) ?? Date.distantFuture : Date.distantFuture
+                    let isolate : Isolate = Isolate(country: country, state: state, date: date, epiIslNumber: accNumber, mutations: mutations)
+                    isolate.nRegions = nRegions.map { Int16($0) }
+                    return isolate
+    //                print(vdb: vdb, "alignedQueryArray.count = \(alignedQueryArray.count)")
+    //                print(vdb: vdb, "alignedTargetArray.count = \(alignedTargetArray.count)")
+
+                }
+            }
+            return nil
+        }
+*/
+        
+        var newIsolatesInfo : [(ArraySlice<UInt8>,[UInt8])] = []
+        while pos < fastaArray.count {
+            switch fastaArray[pos] {
+            case greaterChar:
+                if endID > startID {
+                    newIsolatesInfo.append((fastaArray[startID+1..<endID],seq))
+                }
+                startID = pos
+                endID = 0
+                seq = []
+            case lf:
+                if endID <= startID {
+                    endID  = pos
+                }
+                else {
+                    if pos >= lastLf+1 {
+                        seq.append(contentsOf: fastaArray[lastLf+1..<pos])
+                    }
+                }
+                lastLf = pos
+            case spaceChar, dashChar:
+                if endID > startID {
+                    if pos >= lastLf+1 {
+                        seq.append(contentsOf: fastaArray[lastLf+1..<pos])
+                    }
+                    lastLf = pos
+                }
+            default:
+                break
+            }
+            pos += 1
+        }
+        if endID > startID {
+            newIsolatesInfo.append((fastaArray[startID+1..<endID],seq))
+        }
+
+        func align_MP_task(_ isoNum: Int) -> Isolate? {
+            if let id : String = String(bytes: newIsolatesInfo[isoNum].0, encoding: .utf8) {
+                if newIsolatesInfo[isoNum].1.isEmpty {
+                    return nil
+                }
+                var alignedQueryArray : [EdlibChar] = []
+                var alignedTargetArray : [EdlibChar] = []
+                let (mutations,nRegions) = alignSequences(newIsolatesInfo[isoNum].1, with: vdb.nuclRefForLoading, alignedQuery: &alignedQueryArray, alignedTarget: &alignedTargetArray, codonStarts: &vdb.codonStartsForLoading, codonStartArray: &codonStartArray, delScores: &vdb.delScores, tmpInsDict: &tmpInsDict, vdb: vdb, verbose: verbose)
+                let idParts : [String] =  id.split(separator: "|").map { String($0) }
+                let id0Parts : [String] = idParts[0].split(separator: "/").map { String($0) }
+                let country = id0Parts[0]
+                let state = id0Parts.count > 1 ? id0Parts[1] : "unknown"
+                let accNumberTmp : Int? = idParts.count > 1 && idParts[1].prefix(8) == "EPI_ISL_" ? Int(idParts[1].suffix(idParts[1].count-8)) : nil
+                let accNumber : Int
+                if let accNumberTmp = accNumberTmp {
+                    accNumber = accNumberTmp + missingAccessionNumberBase
+                }
+                else {
+                    accNumber = Int.random(in: 50_000_000..<60_000_000)
+                }
+                let date : Date = idParts.count > 2 ? dateFormatter.date(from: idParts[2]) ?? Date.distantFuture : Date.distantFuture
+                let isolate : Isolate = Isolate(country: country, state: state, date: date, epiIslNumber: accNumber, mutations: mutations)
+                isolate.nRegions = nRegions.map { Int16($0) }
+                return isolate
+            }
+            return nil
+        }
+        
+        var newIsolates : [Isolate] = []
+        let mp_number : Int = newIsolatesInfo.count > mpNumber ? mpNumber*3 : 1
+        var cuts : [Int] = [0]
+        let cutSize : Int = newIsolatesInfo.count/mp_number
+        for i in 1..<mp_number {
+            let cutPos : Int = i*cutSize
+            cuts.append(cutPos+1)
+        }
+        cuts.append(newIsolatesInfo.count)
+        var newIsolatesMP : [[Isolate]] = Array(repeating: [], count: mp_number)
+        DispatchQueue.concurrentPerform(iterations: mp_number) { index in
+            for isoNum in cuts[index]..<cuts[index+1] {
+                if let newIsolate = align_MP_task(isoNum) {
+                    newIsolatesMP[index].append(newIsolate)
+                }
+            }
+//            print(vdb: vdb, "\(index) ",terminator: "")
+        }
+//        print(vdb: vdb, "all mp done")
+        for i in 0..<mp_number {
+            newIsolates.append(contentsOf: newIsolatesMP[i])
+        }
+        let endTime : DispatchTime = DispatchTime.now()
+        let nanoTime : UInt64 = endTime.uptimeNanoseconds - startTime.uptimeNanoseconds
+        let timeInterval : Double = Double(nanoTime) / 1_000_000_000
+        let timeString : String = String(format: "%4.2f seconds", timeInterval)
+        if !newIsolates.isEmpty {
+            vdb.clusters[clusterName] = newIsolates
+            if !vdb.printToPager {
+                print(vdb: vdb, "Cluster \(clusterName) assigned to \(newIsolates.count) isolates in \(timeString)")
+            }
+            vdb.clusterHasBeenAssigned(clusterName)
+        }
+        return timeInterval
+    }
+
+    class func alignSequences(_ query: [EdlibChar], with target: [EdlibChar], alignedQuery queryAligned: inout [EdlibChar], alignedTarget targetAligned: inout [EdlibChar], codonStarts: inout [Int], codonStartArray codonStart: inout [Int], delScores: inout [Double], tmpInsDict: inout [Int : [[UInt8] : UInt16]], vdb: VDB, verbose: Bool, localOpt: Bool = true) -> ([Mutation],[Int]) {
+
+        func doubleForPosition(_ pos:Int, insertion: [UInt8]) -> Double {
+            var allN : Double = -1.5
+            for char in insertion {
+                if char != nuclN {
+                    allN = 0.0
+                    break
+                }
+            }
+            if let value = tmpInsDict[pos]?[insertion] {
+                if pos != 22206 || insertion.count != 9 {
+//                    if pos == 28262 || pos == 28268 || pos == 28269 {
+//                        print(vdb: vdb, "double for position \(pos) = \(value) \(insertion) \(Double(value)/Double(UInt16.max) + allN)")
+//                    }
+                    return Double(value)/Double(UInt16.max) + allN
+                }
+                else {
+                    return Double(value)/Double(UInt16.max) + 1.0 + allN
+                }
+            }
+            else {
+                return 0.999 + allN
+            }
+        }
+        
+        let silent : Bool = false
+        let mode : String = "HW" // "NW" // "SHW"
+        // How many best sequences (those with smallest score) do we want.
+        // If 0, then we want them all.
+        let numBestSeqs: Int = 0
+        let findAlignment : Bool = true //false
+        let findStartLocations : Bool = false || query.count < 0
+        let kArg : Int = -1
+        let numRepeats : Int = 1
+
+        guard let modeCode : EdlibAlignMode = EdlibAlignMode(string: mode) else { NSLog("Error - invalid mode \(mode)"); exit(9) }
+        var alignTask : EdlibAlignTask = .Distance
+        if findStartLocations {
+            alignTask = .Loc
+        }
+        if findAlignment {
+            alignTask = .Path
+        }
+        
+        let numQueries : Int = 1
+        
+        // ----------------------------- MAIN CALCULATION ----------------------------- //
+    //    print(vdb: vdb, "\nComparing queries to target...\n")
+        var scores : [Int] = Array(repeating: 0, count: numQueries)
+        var endLocations : [[Int]] = Array(repeating: [], count: numQueries)
+        var startLocations : [[Int]] = Array(repeating: [], count: numQueries)
+        var numLocations : [Int] = Array(repeating: 0, count: numQueries)
+        // bestScores should be a priority queue - this is only used if findAlignment is false
+        var bestScores : [Int] = []  // Contains numBestSeqs best scores
+        let k : Int = kArg
+        var alignment : [EdlibChar] = []
+        var alignmentLength : Int = 0
+//        let start : Date = Date()
+        if (!findAlignment || silent) {
+            print(vdb: vdb, "number of queries: \(numQueries)")
+            fflush(stdout)
+        }
+        for queryNum in 0..<numQueries {
+            var result : SwiftEdlib.EdlibAlignResult?
+            let Nchar : EdlibChar = 78
+/* */
+            let Achar : EdlibChar = 65
+            let Tchar : EdlibChar = 84
+            let Gchar : EdlibChar = 71
+            let Cchar : EdlibChar = 67
+            let equalityNA : SwiftEdlib.EdlibEqualityPair = SwiftEdlib.EdlibEqualityPair(first: Nchar, second: Achar)
+            let equalityNT : SwiftEdlib.EdlibEqualityPair = SwiftEdlib.EdlibEqualityPair(first: Nchar, second: Tchar)
+            let equalityNG : SwiftEdlib.EdlibEqualityPair = SwiftEdlib.EdlibEqualityPair(first: Nchar, second: Gchar)
+            let equalityNC : SwiftEdlib.EdlibEqualityPair = SwiftEdlib.EdlibEqualityPair(first: Nchar, second: Cchar)
+            let config : SwiftEdlib.EdlibAlignConfig = SwiftEdlib.EdlibAlignConfig(k: k, mode: modeCode, task: alignTask, additionalEqualities: [equalityNA,equalityNT,equalityNG,equalityNC], additionalEqualitiesLength: 4)
+/* */
+//            let config : SwiftEdlib.EdlibAlignConfig = SwiftEdlib.EdlibAlignConfig(k: k, mode: modeCode, task: alignTask, additionalEqualities: [], additionalEqualitiesLength: 0)
+            for _ in 0..<numRepeats {  // Redundant repetition, for performance measurements.
+                result = SwiftEdlib.edlibAlign(query: query, target: target, config: config)
+            }
+            if let result = result {
+                scores[queryNum] = result.editDistance
+                endLocations[queryNum] = result.endLocations
+                startLocations[queryNum] = result.startLocations
+                numLocations[queryNum] = result.numLocations
+                alignment = result.alignment
+                alignmentLength = result.alignmentLength
+                var pos : Int = 0
+                var refPos : Int = 0
+                var queryPos : Int = 0
+                var nStart : Int? = nil
+                var nEnd : Int = 0
+                var nRegions : [Int] = []
+                var insStart : Int? = nil
+                var insInProgress : [UInt8] = []
+                var mutations : [Mutation] = []
+                let dashChar : UInt8 = 45
+                                
+                if startLocations[queryNum][0] > 0 {
+                    for _ in 0..<startLocations[queryNum][0] {
+//                        let refChar : Character = Character(UnicodeScalar(target[refPos]))
+                        mutations.append(Mutation(wt: target[refPos], pos: refPos+1, aa: dashChar))
+//                        print(vdb: vdb, "\(refChar)\(refPos+1)- ", terminator: "")
+                        refPos += 1
+                    }
+                }
+                
+                func checkNRegions() {
+                    if let nStart = nStart {
+                        nRegions.append(nStart)
+                        nRegions.append(nEnd)
+                    }
+                }
+                
+                while pos < alignment.count {
+                    if let insStartLocal = insStart, alignment[pos] != EDLIB_EDOP_INSERT {
+                        if let insertion = String(bytes: insInProgress, encoding: .utf8) {
+                            let (code,offset) = vdb.insertionCodeForPosition(insStartLocal, withInsertion: insInProgress)
+                            mutations.append(Mutation(wt: insertionChar + offset, pos: insStartLocal, aa: code))
+//                            print(vdb: vdb, "ins\(insStartLocal)\(insertion) ", terminator: "")
+                            if insertion.isEmpty {
+                                print(vdb: vdb, "Warning - empty insertion")
+                            }
+                            insStart = nil
+                            insInProgress = []
+                        }
+                    }
+                    switch alignment[pos] {
+                    case UInt8(EDLIB_EDOP_MISMATCH):
+//                        let refChar : Character = Character(UnicodeScalar(target[refPos]))
+                        let queryChar : Character = Character(UnicodeScalar(query[queryPos]))
+                        if queryChar == "N" {
+                            if let _ = nStart {
+                                if nEnd == refPos {
+                                    nEnd = refPos+1
+                                }
+                                else {
+                                    checkNRegions()
+                                    nStart = refPos+1
+                                    nEnd = refPos+1
+                                }
+                            }
+                            else {
+                                nStart = refPos+1
+                                nEnd = refPos+1
+                            }
+                        }
+                        else {
+                            mutations.append(Mutation(wt: target[refPos], pos: refPos+1, aa: query[queryPos]))
+                        }
+                        refPos += 1
+                        queryPos += 1
+                    case UInt8(EDLIB_EDOP_INSERT):
+                        if insStart == nil {
+                            insStart = refPos
+                        }
+                        insInProgress.append(query[queryPos])
+                        queryPos += 1
+                    case UInt8(EDLIB_EDOP_DELETE):
+                        mutations.append(Mutation(wt: target[refPos], pos: refPos+1, aa: dashChar))
+                        refPos += 1
+                    case UInt8(EDLIB_EDOP_MATCH):
+                        if query[queryPos] == Nchar {
+                            if let _ = nStart {
+                                if nEnd == refPos {
+                                    nEnd = refPos+1
+                                }
+                                else {
+                                    checkNRegions()
+                                    nStart = refPos+1
+                                    nEnd = refPos+1
+                                }
+                            }
+                            else {
+                                nStart = refPos+1
+                                nEnd = refPos+1
+                            }
+                        }
+                        refPos += 1
+                        queryPos += 1
+                        break
+                    default:
+                        break
+                    }
+                    pos += 1
+                }
+                if endLocations[queryNum][0] < target.count-2 {
+                    for _ in 0..<target.count-2 - endLocations[queryNum][0] {
+                        mutations.append(Mutation(wt: target[refPos], pos: refPos+1, aa: dashChar))
+                        refPos += 1
+                    }
+                }
+
+                if insStart != nil, !insInProgress.isEmpty {
+                    let (code,offset) = vdb.insertionCodeForPosition(refPos, withInsertion: insInProgress)
+                    mutations.append(Mutation(wt: insertionChar + offset, pos: refPos, aa: code))
+                    insStart = nil
+                    insInProgress = []
+                }
+
+                checkNRegions()
+/*
+                print(vdb: vdb, "")
+                print(vdb: vdb, "endLocations[queryNum][0] = \(endLocations[queryNum][0])")
+                print(vdb: vdb, "query.count = \(query.count)")
+                print(vdb: vdb, "numLocations[queryNum] = \(numLocations[queryNum])")
+                print(vdb: vdb, "alignmentLength = \(alignmentLength)")
+                print(vdb: vdb, "target.count = \(target.count)")
+                print(vdb: vdb, "target.count - endLocations[queryNum][0] = \(target.count - endLocations[queryNum][0])")
+*/
+                
+                if verbose {
+                    print(vdb: vdb, "\nall muts: \(stringForMutations(mutations, vdb: vdb))")
+                }
+                
+                let border : Int = 3
+                let maxLen : Int = 180
+                let maxGCount : Int = 1_000_000
+                var mIndex : Int = localOpt ? 0 : Int.max
+                while mIndex < mutations.count {
+                    if mutations[mIndex].aa == dashChar || mutations[mIndex].wt >= insertionChar {
+                        var startIndex : Int = mIndex
+                        var sPosLimit : Int = mutations[startIndex].pos
+//                        print(vdb: vdb, "startIndex = \(startIndex)  sPosLimit = \(sPosLimit)")
+                        while startIndex > 0 {
+                            if mutations[startIndex-1].pos >= mutations[startIndex].pos - border && sPosLimit - mutations[startIndex-1].pos < maxLen {
+                                startIndex -= 1
+                            }
+                            else {
+                                break
+                            }
+                        }
+                        sPosLimit = mutations[startIndex].pos
+                        var endIndex = mIndex
+                        while endIndex < mutations.count - 1 {
+                            if mutations[endIndex+1].pos <= mutations[endIndex].pos + border && mutations[endIndex+1].pos - sPosLimit < maxLen {
+                                endIndex += 1
+                            }
+                            else {
+                                break
+                            }
+                        }
+                        if mutations[mIndex].pos == 22193 && mutations[mIndex].wt >= insertionChar && endIndex+1 < mutations.count && mutations[endIndex+1].pos == 22205 && mutations[endIndex+1].wt >= insertionChar {
+                            endIndex += 1
+                        }
+                        var insCount : Int = 0
+                        var bases : [UInt8] = []
+                        var positions : [Int] = []
+                        var startPos : Int = max(1,mutations[startIndex].pos - border)
+                        let endPos : Int = min(vdb.refLength-1,mutations[endIndex].pos + border)
+                        if startPos == 22284 {
+                            startPos -= 1
+                        }
+                        if startPos == 28266 {
+                            startPos -= 4
+                        }
+                        var mutIndex : Int = startIndex
+                        var nInRange : [Int] = []
+                        for n1 in stride(from: 0, to: nRegions.count, by: 2) {
+                            if nRegions[n1+1] >= startPos && nRegions[n1] <= endPos {
+                                for n2 in nRegions[n1]...nRegions[n1+1] {
+                                    if n2 >= startPos && n2 <= endPos {
+                                        nInRange.append(n2)
+                                    }
+                                }
+                            }
+                        }
+                        for p in startPos...endPos {
+                            if mutIndex <= endIndex && mutations[mutIndex].pos == p {
+                                if mutations[mutIndex].wt < insertionChar {
+                                    bases.append(mutations[mutIndex].aa)
+                                    positions.append(p)
+                                    mutIndex += 1
+                                }
+                                else {
+                                    if !nInRange.contains(p) {
+                                        bases.append(target[p-1])
+                                    }
+                                    else {
+                                        bases.append(Nchar)
+                                    }
+                                    positions.append(p)
+                                }
+                                if mutIndex <= endIndex && mutations[mutIndex].pos == p && mutations[mutIndex].wt >= insertionChar {
+                                    let insertion = vdb.insertionForMutation(mutations[mutIndex])
+                                    insCount += insertion.count
+                                    bases.append(contentsOf: insertion)
+                                    if insCount == insertion.count {
+                                        insCount += 3
+                                        bases.append(contentsOf: [dashChar,dashChar,dashChar])
+                                    }
+                                    mutIndex += 1
+                                }
+                            }
+                            else {
+                                if !nInRange.contains(p) {
+                                    bases.append(target[p-1])
+                                }
+                                else {
+                                    bases.append(Nchar)
+                                }
+                                positions.append(p)
+                            }
+                        }
+                        var delCount : Int = 0
+                        var nonDel : [UInt8] = []
+                        for b in bases {
+                            if b == dashChar {
+                                delCount += 1
+                            }
+                            else {
+                                nonDel.append(b)
+                            }
+                        }
+                        
+                        // tSet.count = 86,493,225  n=30  k=18   ~150 sec
+                        // tSet.count = 51,895,935  n=29  k=17    ~94
+                        // tSet.count =  2,704,156  n=24  k=12    okay  (4.7?)
+
+                        func gospersHack2(n: UInt64, k: UInt64, maxCount: Int) -> [BinaryWord] {
+                            var tSet : [BinaryWord] = []
+                            var set : BinaryWord = (1 << k) - 1
+                            let limit : BinaryWord = 1 << n
+                            while (set < limit && tSet.count < maxCount) {
+                                tSet.append(set)
+                                // Gosper's hack:
+                                let mc : BinaryWord = (~set) + 1
+                                let c : BinaryWord = set & mc
+                                let r : BinaryWord = set + c
+                                //                set = (((r ^ set) >> 2) / c) | r
+                                let seta : BinaryWord = (r ^ set) >> 2
+                                let mv : Int = c.trailingZeroBitCount
+                                set = (seta >> UInt64(mv)) | r
+                            }
+                            return tSet
+                        }
+                                                
+                        var diff : Int = 0
+                        if insCount >= 0 {
+                            var adjBaseCount : Int = bases.count
+                            var insertionSearchStart : Int = -1
+                            var insertionSearchEnd : Int = -1
+                            let insAddOne : Int
+                            if insCount > 0 {
+                                insertionSearchStart = 1
+                                insertionSearchEnd = endPos - startPos
+                                adjBaseCount += 1
+                                insAddOne = 1
+                            }
+                            else {
+                                insAddOne = 0
+                            }
+                            let tSet : [BinaryWord]
+                            if delCount > 0 {
+                                let maxCount : Int
+                                if startPos == 29748 && bases.count == 24 && delCount == 12 {
+                                    maxCount = 1_000
+                                }
+                                else {
+                                    maxCount = maxGCount
+                                }
+                                if bases.count < 64 && delCount < 64 {
+                                    tSet = gospersHack2(n: UInt64(bases.count), k: UInt64(delCount), maxCount: maxCount)
+                                }
+                                else {
+                                    tSet = []
+                                }
+//                                if tSet.count == maxCount {
+//                                    print(vdb: vdb, "tSet n=\(bases.count) k=\(delCount) cut to \(maxCount)")
+//                                }
+                            }
+                            else {
+                                tSet = [BinaryWord(0)]
+                            }
+//                            if tSet.count > 100_000 {
+//                                print(vdb: vdb, "tSet.count = \(tSet.count)  n=\(bases.count)  k=\(delCount)")
+//                            }
+                            var codonsStartIndex : Int = -1
+                            var codonsEndIndex : Int = -1
+                            for ci in 0..<codonStarts.count {
+                                if codonsStartIndex == -1 && codonStarts[ci] >= startPos-2 && codonStarts[ci] < startPos+1 {
+                                    codonsStartIndex = ci
+                                    codonsEndIndex = ci
+                                }
+                                else if codonsStartIndex != -1 && codonsEndIndex == codonsStartIndex && codonStarts[ci] >= endPos-2 && codonStarts[ci] < endPos+1 {
+                                    codonsEndIndex = ci
+                                }
+                            }
+                            var codonsToCheck : ArraySlice<Int> = []
+                            if codonsStartIndex != -1 {
+                                codonsToCheck = codonStarts[codonsStartIndex...codonsEndIndex]
+                            }
+                            
+                            var best : [UInt8] = []
+                            var bestScore : Double = 100_000
+                            
+                            func scoreSeq(_ v: [UInt8]) -> Double {
+                                var score : Double = 0.0
+                                var posCounter : Int = 0
+                                var vCounter : Int = 0
+                                var localPos : [Int] = []
+                                while vCounter < v.count {
+                                    switch v[vCounter] {
+                                    case insertionChar:
+                                        var insToCheck : [UInt8] = []
+                                        let lastPos : Int = localPos.last ?? -1
+                                        for vv in 1...insCount {
+                                            localPos.append(-1)
+                                            if v[vCounter+vv] != dashChar {
+                                                score += 1.0
+                                                insToCheck.append(v[vCounter+vv])
+                                            }
+                                        }
+                                        vCounter += insCount
+                                        let insScore : Double = doubleForPosition(lastPos, insertion: insToCheck)
+//                                        let insTmp : String = String(bytes: insToCheck, encoding: .utf8) ?? "Error"
+//                                        print(vdb: vdb, "lastPos = \(lastPos) insToCheck = \(insTmp) insScore = \(insScore)")
+                                        score += insScore
+                                    default:
+                                        localPos.append(startPos+posCounter)
+                                        if v[vCounter] != target[startPos+posCounter-1] {
+                                            if v[vCounter] != dashChar {
+                                                score += 1.0
+                                            }
+                                            else {
+                                                score += delScores[startPos+posCounter]
+                                            }
+                                        }
+                                        posCounter += 1
+                                    }
+                                    vCounter += 1
+                                }
+                                for codon in codonsToCheck {
+                                    var bad : Bool = false
+                                    cpoLoop: for cpo in codon..<codon+3 {
+                                        for (pIndex,pos) in localPos.enumerated() {
+                                            if pos == cpo && v[pIndex] == dashChar {
+                                                bad = true
+                                                break  cpoLoop
+                                            }
+                                        }
+                                    }
+                                    if bad {
+                                        score += 2.0
+                                    }
+                                }
+                                return score
+                            }
+                            for insertionSearch in insertionSearchStart...insertionSearchEnd {
+                                for w in tSet {
+                                    var v : [UInt8] = []
+                                    let lMask : BinaryWord = 1
+                                    var iBits : BinaryWord = w
+                                    var ndCounter : Int = 0
+                                    for bi in 0..<(endPos-startPos+1+insAddOne) {
+                                        if bi != insertionSearch {
+                                            if iBits & lMask != 0 {
+                                                v.append(dashChar)
+                                            }
+                                            else {
+                                                v.append(nonDel[ndCounter])
+                                                ndCounter += 1
+                                            }
+                                            iBits = iBits >> 1
+                                        }
+                                        else {
+                                            v.append(insertionChar)
+                                            for _ in 0..<insCount {
+                                                if iBits & lMask != 0 {
+                                                    v.append(dashChar)
+                                                }
+                                                else {
+                                                    v.append(nonDel[ndCounter])
+                                                    ndCounter += 1
+                                                }
+                                                iBits = iBits >> 1
+                                            }
+                                        }
+                                    }
+                                    let score : Double = scoreSeq(v)
+                                    if score <= bestScore {
+                                        bestScore  = score
+                                        best = v
+                                    }
+                                }
+                            }
+                            if verbose || tSet.count == 2704156 {
+                                let mutToOpt : [Mutation] = Array(mutations[startIndex...endIndex])
+                                print(vdb: vdb, "nonDel = \(nonDel)")
+                                print(vdb: vdb, "mutation range to opt: \(startIndex)...\(endIndex)  \(positions) \(bases)  d=\(delCount) i=\(insCount)")
+                                print(vdb: vdb, "tSet.count = \(tSet.count)")
+                                print(vdb: vdb, "codonsToCheck = \(codonsToCheck)")
+                                print(vdb: vdb, "to opt: \(stringForMutations(mutToOpt, vdb: vdb))")
+                                print(vdb: vdb, "startPos = \(startPos)  endPos = \(endPos)  count = \(endPos-startPos+1)")
+                                print(vdb: vdb, "bases.count = \(bases.count)  \(bases)")
+                                print(vdb: vdb, "adjBaseCount = \(adjBaseCount)")
+                                print(vdb: vdb, "nonDel.count = \(nonDel.count)  \(nonDel)")
+                                print(vdb: vdb, "insCount = \(insCount)  delCount = \(delCount)")
+                                if !tSet.isEmpty {
+                                    print(vdb: vdb, "bits set = \(tSet[0].nonzeroBitCount)")
+                                }
+                                print(vdb: vdb, "insertionSearchStart = \(insertionSearchStart)  insertionSearchEnd = \(insertionSearchEnd)")
+                                print(vdb: vdb, "best.count = \(best.count) = \(best)\n")
+                            }
+                            var newMutations : [Mutation] = []
+                            var bCounter : Int = 0
+                            var posCounter : Int = 0
+                            while bCounter < best.count {
+                                if best[bCounter] != insertionChar {
+                                    if best[bCounter] != target[startPos+posCounter-1] {
+                                        newMutations.append(Mutation(wt: target[startPos+posCounter-1], pos: startPos+posCounter, aa: best[bCounter]))
+                                    }
+                                    posCounter += 1
+                                }
+                                else {
+                                    var insertion : [UInt8] = []
+                                    for vv in 1...insCount {
+                                        if best[bCounter+vv] != dashChar {
+                                            insertion.append(best[bCounter+vv])
+                                        }
+                                    }
+                                    bCounter += insCount
+                                    if !insertion.isEmpty {
+                                        var iPos : Int = startPos+posCounter-1
+                                        if iPos == 29859 && insertion == [Nchar,Nchar,Nchar] {
+                                            for n1 in stride(from: 0, to: nRegions.count, by: 2) {
+                                                if nRegions[n1] == 29836 && nRegions[n1+1] == 29859 {
+                                                    iPos = 29836
+                                                    break
+                                                }
+                                            }
+                                        }
+                                        let (code,offset) = vdb.insertionCodeForPosition(iPos, withInsertion: insertion)
+                                        newMutations.append(Mutation(wt: insertionChar + offset, pos: iPos, aa: code))
+                                    }
+                                }
+                                bCounter += 1
+                            }
+                            let oldMutationsCount : Int = mutations.count
+                            if !tSet.isEmpty {
+                                mutations.replaceSubrange(startIndex..<endIndex+1, with: newMutations)
+                            }
+                            diff = mutations.count - oldMutationsCount
+                            if !nInRange.isEmpty && !tSet.isEmpty {
+                                var n1 : Int = 0
+                                var startReplace : Int = -1
+                                var endReplace : Int = -1
+                                while n1 < nRegions.count {
+                                    if nRegions[n1+1] >= startPos && nRegions[n1] <= endPos {
+                                        if nRegions[n1] < startPos {
+                                            if nRegions[n1+1] <= endPos {
+                                                nRegions[n1+1] = startPos - 1
+                                                startReplace = n1+2
+                                                endReplace = n1+2
+                                            }
+                                            else {
+                                                let newStart = endPos + 1
+                                                let newEnd = nRegions[n1+1]
+                                                nRegions[n1+1] = startPos - 1
+                                                startReplace = n1+2
+                                                endReplace = n1+2
+                                                nRegions.insert(newEnd, at: n1+2)
+                                                nRegions.insert(newStart, at: n1+2)
+                                            }
+                                        }
+                                        else if nRegions[n1+1] > endPos {
+                                            nRegions[n1] = endPos + 1
+                                            endReplace = n1
+                                            if startReplace == -1 {
+                                                startReplace = n1
+                                            }
+                                        }
+                                        else {
+                                            if startReplace == -1 {
+                                                startReplace = n1
+                                            }
+                                            endReplace = n1+2
+                                        }
+                                    }
+                                    n1 += 2
+                                }
+                                var replN : [Int] = []
+                                for mutation in mutations {
+                                    if mutation.aa == nuclN && mutation.pos >= startPos && mutation.pos <= endPos {
+                                        replN.append(mutation.pos)
+                                        replN.append(mutation.pos)
+                                    }
+                                }
+                                nRegions.replaceSubrange(startReplace..<endReplace, with: replN)
+                            }
+                        }
+                        mIndex = endIndex + diff
+//                        print(vdb: vdb, "block end mIndex = \(mIndex)  endIndex = \(endIndex)")
+                    }
+                    mIndex += 1
+                }
+                
+                if !nRegions.isEmpty {
+                    var keep : [Bool] = Array(repeating: false, count: vdb.refLength+1)
+                    for mutation in mutations {
+                        if mutation.aa != nuclN {
+                            let cStart : Int = codonStart[mutation.pos]
+                            keep[cStart] = true
+                            keep[cStart+1] = true
+                            keep[cStart+2] = true
+                        }
+                    }
+                    var mutationsN : [Mutation] = []
+                    for n1 in stride(from: 0, to: nRegions.count, by: 2) {
+                        for n2 in nRegions[n1]...nRegions[n1+1] {
+                            if keep[n2] {
+                                mutationsN.append(Mutation(wt: vdb.referenceArray[n2], pos: n2, aa: nuclN))
+                            }
+                        }
+                    }
+                    mutations.append(contentsOf: mutationsN)
+                    mutations.sort { if $0.pos != $1.pos { return $0.pos < $1.pos } else { return $0.wt < $1.wt } }
+                    var i : Int = 0
+                    while i < mutations.count-1 {
+                        if mutations[i].aa == nuclN && mutations[i] == mutations[i+1] {
+                                mutations.remove(at: i)
+                        }
+                        else {
+                            i += 1
+                        }
+                    }
+                }
+                
+//                print(vdb: vdb, "mutations = \(VDB.stringForMutations(mutations,vdb:vdb))")
+//                print(vdb: vdb, "\nN regions = \(nRegions)")
+                return (mutations,nRegions)
+            }
+
+            // If we want only numBestSeqs best sequences, update best scores
+            // and adjust k to largest score.
+            if numBestSeqs > 0 {
+                if scores[queryNum] >= 0 {
+                    bestScores.append((scores[queryNum]))
+                    bestScores.sort { $0 > $1 }
+                    while bestScores.count > numBestSeqs {
+                        bestScores.removeLast()
+                    }
+                }
+            }
+            
+            if !findAlignment || silent {
+                print(vdb: vdb, String(format:"\r%d/%d", queryNum + 1, numQueries))
+                fflush(stdout)
+            } else {
+                // Print alignment if it was found, use first position
+/*
+                if !alignment.isEmpty {
+                    print(vdb: vdb, "\n")
+                    print(vdb: vdb, "Query #%d (%d residues): score = %d\n", i, query.count, scores[i])
+                    if !alignmentFormat == "NICE" {
+                        printAlignment(query, target, alignment, alignmentLength,endLocations[i], modeCode)
+                    }
+                    else {
+                        ...
+                    }
+                }
+*/
+            }
+            let position : Int = endLocations[queryNum][0]
+            var tIdx : Int = -1
+            var qIdx : Int = -1
+            if modeCode == .HW {
+                tIdx = position
+                for i in 0..<alignmentLength {
+                    if alignment[i] != EDLIB_EDOP_INSERT {
+                        tIdx -= 1
+                    }
+                }
+            }
+            var queryCounter : Int = 0
+            var targetCounter : Int = 0
+            targetAligned = Array(repeating: 0, count: alignmentLength)
+            queryAligned = Array(repeating: 0, count: alignmentLength)
+            // target
+//            var startTIdx : Int = -1
+            for j in 0..<alignmentLength {
+                if alignment[j] == EDLIB_EDOP_INSERT {
+                    targetAligned[targetCounter] = 45
+                }
+                else {
+                    tIdx += 1
+                    targetAligned[targetCounter] = target[tIdx]
+                }
+                targetCounter += 1
+//                if j == start {
+//                    startTIdx = tIdx
+//                }
+            }
+//            targetAligned[targetCounter] = 0  // for null terminated c strings
+            // query
+ //           var startQIdx : Int = qIdx
+            for j in 0..<alignmentLength {
+                if alignment[j] == EDLIB_EDOP_DELETE {
+                    queryAligned[queryCounter] = 45
+                }
+                else {
+                    qIdx += 1
+                    queryAligned[queryCounter] = query[qIdx]
+                }
+                queryCounter += 1
+//                if j == start {
+//                    startQIdx = qIdx
+//                }
+            }
+//            queryAligned[queryCounter] = 0  // for null terminated c strings
+        }
+
+        if !silent && !findAlignment {
+            var scoreLimit : Int = -1 // Only scores <= then scoreLimit will be printed (we consider -1 as infinity)
+            print(vdb: vdb, "\n")
+
+            if bestScores.count > 0 {
+                print(vdb: vdb, "\(bestScores.count) best scores:\n")
+                scoreLimit = bestScores[0]
+            } else {
+                print(vdb: vdb, "Scores:\n")
+            }
+
+            print(vdb: vdb, "<query number>: <score>, <num_locations>, \n[(<start_location_in_target>, <end_location_in_target>)]\n")
+            for i in 0..<numQueries {
+                if scores[i] > -1 && (scoreLimit == -1 || scores[i] <= scoreLimit) {
+                    var numLocationsString : String = ""
+                    if numLocations[i] > 0 {
+                        numLocationsString = "\n  ["
+                        for j in 0..<numLocations[i] {
+                            numLocationsString += " ("
+                            if !startLocations[i].isEmpty {
+                                numLocationsString += "\(startLocations[i][j])"
+                            } else {
+                                numLocationsString += "?"
+                            }
+                            numLocationsString += ", \(endLocations[i][j]))"
+                        }
+                        numLocationsString += " ]"
+                    }
+                    print(vdb: vdb, String(format:"#%d: %d  %d%S", i, scores[i], numLocations[i], numLocationsString))
+                }
+            }
+        }
+        return ([],[])
+    }
+    
+    func testLoadFasta(_ testCmd: String) {
+        if !nucleotideMode {
+            print(vdb: self, "Error - loading fasta sequences is only available in nucleotide mode")
+            return
+        }
+        var testCount : Int = 1000
+        if let tCount = Int(testCmd.suffix(testCmd.count-7)) {
+            testCount = tCount
+        }
+        let sample : [Isolate]
+        if testCount > 0 {
+            sample = VDB.isolatesSample(Float(testCount), inCluster: isolates, vdb: self)
+        }
+        else {
+            sample = VDB.isolatesWithAccessionNumbers([10816801,10382580], inCluster: isolates, vdb: self) // [  10040686,10713278,7590621,12844786,2674484,9010324,6227751,8773762,5651393,9932452,4268122,3564748,1821265,2263071,10040686,4330384,11208773,2391706], inCluster: isolates, vdb: self)
+//                                for x in 22283...22294 {
+//                                    print(vdb: self, "delScores[\(x)] = \(delScores[x])")
+//                                }
+        }
+        
+        let testFileName : String = "testSample.fasta"
+        let sampleClusterName : String = "testSample"
+        let loadedClusterName : String = "testLoad"
+        clusters[sampleClusterName] = sample
+        clusters[loadedClusterName] = nil
+        let verbose : Bool = testCount == 0
+        VDB.saveCluster(sample, toFile: testFileName, fasta: true, vdb:self)
+        let timeInterval : Double = VDB.loadCluster(loadedClusterName, fromFastaFile: testFileName, vdb: self, verbose: verbose)
+        let averageTimeStringt = String(format:"%5.3f sec/isolate",timeInterval/Double(sample.count))
+        print(vdb: self, "Average load time: \(averageTimeStringt)")
+        guard let loaded : [Isolate] = clusters[loadedClusterName] else { print(vdb: self, "Error - cluster not loaded"); return }
+        if loaded.count != sample.count {
+            print(vdb: self, "Error - loaded.count (\(loaded.count)) != sample.count (\(sample.count)")
+            return
+        }
+        
+        let matchCountMut : AtomicInteger = AtomicInteger(value: 0)
+        let matchCountSeq : AtomicInteger = AtomicInteger(value: 0)
+        
+        for isoNum in 0..<sample.count {
+            var mut1 : [Mutation] = []
+            var mut1N : [Mutation] = []
+            var mut2 : [Mutation] = []
+            var mut2N : [Mutation] = []
+            for mm in sample[isoNum].mutations {
+                if mm.aa != nuclN {
+                    mut1.append(mm)
+                }
+                else {
+                    mut1N.append(mm)
+                }
+            }
+            for mm in loaded[isoNum].mutations {
+                if mm.aa != nuclN {
+                    mut2.append(mm)
+                }
+                else {
+                    mut2N.append(mm)
+                }
+            }
+            if mut1 == mut2 {
+                matchCountMut.increment()
+                if (verbose || !verbose) && mut1N != mut2N {
+                    print(vdb: self, "\(sample[isoNum].epiIslNumber):  mut1N = \(VDB.stringForMutations(mut1N, vdb: self)) != \(VDB.stringForMutations(mut2N, vdb: self)) = mut2N")
+                }
+            }
+            else {
+                if verbose {
+                    print(vdb: self, "mutation mismatch:")
+                    print(vdb: self, "sample[\(isoNum)].mutations = \(VDB.stringForMutations(sample[isoNum].mutations, vdb: self))")
+                    print(vdb: self, "loaded[\(isoNum)].mutations = \(VDB.stringForMutations(loaded[isoNum].mutations, vdb: self))")
+                }
+                
+            }
+            // compare fasta of isoCluster vs isoCluster2
+            let ref : String = String(bytes:referenceArray, encoding: .utf8) ?? ""
+            let seq0 = sample[isoNum].vdbString(dateFormatter, includeLineage: false, ref: ref, vdb: self).components(separatedBy: "\n")
+            let seq1 = loaded[isoNum].vdbString(dateFormatter, includeLineage: false, ref: ref, vdb: self).components(separatedBy: "\n")
+            if seq0.count > 1 && seq1.count > 1 && seq0[1] == seq1[1]  {
+                matchCountSeq.increment()
+            }
+            else {
+                print(vdb: self, "Error - seqs do not match for isolate \(sample[isoNum].epiIslNumber)")
+                if seq0.count > 1 && seq1.count > 1 {
+                    let minLen : Int = min(seq0[1].count,seq1[1].count)
+                    let seq0Array : [Character] = Array(seq0[1])
+                    let seq1Array : [Character] = Array(seq1[1])
+                    var diffFound : Bool = false
+                    for i in 0..<minLen {
+                        if seq0Array[i] != seq1Array[i] {
+                            diffFound = true
+                            print(vdb: self, "First difference at position \(i) of \(seq0[1].count), \(seq1[1].count)")
+                            break
+                        }
+                    }
+                    if !diffFound {
+                        print(vdb: self, "Difference in lengths: \(seq0[1].count), \(seq1[1].count)")
+                    }
+                }
+                else {
+                    print(vdb: self, "seq0.count = \(seq0.count) seq1.count = \(seq1.count)")
+                }
+                try? seq0[1].write(toFile: "seq0", atomically: true, encoding: .utf8)
+                try? seq1[1].write(toFile: "seq1", atomically: true, encoding: .utf8)
+            }
+        }
+        
+        printToPager = true
+        for isoNum in 0..<sample.count {
+            let testExpr : Expr = Expr.Diff(Expr.Identifier("\(sampleClusterName)[\(isoNum)]"), Expr.Identifier("\(loadedClusterName)[\(isoNum)]"))
+            _ = testExpr.eval(caller: nil, vdb: self)
+        }
+        printToPager = false
+            
+        var isoCounter : Int = 0
+        var parts : [String] = []
+        var matchCount : Int = 0
+        var mismatches : [String:[Int]] = [:]
+        for i in 0..<pagerLines.count {
+            if pagerLines[i].prefix(5) == "1 - 2" || pagerLines[i].prefix(5) == "2 - 1" {
+                if pagerLines[i].prefix(5) == "1 - 2" {
+                    parts.append("Isolate \(sample[isoCounter].epiIslNumber)")
+                    isoCounter += 1
+                }
+                parts.append("  \(pagerLines[i])  \(pagerLines[i+1])   \(pagerLines[i+2])")
+            }
+            if pagerLines[i].contains(" share ") && pagerLines[i].contains("mutations:") {
+                parts[0].append("   \(pagerLines[i].dropLast())")
+                for part in parts {
+                    print(vdb: self, part)
+                }
+                if parts[1].contains(" 0 ") && parts[2].contains(" 0 ") {
+                    matchCount += 1
+                    print(vdb: self, "diff matches")
+                }
+                else {
+                    mismatches[parts[1] + "\n" + parts[2], default: []].append(sample[isoCounter-1].epiIslNumber)
+                    print(vdb: self, "diff mismatches")
+                }
+                parts = []
+            }
+        }
+        pagerLines = []
+        let averageTimeString = String(format:"%5.3f sec/isolate",timeInterval/Double(sample.count))
+        let mismatchesArray : [(String,[Int])] = Array(mismatches).sorted { $0.value.count > $1.value.count }
+        print(vdb: self, "")
+        for (mismatch,accNumbers) in mismatchesArray {
+            
+            print(vdb: self, "Mismatch with count = \(accNumbers.count) \(accNumbers[0..<min(2,accNumbers.count)]):\n\(mismatch)")
+        }
+        print(vdb: self, "\nAverage load time: \(averageTimeString)")
+        print(vdb: self, "Matches: muts \(matchCountMut.value)/\(sample.count)  diff \(matchCount)/\(sample.count)  seq \(matchCountSeq.value)/\(sample.count)")
+    }
+
+}
+
+// MARK: - start vdb
+
+#if !VDB_EMBEDDED && swift(>=1)
+if !trimMode {
+    VDB().run(clFileNames)
+}
+else {
+    var inputFileName : String = ""
+    var trimmedFileName : String = ""
+    if clFileNames.count > 0 {
+        inputFileName = clFileNames[0]
+        if clFileNames.count > 1 {
+            trimmedFileName = clFileNames[1]
+        }
+        else {
+            trimmedFileName = clFileNames[0].replacingOccurrences(of: "nucl", with: "tnucl")
+        }
+    }
+    VDB.loadAndTrimMutationDB_MP(inputFileName,trimmedFileName,extendN: trimExtendN)
+}
+#endif
