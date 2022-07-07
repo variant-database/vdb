@@ -198,11 +198,11 @@ Runs a demonstration of **vdb**.
 <br />
 #### `save` \<cluster or pattern or history or list name> \<file name>  
 
-Saves a list of the viruses in the given cluster to the specified file. Patterns, history, or lists can also be saved.  
+Saves a list of the viruses in the given cluster to the specified file. Patterns, history, or lists can also be saved. Clusters saved to a file name ending in `.fasta` are saved in FASTA format, otherwise **vdb** format is used.  
 <br />
 #### `load` \<cluster name> \<file name>  
 
-Loads the viruses in a file into a cluster with the specified name. If the mutation type (nucleotide/protein) does not match the program mode, the virus set is transformed to match the program mode.  
+Loads the viruses in a file into a cluster with the specified name. If the mutation type (nucleotide/protein) does not match the program mode, the virus set is transformed to match the program mode.  If the file name ends in `.fasta`, then **vdb** loads and automatically aligns nucleotide sequences in FASTA format.  
 <br />
 #### `group lineages` \<lineage name(s) or named cluster>    alias `group lineage`, `lineage group`  
 
@@ -343,4 +343,4 @@ For cluster or list subscripts, this setting determines whether zero- or one-bas
 <br />
 
 <br />
-Version 2.8
+Version 2.9
