@@ -24,7 +24,7 @@ Subscripts can be applied to cluster variables to extract one or more viruses.
 \<cluster> `before` \<date>        → cluster  
 \<cluster> `after` \<date>         → cluster  
 \<cluster> [`range`] \<date>-\<date2>    → cluster  
-\<cluster> `>` or `<` or `#` \<n>        → cluster    filter by # of mutations  
+\<cluster> `>` or `<` or `#` \<n>        → cluster    filter by # of mutations or completeness  
 \<cluster> `named` \<state_id or EPI_ISL#>  → cluster  
 \<cluster> `lineage` \<Pango lineage>   → cluster  
 \<cluster> `sample` \<number or decimal fraction> → cluster   random subset  
