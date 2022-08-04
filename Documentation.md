@@ -76,7 +76,7 @@ Searches the specified cluster (or all viruses if no cluster is given) for virus
 <br />
 #### \<cluster> `>` or `<` or `#`\<n>       → cluster    filter by # of mutations  
 
-Searches the specified cluster (or all viruses if no cluster is given) for viruses with greater than (or less than, or equal to) the specified number of mutations.  
+Searches the specified cluster (or all viruses if no cluster is given) for viruses with greater than (or less than, or equal to) the specified number of mutations. In nucleotide mode, if the specified number is a floating point value between 0.0 and 1.0 inclusive, then this command filters based on sequence completeness.  
 <br />
 #### \<cluster> `named` \<state_id or EPI_ISL#>  → cluster  
 
@@ -198,7 +198,7 @@ Runs a demonstration of **vdb**.
 <br />
 #### `save` \<cluster or pattern or history or list name> \<file name>  
 
-Saves a list of the viruses in the given cluster to the specified file. Patterns, history, or lists can also be saved. Clusters saved to a file name ending in `.fasta` are saved in FASTA format, otherwise **vdb** format is used.  
+Saves a list of the viruses in the given cluster to the specified file. Patterns, history, or lists can also be saved. Clusters saved to a file name ending in `.fasta` are saved in FASTA format, otherwise **vdb** format is used. For clusters, two space-separated options can be given after the file name: `m` - create an accompanying metadata file for the given cluster, and `z` - saves the cluster in a compressed format.   
 <br />
 #### `load` \<cluster name> \<file name>  
 
@@ -343,4 +343,4 @@ For cluster or list subscripts, this setting determines whether zero- or one-bas
 <br />
 
 <br />
-Version 2.9
+Version 3.0
