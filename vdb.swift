@@ -6,14 +6,14 @@
 //
 //  Created by Anthony West on 1/31/21.
 //  Copyright (c) 2022  Anthony West, Caltech
-//  Last modified 7/6/22
+//  Last modified 8/4/22
 
 import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
 
-let version : String = "2.9"
+let version : String = "3.0"
 let checkForVDBUpdate : Bool = true         // to inform users of updates; the updates are not downloaded
 let allowGitHubDownloads : Bool = true      // to download nucl. ref. and documentation, if missing
 let basePath : String = FileManager.default.currentDirectoryPath
@@ -39,6 +39,7 @@ var useStdInput : Bool = true
 var overwrite : Bool = false
 var pipeOutput : Bool = false
 var trimExtendN : Bool = false
+var trimAndCompress : Bool = false
 @usableFromInline var mpNumber : Int = mpNumberDefault
 var clArguments : [String] = CommandLine.arguments
 var clFileNames : [String] = []
@@ -52,6 +53,10 @@ var clFileNames : [String] = []
 //   VDB_EMBEDDED requires building with an enclosing application
 //   VDB_SERVER requires an alternative data file format
 //   VDB_MULTI is not useful for the command line version of vdb
+#if VDB_TEST
+@usableFromInline
+internal var mpTest : Int = mpNumberDefault
+#endif
 
 #if !VDB_SERVER && swift(>=1)
 let serverMode : Bool = false
@@ -106,6 +111,8 @@ for i in 1..<clArguments.count {
                 pipeOutput = true
             case "n","N":
                 trimExtendN = true
+            case "z","Z":
+                trimAndCompress = true
             default:
                 Swift.print("Error - invalid option")
                 exit(9)
@@ -126,7 +133,7 @@ let GUIMode : Bool = true
 #if VDB_SERVER && VDB_MULTI && swift(>=1)
 import Network
 let vdbServerPortNumber : NWEndpoint.Port = 12345
-let vdbServerHeartBeat : Double = 1800.0
+let vdbServerHeartBeat : Double = 7200.0
 #endif
 
 #if !os(Windows)
@@ -1675,6 +1682,11 @@ enum CaseMatching : CaseIterable {     // for name searches
     }
 }
 
+enum AccessionMode {
+    case gisaid
+    case ncbi
+}
+
 // MARK: - keywords
 
 let listKeyword : String = "list"
@@ -2059,13 +2071,17 @@ protocol MutationProtocol {
 
 struct Mutation : Equatable, Hashable, MutationProtocol {
     let wt : UInt8
-    let pos : Int
+    let pos16 : Int16
     let aa : UInt8
+    
+    var pos : Int {
+        Int(pos16)
+    }
         
     // initialize mutation based on wt, pos, aa values
     init(wt: UInt8, pos: Int, aa: UInt8) {
         self.wt = wt
-        self.pos = pos
+        self.pos16 = Int16(pos)
         self.aa = aa
     }
     
@@ -2084,7 +2100,7 @@ struct Mutation : Equatable, Hashable, MutationProtocol {
             }
             self.wt = wt
             self.aa = aa
-            self.pos = pos
+            self.pos16 = Int16(pos)
         }
         else {
             let insertionString : [UInt8] = Array(mutStringUpperCased.utf8)
@@ -2105,7 +2121,7 @@ struct Mutation : Equatable, Hashable, MutationProtocol {
             let insertion : [UInt8] = Array(insertionString[counter...])
             let (code,offset) = vdb.insertionCodeForPosition(pos, withInsertion: insertion)
             self.wt = insertionChar + offset
-            self.pos = pos
+            self.pos16 = Int16(pos)
             self.aa = code
         }
     }
@@ -2125,7 +2141,7 @@ struct Mutation : Equatable, Hashable, MutationProtocol {
             }
             self.wt = wt
             self.aa = aa
-            self.pos = pos
+            self.pos16 = Int16(pos)
         }
         else {
             let insertionString : [UInt8] = Array(mutStringUpperCased.utf8)
@@ -2146,7 +2162,7 @@ struct Mutation : Equatable, Hashable, MutationProtocol {
 //            let insertion : [UInt8] = Array(insertionString[counter...])
             let (code,offset) = (insertionChar,UInt8(0)) // vdb.insertionCodeForPosition(pos, withInsertion: insertion)
             self.wt = insertionChar + offset
-            self.pos = pos
+            self.pos16 = Int16(pos)
             self.aa = code
         }
     }
@@ -2312,14 +2328,35 @@ final class Isolate : Equatable, Hashable {
                     }
                 }
             }
-            seq.replaceSubrange(seq.startIndex...seq.startIndex, with: ["\n"])
+//            seq.replaceSubrange(seq.startIndex...seq.startIndex, with: ["\n"])
+            seq.removeFirst()
             mutationsString = seq.replacingOccurrences(of: "-", with: "")
+            if mutationsString.first == nChar {
+                if let newStartIndex = mutationsString.firstIndex(where: { $0 != nChar }) {
+                    mutationsString.removeSubrange(mutationsString.startIndex..<newStartIndex)
+                }
+            }
+            if mutationsString.last == nChar {
+                if let newEndIndex = mutationsString.lastIndex(where: { $0 != nChar }) {
+                    mutationsString.removeSubrange(mutationsString.index(after: newEndIndex)..<mutationsString.endIndex)
+                }
+            }
+            mutationsString.insert("\n", at: mutationsString.startIndex)
         }
         if includeLineage {
             return ">\(country)/\(state)/\(dateString.prefix(4))|EPI_ISL_\(epiIslNumber)|\(dateString)|\(pangoLineage),\(mutationsString)\n"
         }
         else {
             return ">\(country)/\(state)/\(dateString.prefix(4))|EPI_ISL_\(epiIslNumber)|\(dateString)|,\(mutationsString)\n"
+        }
+    }
+    
+    func accessionString(_ vdb: VDB) -> String {
+        if vdb.accessionMode == .gisaid {
+            return "EPI_ISL_\(self.epiIslNumber)"
+        }
+        else {
+            return "GenBank_\(VDB.accStringFromNumber(self.epiIslNumber))"
         }
     }
     
@@ -2471,6 +2508,15 @@ final class Isolate : Equatable, Hashable {
         else {
             return -1
         }
+    }
+    
+    func nContent() -> Double {
+        var nCount : Int = 0
+        for i in stride(from: 0, to: nRegions.count, by: 2) {
+            nCount += Int(nRegions[i+1] - nRegions[i]) + 1
+        }
+        let nContent : Double = Double(nCount)/Double(VDBProtein.SARS2_nucleotide_refLength)
+        return nContent
     }
     
 }
@@ -2720,6 +2766,37 @@ final class VDB {
             print(vdb: vdb, "Error reading vdb file \(filePath)")
             return []
         }
+        let commaChar : UInt8 = 44
+        if vdb.accessionMode == .gisaid {
+            let ncbiString : String = "|NCBI|"
+            let ncbiCheck : [UInt8] = [UInt8](ncbiString.utf8)
+            var npos : Int = 0
+            nposLoop: while npos + ncbiString.count < lineNMP.count && lineNMP[npos] != commaChar {
+                for j in 0..<ncbiCheck.count {
+                    if lineNMP[npos+j] != ncbiCheck[j] {
+                        npos += 1
+                        continue nposLoop
+                    }
+                }
+                vdb.accessionMode = .ncbi
+                break
+            }
+        }
+        var compressed : Bool = false
+        let compString : String = "|COMP|"
+        let compCheck : [UInt8] = [UInt8](compString.utf8)
+        var cpos : Int = 0
+        cposLoop: while cpos + compString.count < lineNMP.count && lineNMP[cpos] != commaChar {
+            for j in 0..<compCheck.count {
+                if lineNMP[cpos+j] != compCheck[j] {
+                    cpos += 1
+                    continue cposLoop
+                }
+            }
+            compressed = true
+            break
+        }
+
 
         var mp_number : Int = mp_number
         if lineNMP.count < 1_000_000 {
@@ -2861,6 +2938,7 @@ final class VDB {
             var date : Date = Date()
             var epiIslNumber : Int = 0
             var mutations : [Mutation] = []
+            var lineage : String = ""
             var lastInsertionPos : Int = 0
             var lastInsertion : [UInt8] = []
             var lastInsertionCode : UInt8 = 0
@@ -2872,6 +2950,10 @@ final class VDB {
                 var aa : UInt8 = lineNMP[endPos-1]
                 let pos : Int
                 if wt < insertionChar {
+                    if startPos+1 > endPos-1 {
+                        print("wt = \(wt) aa = \(aa) startPos = \(startPos) endPos = \(endPos)")
+                        return
+                    }
                     pos = intA(startPos+1..<endPos-1)
                 }
                 else {  // insertion
@@ -2903,7 +2985,6 @@ final class VDB {
                 mutations.append(mut)
             }
 #else
-            var lineage : String = ""
             func makeMutation(_ startPos: Int, _ endPos: Int) {
                 var wt : UInt8 = lineNMP[startPos]
                 var aa : UInt8 = lineNMP[endPos-1]
@@ -2959,6 +3040,7 @@ final class VDB {
             var lastUnderscorePosition : Int = 0
             var mutStartPosition : Int = 0
             var commaFound : Bool = false
+            var readMatch : Bool = false
             
             var refAdded : Bool = false
     //        for pos in 0..<lineN.count {
@@ -2996,11 +3078,13 @@ final class VDB {
                             dummyNumberBase += 1
                         }
                         if add {
-#if !VDB_SERVER && swift(>=1)
-                            let newIsolate = Isolate(country: country, state: state, date: date, epiIslNumber: epiIslNumber, mutations: mutations)
-#else
                             let newIsolate = Isolate(country: country, state: state, date: date, epiIslNumber: epiIslNumber, mutations: mutations, pangoLineage: lineage)
-#endif
+                            if readMatch {
+                                let matchNum : Int = intA(mutStartPosition..<pos)
+                                let lower : Int16 = Int16(matchNum % Int(Int16.max))
+                                let upper : Int16 = Int16(matchNum / Int(Int16.max))
+                                newIsolate.nRegions = [lower,upper]
+                            }
                             isolates.append(newIsolate)
                         }
                     }
@@ -3020,6 +3104,7 @@ final class VDB {
                     mutStartPosition = 0
                     commaFound = false
                     mutations = []
+                    readMatch = false
                     lineCount += 1
                 case greaterChar:
                     greaterPosition = pos
@@ -3029,7 +3114,12 @@ final class VDB {
                     commaFound = true
 #if VDB_SERVER && swift(>=1)
                     lineage = stringA(lastVerticalPosition+1..<pos)
+#else
+                    if vdb.accessionMode == .ncbi {
+                        lineage = stringA(lastVerticalPosition+1..<pos)
+                    }
 #endif
+                    readMatch = lineNMP[mutStartPosition] > 47 && lineNMP[mutStartPosition] < 58
                 case spaceChar:
                     if mutStartPosition != 0 && commaFound {
                         makeMutation(mutStartPosition,pos)
@@ -3102,6 +3192,12 @@ final class VDB {
     //                    if country == "SouthAfrica" {
     //                        country = "South Africa"
     //                    }
+                        if country.isEmpty {
+                            country = "Unknown"
+                        }
+                        else if country.count == 1 {
+                            country = country + "_Unknown"
+                        }
                     case 1:
                         state = stringA(lastSlashPosition+1..<pos)
                     default:
@@ -3144,10 +3240,22 @@ final class VDB {
         }
         lineNMP = []
         if initialLoad {
+            if compressed {
+                for i in 0..<vdb.isolates.count {
+                    if !vdb.isolates[i].nRegions.isEmpty {
+                        let index = Int(vdb.isolates[i].nRegions[0]) + Int(vdb.isolates[i].nRegions[1])*Int(Int16.max)
+                        vdb.isolates[i].mutations = vdb.isolates[index].mutations
+                        vdb.isolates[i].nRegions = []
+                    }
+                }
+            }
             print(vdb: vdb, "  \(nf(vdb.isolates.count)) isolates loaded")
             return vdb.isolates
         }
         else {
+            if compressed {
+                print(vdb: vdb, "Error - compressed format only recognized for initial load")
+            }
             print(vdb: vdb, "  \(nf(additionalIsolates.count)) isolates loaded")
             return additionalIsolates
         }
@@ -3396,7 +3504,9 @@ final class VDB {
             pangoField = pangoField2
         }
         if pangoField == -1 {
-            print(vdb: vdb, "   Warning - no Pango lineages available")
+            if vdb.accessionMode == .gisaid {
+                print(vdb: vdb, "   Warning - no Pango lineages available")
+            }
             return
         }
 //        var ageField : Int = -1
@@ -3830,6 +3940,11 @@ final class VDB {
     // loads a list of isolates and their mutations from the given fileName
     // reads (via InputStream) metadata.tsv file downloaded from GISAID
     class func loadMutationDBTSV_MP(_ fileName: String, loadMetadataOnly: Bool, vdb: VDB) -> [Isolate] {
+        if loadMetadataOnly && vdb.accessionMode == .ncbi {
+            vdb.clusters[allIsolatesKeyword] = vdb.isolates
+            vdb.metadataLoaded = true
+            return []
+        }
         // Metadata read in 4.45 sec
         var isoDict : [Int:Int] = [:]
         if loadMetadataOnly {
@@ -4467,6 +4582,31 @@ final class VDB {
         if newAliasDict.count > vdb.aliasDict.count {
             vdb.aliasDict = newAliasDict
         }
+        let aliasDictTmp = vdb.aliasDict
+        for (key,value) in aliasDictTmp {
+            var dotCount : Int = 0
+            var endPos : String.Index? = nil
+            for (index,char) in value.enumerated() {
+                if char == "." {
+                    dotCount += 1
+                    if dotCount == 4 {
+                        endPos = value.index(value.startIndex, offsetBy: index)
+                    }
+                }
+            }
+            if let endPos = endPos {
+                let prefix = String(value[value.startIndex..<endPos])
+                for (key2,value2) in aliasDictTmp {
+                    if value2 == prefix {
+                        let newValue = key2 + value[endPos..<value.endIndex]
+                        vdb.aliasDict[key] = newValue
+                        vdb.aliasDict2Rev[newValue] = key
+                        break
+                    }
+                }
+            }
+        }
+        
         if vdb.lineageArray.isEmpty {
             var allLineagesSet : Set<String> = Set()
             for iso in vdb.isolates {
@@ -4497,6 +4637,14 @@ final class VDB {
                 for aLineage in vdb.lineageArray {
                     if aLineage.prefix(sString2.count) == sString2 {
                         addSub.append(aLineage)
+                        if let level2Alias = vdb.aliasDict2Rev[aLineage] {
+                            let sString22 : String = level2Alias + "."
+                            for aLineage2 in vdb.lineageArray {
+                                if aLineage2.prefix(sString22.count) == sString22 {
+                                    addSub.append(aLineage2)
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -4504,12 +4652,28 @@ final class VDB {
         return addSub
     }
     
+    class func dealiasedLineageNameFor(_ lineage: String, vdb: VDB) -> String {
+        var dName : String = lineage
+        while true {
+            if let firstDotIndex = dName.firstIndex(of: ".") {
+                let possibleAlias = String(dName[dName.startIndex..<firstDotIndex])
+                if let extended = vdb.aliasDict[possibleAlias] {
+                    dName = extended + dName[firstDotIndex..<dName.endIndex]
+                }
+                else {
+                    break
+                }
+            }
+        }
+        return dName
+    }
+    
     // MARK: - Trim Only Mode
 
     // loads and trims a list of isolates and their mutations from the given fileName
     // reads non-tsv files using the format generated by vdbCreate
     // immediately saves file with trimmed mutations
-    class func loadAndTrimMutationDB_MP(_ fileName: String, _ trimmedFileName: String, pipe: Pipe? = nil, extendN : Bool = false) {
+    class func loadAndTrimMutationDB_MP(_ fileName: String, _ trimmedFileName: String, pipe: Pipe? = nil, extendN : Bool = false, compress: Bool) {
         let isoDict : [Int:Double] = loadMutationDBTSV_MP_N_Content()
         if fileName.suffix(4) == ".tsv" {
             Swift.print("Error - trim mode is not available for tsv files")
@@ -5126,6 +5290,9 @@ final class VDB {
                 Swift.print("Error 2 writing vdb mutation file")
                 return
             }
+            if compress {
+                VDB.compressVDBDataFile(filePath: outFileName)
+            }
             Swift.print("   \(nf(totalLinesTrimmed)) isolates loaded and trimmed")
             Swift.print("   vdb file \(trimmedFileName) written")
         }
@@ -5154,14 +5321,17 @@ final class VDB {
             var pos : Int = 0
             while pos < dataBufferPointer.count {
                 if i >= isolates.count {
-                    print(vdb: vdb, "Error loading N regions - N regions may be incorrect")
-                    continue
+                    print(vdb: vdb, "Error loading N regions - N regions may be incorrect  pos = \(pos) dataBufferPointer.count = \(dataBufferPointer.count)")
+                    break
                 }
                 for j in pos+1..<pos+1+Int(dataBufferPointer[pos]) {
                     isolates[i].nRegions.append(dataBufferPointer[j])
                 }
                 pos += Int(dataBufferPointer[pos]) + 1
                 i += 1
+            }
+            if i != isolates.count || pos != dataBufferPointer.count {
+                print(vdb: vdb, "Error loading N regions - N regions may be incorrect  pos = \(pos) dataBufferPointer.count = \(dataBufferPointer.count)  i = \(i) isolates.count = \(isolates.count)")
             }
 /*
             print(vdb: vdb, "*** N regions load for isolates.count = \(isolates.count) ***")
@@ -5374,6 +5544,233 @@ final class VDB {
         buf?.deallocate()
     }
         return isoDict
+    }
+    
+    // MARK: - Compress vdb data file
+    
+    // compresses a vdb data file by having each unique mutation pattern listed only once
+    // use cases:
+    //   after creation of vdb data file in embedded mode (checkbox option)
+    //   after creation of updated ncbi data file (automatic)
+    //   trim mode command line option -z
+    //   from a vdb instance, save cluster filename [m] [z]
+    class func compressVDBDataFile(filePath: String) {
+        let startTime : DispatchTime = DispatchTime.now()
+        var mDict : [ArraySlice<UInt8>:Int] = [:]
+        var lineNMP : [UInt8] = []
+        numberFormatter.numberStyle = .decimal
+        do {
+            let vdbData = try Data(contentsOf: URL(fileURLWithPath: filePath))
+            lineNMP = [UInt8](vdbData)
+        }
+        catch {
+            Swift.print("Error reading vdb file \(filePath)")
+            return
+        }
+        Swift.print("file size = \(nf(lineNMP.count))")
+        var lineCounter : Int = 0
+        var dedupCount : Int = 0
+        
+        let outFileName : String = "\(filePath)_dd"
+        FileManager.default.createFile(atPath: outFileName, contents: nil, attributes: nil)
+    
+        guard let outFileHandle : FileHandle = FileHandle(forWritingAtPath: outFileName) else {
+            Swift.print("Error - could not write to file \(outFileName)")
+            return
+        }
+
+        let lf : UInt8 = 10     // \n
+        let greaterChar : UInt8 = 62
+        let commaChar : UInt8 = 44
+        let zeroChar : UInt8 = 48
+//        let underscoreChar : UInt8 = 95
+//        let verticalChar : UInt8 = 124
+
+        var buf : UnsafeMutablePointer<CChar>? = nil
+        buf = UnsafeMutablePointer<CChar>.allocate(capacity: 100000)
+         
+        // extract string from byte stream
+        func stringA(_ range : CountableRange<Int>) -> String {
+            var counter : Int = 0
+            for i in range {
+                buf?[counter] = CChar(lineNMP[i])
+                counter += 1
+            }
+            buf?[counter] = 0 // zero terminate
+            let s = String(cString: buf!)
+            return s
+        }
+        
+        // extract integer from byte stream
+        func intA(_ range : CountableRange<Int>) -> Int {
+            var counter : Int = 0
+            for i in range {
+                buf?[counter] = CChar(lineNMP[i])
+                counter += 1
+            }
+            buf?[counter] = 0 // zero terminate
+            return strtol(buf!,nil,10)
+        }
+
+        var lineCount : Int = 0
+        var greaterPosition : Int = -1
+        var lfAfterGreaterPosition : Int = 0
+        var checkCount : Int = 0
+        
+//        var verticalCount : Int = 0
+//        var lastVerticalPosition : Int = 0
+//        var lastUnderscorePosition : Int = 0
+        var mutStartPosition : Int = 0
+        var commaFound : Bool = false
+        var firstLine : Bool = true
+        
+        for pos in 0..<lineNMP.count {
+            switch lineNMP[pos] {
+            case lf:
+                checkCount += 1
+                if commaFound {
+                    // append(newIsolate)
+                    if var existing = mDict[lineNMP[mutStartPosition..<pos]] {
+                        dedupCount += 1
+                        do {
+                            if #available(iOS 13.4,*) {
+                                try outFileHandle.write(contentsOf: lineNMP[greaterPosition..<mutStartPosition])
+                                var lineEnd : [UInt8] = [lf]
+                                if existing > 0 {
+                                    while existing > 0 {
+                                        lineEnd.append(zeroChar + UInt8(existing % 10))
+                                        existing /= 10
+                                    }
+                                }
+                                else {
+                                    lineEnd.append(zeroChar)
+                                }
+                                lineEnd.reverse()
+                                try outFileHandle.write(contentsOf: lineEnd)
+                            }
+                        }
+                        catch {
+                            Swift.print("Error writing trimmed vdb mutation file")
+                            return
+                        }
+                    }
+                    else {
+                        mDict[lineNMP[mutStartPosition..<pos]] = lineCounter
+                        do {
+                            if #available(iOS 13.4,*) {
+                                if !firstLine {
+                                    try outFileHandle.write(contentsOf: lineNMP[greaterPosition...pos])
+                                }
+                                else {
+                                    firstLine = false
+                                    let commaChar : UInt8 = 44
+                                    let verticalChar : UInt8 = 124
+                                    var fLine : [UInt8] = [UInt8](lineNMP[greaterPosition...pos])
+                                    if let firstCommaIndex = fLine.firstIndex(of: commaChar) {
+                                        var lastVertical : Int?
+                                        var index : Int = 0
+                                        while index < firstCommaIndex {
+                                            if fLine[index] == verticalChar {
+                                                lastVertical = index
+                                            }
+                                            index += 1
+                                        }
+                                        if let lastVertical = lastVertical {
+                                            let compString : String = "|COMP"
+                                            let compCheck : [UInt8] = [UInt8](compString.utf8)
+                                            fLine.insert(contentsOf: compCheck, at: lastVertical)
+                                        }
+                                    }
+                                    try outFileHandle.write(contentsOf: fLine)
+                                }
+                            }
+                        }
+                        catch {
+                            Swift.print("Error writing trimmed vdb mutation file")
+                            return
+                        }
+                    }
+                    lineCounter += 1
+                }
+                
+                if lfAfterGreaterPosition == 0 {
+                    lfAfterGreaterPosition = pos
+/*
+                    _ = lineN.withUnsafeBufferPointer {(result) in
+                        memmove(&outBuffer[outBufferPosition], result.baseAddress!+greaterPosition, pos-greaterPosition+1)
+                    }
+                    outBufferPosition += pos-greaterPosition+1
+*/
+                }
+
+//                verticalCount = 0
+                mutStartPosition = 0
+                commaFound = false
+                lineCount += 1
+            case greaterChar:
+                greaterPosition = pos
+                lfAfterGreaterPosition = 0
+            case commaChar:
+                mutStartPosition = pos + 1
+                commaFound = true
+/*
+            case verticalChar:
+                switch verticalCount {
+                case 1:
+                    epiIslNumber = intA(lastUnderscorePosition+1..<pos)
+                default:
+                    break
+                }
+                lastVerticalPosition = pos
+                verticalCount += 1
+            case underscoreChar:
+                lastUnderscorePosition = pos
+*/
+            default:
+                break
+            }
+        }
+
+        buf?.deallocate()
+        do {
+            if #available(iOS 13.0,*) {
+                try outFileHandle.synchronize()
+                try outFileHandle.close()
+            }
+        }
+        catch {
+            Swift.print("Error 2 writing vdb mutation file")
+            return
+        }
+        Swift.print("lineCounter = \(nf(lineCounter))")
+        Swift.print("mDict.count = \(nf(mDict.count))  dedupCount = \(nf(dedupCount))")
+        let endTime : DispatchTime = DispatchTime.now()
+        let nanoTime : UInt64 = endTime.uptimeNanoseconds - startTime.uptimeNanoseconds
+        let timeInterval : Double = Double(nanoTime) / 1_000_000_000
+        let timeString : String = String(format: "%4.2f seconds", timeInterval)
+        Swift.print("Time: \(timeString)")
+        if FileManager.default.fileExists(atPath: outFileName) {
+            let tmpOrigFileName : String = filePath + "_tmpOrig"
+            do {
+                try FileManager.default.moveItem(at: URL(fileURLWithPath: filePath), to: URL(fileURLWithPath: tmpOrigFileName))
+                do {
+                    try FileManager.default.moveItem(at: URL(fileURLWithPath: outFileName), to: URL(fileURLWithPath: filePath))
+                    do {
+                        try FileManager.default.removeItem(at: URL(fileURLWithPath: tmpOrigFileName))
+                    }
+                    catch {
+                        Swift.print("Error deleing original VDB file")
+                    }
+                }
+                catch {
+                    Swift.print("Error moving compressed VDB file")
+                    try FileManager.default.moveItem(at: URL(fileURLWithPath: tmpOrigFileName), to: URL(fileURLWithPath: filePath))
+                }
+            }
+            catch {
+                Swift.print("Error moving original VDB file")
+            }
+        }
     }
     
     // MARK: - VDB VQL internal methods
@@ -6645,7 +7042,7 @@ plot
                 print(vdb: vdb, "\(i+1) : \(cluster[i].string(dateFormatter, vdb: vdb))")
             }
             else {
-                print(vdb: vdb, "EPI_ISL_\(cluster[i].epiIslNumber), \(cluster[i].string(dateFormatter, vdb: vdb))")
+                print(vdb: vdb, "\(cluster[i].accessionString(vdb)), \(cluster[i].string(dateFormatter, vdb: vdb))")
             }
             if vdb.nucleotideMode {
                 VDB.proteinMutationsForIsolate(cluster[i],vdb:vdb)
@@ -7166,6 +7563,9 @@ plot
         if let value = Int(name) {
             namedIsolates = isolates.filter { $0.epiIslNumber == value }
         }
+        else if vdb.accessionMode == .ncbi, let value = numberFromAccString(name) {
+            namedIsolates = isolates.filter { $0.epiIslNumber == value }
+        }
         else {
             var name : String = name
             name.makeContiguousUTF8()
@@ -7437,7 +7837,7 @@ plot
     
     // prints information about the given isolate
     class func infoForIsolate(_ isolate: Isolate, vdb:VDB) {
-        print(vdb: vdb,"  Accession #:    \(isolate.epiIslNumber)")
+        print(vdb: vdb,"  Accession #:    \(isolate.accessionString(vdb))")
         print(vdb: vdb,"  Country:        \(isolate.country)")
         print(vdb: vdb,"  Name:           \(isolate.state)")
         print(vdb: vdb,"  Date:           \(dateFormatter.string(from: isolate.date))")
@@ -7860,6 +8260,10 @@ plot
         let lineage : [Isolate] = isolates.filter { $0.pangoLineage ~~ lineageName }
         if lineage.isEmpty {
             return
+        }
+        let dealiasedName : String = dealiasedLineageNameFor(lineageName, vdb: vdb)
+        if lineageName != dealiasedName {
+            print(vdb: vdb, "de-aliased lineage name of \(lineageName): \(dealiasedName)")
         }
         print(vdb: vdb, "Number of viruses in lineage \(lineageName): \(lineage.count)")
         let (parentLineageName,parentLineage) : (String,[Isolate]) = parentLineageFor(lineageName, inCluster: isolates, vdb: vdb)
@@ -8598,6 +9002,10 @@ plot
             nuclConvMessage = "Nucleotide/Protein mutation switch. \(missing) missing isolates."
         }
         
+        if vdb.nucleotideMode {
+            VDB.loadNregionsData(fileName, isolates: loadedCluster, vdb: vdb)
+        }
+        
         vdb.clusters[clusterName] = loadedCluster
         print(vdb: vdb, "  \(nf(loadedCluster.count)) isolates loaded into cluster \(clusterName)")
         vdb.clusterHasBeenAssigned(clusterName)
@@ -8607,7 +9015,7 @@ plot
     }
     
     // save a defined cluster to a file
-    class func saveCluster(_ cluster: [Isolate], toFile fileName: String, fasta: Bool, vdb: VDB) {
+    class func saveCluster(_ cluster: [Isolate], toFile fileName: String, fasta: Bool, includeLineage: Bool = false, vdb: VDB) {
         var outString : String = ""
         let printToStdOut : Bool = fileName.suffix(2) == "/-"
         var ref : String = fasta ? String(bytes: vdb.referenceArray, encoding: .utf8) ?? "" : ""
@@ -8628,7 +9036,7 @@ plot
         var nRegionsArrayMP : [[UInt8]] = Array(repeating: [], count: mp_number)
         DispatchQueue.concurrentPerform(iterations: mp_number) { index in
             for isoNum in cuts[index]..<cuts[index+1] {
-                outStringMP[index] += cluster[isoNum].vdbString(dateFormatter, includeLineage: printToStdOut, ref: ref, vdb: vdb)
+                outStringMP[index] += cluster[isoNum].vdbString(dateFormatter, includeLineage: printToStdOut || includeLineage, ref: ref, vdb: vdb)
                 if !fasta {
                     // copy nRegions data
                     let nRegionsCount : Int16 = Int16(cluster[isoNum].nRegions.count)
@@ -8640,6 +9048,21 @@ plot
                         let dataBufferPointer : UnsafeMutableBufferPointer<UInt8> = ptr.bindMemory(to: UInt8.self)
                         nRegionsArrayMP[index].append(contentsOf: dataBufferPointer)
                     }
+                }
+            }
+        }
+        if vdb.accessionMode == .ncbi {
+            if let firstCommaIndex = outStringMP[0].firstIndex(of: ",") {
+                var lastVertical : String.Index?
+                var index : String.Index = outStringMP[0].startIndex
+                while index < firstCommaIndex {
+                    if outStringMP[0][index] == "|" {
+                        lastVertical = index
+                    }
+                    index = outStringMP[0].index(after: index)
+                }
+                if let lastVertical = lastVertical {
+                    outStringMP[0].insert(contentsOf: "|NCBI", at: lastVertical)
                 }
             }
         }
@@ -9451,7 +9874,8 @@ plot
                         lastPercentLocal = newCluster.count
                         if vdb.assignmentCount - vdb.assignmentLastPercent > tenPercent {
                             vdb.assignmentLastPercent = vdb.assignmentCount
-                            let percentDone : Int = 100 * vdb.assignmentCount / cluster1.count
+                            var percentDone : Int = 100 * vdb.assignmentCount / cluster1.count
+                            percentDone = percentDone < 101 ? percentDone : 100
                             print(vdb: vdb, "  \(percentDone)% done")
                         }
                     }
@@ -10260,11 +10684,16 @@ plot
     var currentCommand : String = ""
     var pagerLines : [String] = []
     var demoMode : Bool = false
+    var accessionMode : AccessionMode = .gisaid
     var TColor : TColorStruct = TColorStruct()
     var secondConsensus : [Mutation] = []
     var secondConsensusFreq : Int = 0
     var stdIn_fileNo : Int32 = STDIN_FILENO
     var stdOut_fileNo : Int32 = STDOUT_FILENO
+#if VDB_CHANNEL2
+    var stdIn_fileNo2 : Int32 = STDIN_FILENO
+    var stdOut_fileNo2 : Int32 = STDOUT_FILENO
+#endif
     var printProteinMutations : Bool = false    // temporary flag used to control printing
     var printToPagerPrivate : Bool = false
     var printToPager : Bool {
@@ -10331,7 +10760,8 @@ plot
     var metadataLoaded : Bool = false
     
     var helpDict : [String:String] = [:]
-    var aliasDict : [String:String] = [:]
+    var aliasDict : [String:String] = [:]      // short alias : extended lineage name
+    var aliasDict2Rev : [String:String] = [:]  // lineage with 2nd level alias : second level alias
     var lineageArray : [String] = []
     var countriesStates : [String] = []
     
@@ -10360,11 +10790,20 @@ plot
     
 #if VDB_MULTI
     static var vdbDict : [String:WeakVDB] = [:]
+#if VDB_CHANNEL2
+    static var vdbDict2 : [String:WeakVDB] = [:]
+#endif
     var timer : DispatchSourceTimer? = nil
     var pidString : String = ""
     weak var lnTerm : LineNoise? = nil
     var getTermSize : Bool = false
     var fileNameLoaded : String = ""
+#endif
+#if VDB_CHANNEL2
+    var shouldCloseCh2 : Bool = false
+#if VDB_SERVER
+    var vdbClusters : [VDBCluster] = []
+#endif
 #endif
 
     static let whoVariants : [String:(String,Int,VariantClass)] = ["Alpha":("B.1.1.7",1,.VOC),
@@ -10449,10 +10888,20 @@ plot
         if let urlArray : [URL] = try? FileManager.default.contentsOfDirectory(at: baseURL,includingPropertiesForKeys: [.contentModificationDateKey],options:.skipsHiddenFiles) {
             let fileArray : [(String,Date)] = urlArray.map { url in
                 (url.lastPathComponent, (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? Date.distantPast) }
-            let filteredFileArray : [(String,Date)] = fileArray.filter { $0.0.prefix(4) == "vdb_" }.sorted(by: { $0.1 > $1.1 })
+            let vPrefix : String
+            let addOne : Int
+            if clArguments.isEmpty || !clArguments[0].contains("vdb2") {
+                vPrefix = "vdb_"
+                addOne = 0
+            }
+            else {
+                vPrefix = "ncbi_"
+                addOne = 1
+            }
+            let filteredFileArray : [(String,Date)] = fileArray.filter { $0.0.prefix(vPrefix.count) == vPrefix }.sorted(by: { $0.1 > $1.1 })
             let possibleFileNames : [String] = filteredFileArray.map { $0.0 }.filter { ($0.count == 14 || $0.contains("nucl")) && $0.suffix(4) == ".txt" }
             for name in possibleFileNames {
-                if let _ = Int(name.prefix(10).suffix(6)) {
+                if let _ = Int(name.prefix(10+addOne).suffix(6)) {
                     fileName = name
                     break
                 }
@@ -10924,7 +11373,9 @@ plot
             self.referenceArray = existingVDB.referenceArray
             self.lineageArray = existingVDB.lineageArray
             self.aliasDict = existingVDB.aliasDict
+            self.aliasDict2Rev = existingVDB.aliasDict2Rev
             self.countriesStates = existingVDB.countriesStates
+            self.accessionMode = existingVDB.accessionMode
         }
 #endif
         if shouldLoadDatabase {
@@ -11434,13 +11885,16 @@ plot
             changed = false
             for i in 0..<parts.count {
                 if parts[i].contains(".") && (i == 0 || (!(parts[i-1] ~~ lineageKeyword) && !(parts[i-1] ~~ namedKeyword)  && !(parts[i-1] ~~ sampleKeyword)) ) {
-                    if clusters[parts[i]] != nil || patterns[parts[i]] != nil {
+                    if clusters[parts[i]] != nil || patterns[parts[i]] != nil || lists[parts[i]] != nil {
                         continue
                     }
                     if i < parts.count-1 {
                         if parts[i+1] == "=" {
                             continue
                         }
+                    }
+                    if let first = parts[i].first, first >= "0" && first <= "9" {
+                        continue
                     }
                     if !parts[i].contains("..") {
                         parts.insert(lineageKeyword, at: i)
@@ -11928,7 +12382,12 @@ plot
                         switch tokens[i+1] {
                         case let .textBlock(identifier):
                             if let value = Int(identifier) {
-                                precedingExpr = Expr.GreaterThan(precedingExprTmp, value)
+                                precedingExpr = Expr.GreaterThan(precedingExprTmp, VDBNumber(intValue: value, doubleValue: nil))
+                                i += 1
+                                break tSwitch
+                            }
+                            else if let value = Double(identifier), value >= 0.0, value <= 1.0, nucleotideMode {
+                                precedingExpr = Expr.GreaterThan(precedingExprTmp, VDBNumber(intValue: nil, doubleValue: value))
                                 i += 1
                                 break tSwitch
                             }
@@ -11943,7 +12402,12 @@ plot
                         switch tokens[i+1] {
                         case let .textBlock(identifier):
                             if let value = Int(identifier) {
-                                precedingExpr = Expr.GreaterThan(allIsolates, value)
+                                precedingExpr = Expr.GreaterThan(allIsolates, VDBNumber(intValue: value, doubleValue: nil))
+                                i += 1
+                                break tSwitch
+                            }
+                            else if let value = Double(identifier), value >= 0.0, value <= 1.0, nucleotideMode {
+                                precedingExpr = Expr.GreaterThan(allIsolates, VDBNumber(intValue: nil, doubleValue: value))
                                 i += 1
                                 break tSwitch
                             }
@@ -11958,7 +12422,12 @@ plot
                         switch tokens[i+1] {
                         case let .textBlock(identifier):
                             if let value = Int(identifier) {
-                                precedingExpr = Expr.LessThan(precedingExprTmp, value)
+                                precedingExpr = Expr.LessThan(precedingExprTmp, VDBNumber(intValue: value, doubleValue: nil))
+                                i += 1
+                                break tSwitch
+                            }
+                            else if let value = Double(identifier), value >= 0.0, value <= 1.0, nucleotideMode {
+                                precedingExpr = Expr.LessThan(precedingExprTmp, VDBNumber(intValue: nil, doubleValue: value))
                                 i += 1
                                 break tSwitch
                             }
@@ -11973,7 +12442,12 @@ plot
                         switch tokens[i+1] {
                         case let .textBlock(identifier):
                             if let value = Int(identifier) {
-                                precedingExpr = Expr.LessThan(allIsolates, value)
+                                precedingExpr = Expr.LessThan(allIsolates, VDBNumber(intValue: value, doubleValue: nil))
+                                i += 1
+                                break tSwitch
+                            }
+                            else if let value = Double(identifier), value >= 0.0, value <= 1.0, nucleotideMode {
+                                precedingExpr = Expr.LessThan(allIsolates, VDBNumber(intValue: nil, doubleValue: value))
                                 i += 1
                                 break tSwitch
                             }
@@ -11988,7 +12462,12 @@ plot
                         switch tokens[i+1] {
                         case let .textBlock(identifier):
                             if let value = Int(identifier) {
-                                precedingExpr = Expr.EqualMutationCount(precedingExprTmp, value)
+                                precedingExpr = Expr.EqualMutationCount(precedingExprTmp, VDBNumber(intValue: value, doubleValue: nil))
+                                i += 1
+                                break tSwitch
+                            }
+                            else if let value = Double(identifier), value >= 0.0, value <= 1.0, nucleotideMode {
+                                precedingExpr = Expr.EqualMutationCount(precedingExprTmp, VDBNumber(intValue: nil, doubleValue: value))
                                 i += 1
                                 break tSwitch
                             }
@@ -12003,7 +12482,12 @@ plot
                         switch tokens[i+1] {
                         case let .textBlock(identifier):
                             if let value = Int(identifier) {
-                                precedingExpr = Expr.EqualMutationCount(allIsolates, value)
+                                precedingExpr = Expr.EqualMutationCount(allIsolates, VDBNumber(intValue: value, doubleValue: nil))
+                                i += 1
+                                break tSwitch
+                            }
+                            else if let value = Double(identifier), value >= 0.0, value <= 1.0, nucleotideMode {
+                                precedingExpr = Expr.EqualMutationCount(allIsolates, VDBNumber(intValue: nil, doubleValue: value))
                                 i += 1
                                 break tSwitch
                             }
@@ -12978,18 +13462,45 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
             if fasta {
                 saveCmdParts.removeFirst()
             }
+            var compress : Bool = false
+            if saveCmdParts.count > 2 {
+                if saveCmdParts.last?.lowercased() == "z" {
+                    compress = true
+                    saveCmdParts.removeLast()
+                }
+            }
+            if saveCmdParts.count == 4 {
+                if saveCmdParts[2].lowercased() == "z" {
+                    compress = true
+                    saveCmdParts.remove(at: 2)
+                }
+            }
             switch saveCmdParts.count {
             case 2,3:
                 let clusterName : String = saveCmdParts[0]
-                let fileName : String = "\(basePath)/\(saveCmdParts[1])"
+                let fileName : String
+                if saveCmdParts[1].first != "/" {
+                    fileName = "\(basePath)/\(saveCmdParts[1])"
+                }
+                else {
+                    fileName = saveCmdParts[1]
+                }
                 if let cluster = clusters[clusterName] {
                     if !cluster.isEmpty {
                         if fileName.suffix(6).lowercased() == ".fasta" {
                             fasta = true
                         }
-                        VDB.saveCluster(cluster, toFile: fileName, fasta: fasta, vdb:self)
-                        if saveCmdParts.count == 3 && !saveCmdParts[2].isEmpty {
-                            VDB.writeMetadataForCluster(clusterName, metadataFileName: saveCmdParts[2], vdb: self)
+                        if accessionMode != .ncbi || clusterName != "update" {
+                            VDB.saveCluster(cluster, toFile: fileName, fasta: fasta, vdb:self)
+                            if saveCmdParts.count == 3 && !saveCmdParts[2].isEmpty {
+                                VDB.writeMetadataForCluster(clusterName, metadataFileName: saveCmdParts[2], vdb: self)
+                                if compress {
+                                    VDB.compressVDBDataFile(filePath: fileName)
+                                }
+                            }
+                        }
+                        else {
+                            VDB.saveUpdatedWithCluster(cluster, vdb:self)
                         }
                     }
                 }
@@ -13037,6 +13548,10 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
             print(vdb: self, "")
         case "testvdb":
             testvdb()
+#if VDB_TEST && swift(>=1)
+        case "testperf":
+            testPerformance()
+#endif
         case "demo":
             demo()
         case _ where lowercaseLine.hasPrefix("count "):
@@ -13682,6 +14197,142 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         
     }
     
+#if VDB_CHANNEL2 && swift(>=1)
+    // second channel run loop
+    func run2() {
+        
+        let vdbDataController : VDBDataController = VDBDataController()
+        Task {
+            _ = await vdbDataController.setup(vdb: self)
+        }
+        Thread.sleep(forTimeInterval: 0.05)
+        var runningInput : [UInt8] = []
+    runLoop2: repeat {
+        let maxCommandSize: Int = 1024
+        var input: [UInt8] = Array(repeating: 0, count: maxCommandSize)
+        let count = read(self.stdIn_fileNo2, &input, maxCommandSize)
+        if count == 0 || shouldCloseCh2 {
+            NSLog("ending channel 2 run loop")
+            break runLoop2
+        }
+        runningInput.append(contentsOf: input[0..<count])
+        let openB : UInt8 = 123
+        let closeB : UInt8 = 125
+        var bCount : Int = 0
+        for x in runningInput {
+            switch x {
+            case openB:
+                bCount += 1
+            case closeB:
+                bCount -= 1
+            default:
+                break
+            }
+        }
+        if bCount == 0 {
+            var remoteMethodCall1 : RemoteMethodCall = RemoteMethodCall(method: .empty, serialNumber: -1, clusterName: "", clusterIsolateCount: 0, groupLineages: false)
+            let runningCount : Int = runningInput.count
+            runningInput.withUnsafeMutableBytes { ptr in
+                let cmdData : Data = Data(bytesNoCopy: ptr.baseAddress!, count: runningCount, deallocator: .none)
+                let decoder : JSONDecoder = JSONDecoder()
+                do {
+                    remoteMethodCall1 = try decoder.decode(RemoteMethodCall.self, from: cmdData)
+                }
+                catch {
+                    NSLog("Error decoding remote method call")
+                }
+            }
+            if remoteMethodCall1.method == .empty {
+                continue
+            }
+            runningInput = []
+            let remoteMethodCall : RemoteMethodCall =  remoteMethodCall1
+            Task {
+                let encoder : JSONEncoder = JSONEncoder()
+                var remoteMethodResponse : RemoteMethodResponse? = nil
+                switch remoteMethodCall.method  {
+                case .countriesCountArrayFor, .statesCountArrayFor, .lineagesCountArrayFor, .mutationFreqArrayFor, .lineagesListFor, .consensusFor:
+                    if let cluster = self.clusters[remoteMethodCall.clusterName] {
+                        let vdbCluster : VDBCluster = VDBCluster(name: remoteMethodCall.clusterName, isolates: cluster, isolatesCount: cluster.count)
+                        switch remoteMethodCall.method {
+                        case .countriesCountArrayFor:
+                            let countArray : CountArray = await vdbDataController.countriesCountArrayFor(vdbCluster)
+                            NSLog("here 22a countries countArray.count = \(countArray.count)")
+                            remoteMethodResponse = RemoteMethodResponse(serialNumber: remoteMethodCall.serialNumber, method: remoteMethodCall.method, stringArray: countArray.map { $0.0 }, intArray: countArray.map { $0.1 }, intArrayArray: countArray.map { $0.2 }, doubleArray: [], stringArray2: [], stringArrayArray: [], data: Data())
+                        case .statesCountArrayFor:
+                            let countArray : CountArray = await vdbDataController.statesCountArrayFor(vdbCluster)
+                            NSLog("here 22a states countArray.count = \(countArray.count)")
+                            remoteMethodResponse = RemoteMethodResponse(serialNumber: remoteMethodCall.serialNumber, method: remoteMethodCall.method, stringArray: countArray.map { $0.0 }, intArray: countArray.map { $0.1 }, intArrayArray: countArray.map { $0.2 }, doubleArray: [], stringArray2: [], stringArrayArray: [], data: Data())
+                        case .lineagesCountArrayFor:
+                            let countArray : CountArray = await vdbDataController.lineagesCountArrayFor(vdbCluster, groupLineages: remoteMethodCall.groupLineages)
+                            NSLog("here 22a lineages countArray.count = \(countArray.count)")
+                            remoteMethodResponse = RemoteMethodResponse(serialNumber: remoteMethodCall.serialNumber, method: remoteMethodCall.method, stringArray: countArray.map { $0.0 }, intArray: countArray.map { $0.1 }, intArrayArray: countArray.map { $0.2 }, doubleArray: [], stringArray2: [], stringArrayArray: [], data: Data())
+                        case .mutationFreqArrayFor:
+                            let freqArray : FreqArray = await vdbDataController.mutationFreqArrayFor(vdbCluster)
+                            NSLog("here 22a mutationFreqArray.count = \(freqArray.count)")
+                            remoteMethodResponse = RemoteMethodResponse(serialNumber: remoteMethodCall.serialNumber, method: remoteMethodCall.method, stringArray: freqArray.map { $0.0 }, intArray: [], intArrayArray: [], doubleArray: freqArray.map { $0.1 }, stringArray2: freqArray.map { $0.2 }, stringArrayArray: [], data: Data())
+                        case .consensusFor:
+                            let (consensusString,codons,consensusIsolate) : (String,[VDB.Codon],Isolate) = await vdbDataController.consensusFor(vdbCluster)
+                            NSLog("here 22a consensus codons.count = \(codons.count)")
+                            let consensusMutations : [Mutation] = consensusIsolate.mutations
+                            let consensusMutationsStrings : [String] = consensusMutations.map { $0.string(vdb: self) }
+                            var stringArray : [String] = [consensusString]
+                            stringArray.append(contentsOf: consensusMutationsStrings)
+                            let intArrayArray : [[Int]] = codons.map { codon in
+                                var intArray : [Int] = [codon.protein.rawValue,codon.pos,Int(codon.wt)]
+                                intArray.append(contentsOf: codon.nucl.map { Int($0) })
+                                return intArray
+                            }
+                            remoteMethodResponse = RemoteMethodResponse(serialNumber: remoteMethodCall.serialNumber, method: remoteMethodCall.method, stringArray: stringArray, intArray: [], intArrayArray: intArrayArray, doubleArray: [], stringArray2: [], stringArrayArray: [], data: Data())
+                        case .lineagesListFor:
+#if VDB_SERVER
+                            for aCluster in vdbClusters {
+                                if aCluster.name == remoteMethodCall.clusterName {
+                                    vdbCluster.countryListStruct = aCluster.countryListStruct
+                                    vdbCluster.stateListStruct = aCluster.stateListStruct
+                                    break
+                                }
+                            }
+#endif
+                            let lineagesList : ListStruct = await vdbDataController.lineagesListForCluster(vdbCluster, forCountries: remoteMethodCall.groupLineages) ?? ListStruct.empty()
+                            NSLog("here 22a lineagesList items.count = \(lineagesList.items.count)")
+                            remoteMethodResponse = RemoteMethodResponse(serialNumber: remoteMethodCall.serialNumber, method: remoteMethodCall.method, stringArray: [], intArray: [], intArrayArray: [], doubleArray: [], stringArray2: [], stringArrayArray: [], data: encodeLineagesArrayTuple(([],[],lineagesList)))
+                        default:
+                            break
+                        }
+                    }
+                case .countriesStates:
+                    let countriesStatesArray : [String] = await vdbDataController.countriesStates()
+                    NSLog("here 22a countriesStatesArray.count = \(countriesStatesArray.count)")
+                    remoteMethodResponse = RemoteMethodResponse(serialNumber: remoteMethodCall.serialNumber, method: remoteMethodCall.method, stringArray: countriesStatesArray, intArray: [], intArrayArray: [], doubleArray: [], stringArray2: [], stringArrayArray: [], data: Data())
+                case .whoVariantLineagesAll:
+                    let variantLineagesAll : [(String,[String])] = await vdbDataController.whoVariantLineagesAll()
+                    NSLog("here 22a whoVariantLineagesAll.count = \(variantLineagesAll.count)")
+                    remoteMethodResponse = RemoteMethodResponse(serialNumber: remoteMethodCall.serialNumber, method: remoteMethodCall.method, stringArray: variantLineagesAll.map { $0.0 }, intArray: [], intArrayArray: [], doubleArray: [], stringArray2: [], stringArrayArray: variantLineagesAll.map { $0.1 }, data: Data())
+                case .clusterHasBeenAssigned:
+                    break
+                case .empty:
+                    break
+                }
+                if let remoteMethodResponse = remoteMethodResponse {
+                    do {
+                        let dataOut : Data = try encoder.encode(remoteMethodResponse)
+                        dataOut.withUnsafeBytes { ptr in
+                            let countOut : Int = write(self.stdOut_fileNo2, ptr.baseAddress!, dataOut.count)
+                            NSLog("countOut = \(countOut)")
+                        }
+                    }
+                    catch {
+                        NSLog("Error encoding remote method response")
+                    }
+                }
+            }
+        }
+    } while true
+        
+    }
+#endif
+    
     // MARK: - testing vdb
     
     // run a sequence of built-in tests of vdb
@@ -14066,6 +14717,32 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     
 #if !VDB_EMBEDDED
     func clusterHasBeenAssigned(_ clusterName: String) {
+#if VDB_CHANNEL2 && swift(>=1)
+        if stdOut_fileNo2 == STDOUT_FILENO {
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        if stdOut_fileNo2 != STDOUT_FILENO {
+            let encoder : JSONEncoder = JSONEncoder()
+            guard let cluster : [Isolate] = self.clusters[clusterName] else { return }
+            for (oldIndex,oldCluster) in vdbClusters.enumerated() {
+                if oldCluster.name == clusterName {
+                    vdbClusters.remove(at:oldIndex)
+                    break
+                }
+            }
+            let remoteMethodResponse : RemoteMethodResponse = RemoteMethodResponse(serialNumber: 1, method: .clusterHasBeenAssigned, stringArray: [clusterName], intArray: [cluster.count], intArrayArray: [], doubleArray: [], stringArray2: [], stringArrayArray: [], data: Data())
+            do {
+                let dataOut : Data = try encoder.encode(remoteMethodResponse)
+                dataOut.withUnsafeBytes { ptr in
+                    let countOut : Int = write(self.stdOut_fileNo2, ptr.baseAddress!, dataOut.count)
+                    NSLog("countOut = \(countOut) for cluster has been assigned")
+                }
+            }
+            catch {
+                NSLog("Error encoding remote method response for cluster has been assigned")
+            }
+        }
+#endif
     }
 #endif
     
@@ -14084,7 +14761,41 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         if !fileName.isEmpty {
             fileNameArray = [fileName]
         }
+#if VDB_CHANNEL2
+        let setupChannel2 : Bool = VDB.vdbDict2[pidString] != nil
+#else
         let vdb : VDB = VDB()
+#endif
+#if VDB_CHANNEL2
+        let vdb : VDB
+        if !setupChannel2 {
+            vdb = VDB()
+            VDB.vdbDict2[pidString] = WeakVDB(vdb: vdb)
+        }
+        else {
+            guard let parentVDB = VDB.vdbDict2[pidString] else { return }
+            guard let pvdb = parentVDB.vdb else { return }
+            vdb = pvdb
+            do {
+                let readingURL : URL = URL(fileURLWithPath: "\(basePath)/vdbReadsPipe\(pidString)_2")
+                let writingURL : URL = URL(fileURLWithPath: "\(basePath)/vdbWritesPipe\(pidString)_2")
+                let fileForReading : FileHandle = try FileHandle(forUpdating: readingURL)
+                let fileForWriting : FileHandle = try FileHandle(forWritingTo: writingURL)
+                NSLog("second channel file handles open for reading and writing")
+                vdb.stdIn_fileNo2 = fileForReading.fileDescriptor
+                vdb.stdOut_fileNo2 = fileForWriting.fileDescriptor
+                Thread.sleep(forTimeInterval: 0.1)
+                vdb.run2()
+                try? FileManager.default.removeItem(at: writingURL)
+                try? FileManager.default.removeItem(at: readingURL)
+                NSLog("Ending run2 loop")
+            }
+            catch {
+                NSLog("Error setting up vdb second channel: \(error)")
+            }
+            return
+        }
+#endif
         do {
             let readingURL : URL = URL(fileURLWithPath: "\(basePath)/vdbReadsPipe\(pidString)")
             let writingURL : URL = URL(fileURLWithPath: "\(basePath)/vdbWritesPipe\(pidString)")
@@ -14102,6 +14813,15 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
             try? FileManager.default.removeItem(at: readingURL)
             vdb.timer?.setEventHandler {}
             vdb.timer?.cancel()
+#if VDB_CHANNEL2
+            if vdb.stdIn_fileNo2 != STDIN_FILENO {
+                vdb.shouldCloseCh2 = true
+                let bytes : [UInt8] = [4,10]
+                _ = bytes.withUnsafeBytes { rawBufferPointer in
+                    write(vdb.stdIn_fileNo2, rawBufferPointer.baseAddress, bytes.count)
+                }
+            }
+#endif
         }
         catch {
             NSLog("Error setting up vdb client: \(error)")
@@ -14205,7 +14925,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         weak var vdb : VDB? = nil
         
         init(vdb: VDB) {
-            self.listener = try! NWListener(using: .tcp, on: vdbServerPortNumber)
+            let vdbPortNumber : NWEndpoint.Port = vdb.accessionMode == .gisaid ? vdbServerPortNumber : NWEndpoint.Port(rawValue: vdbServerPortNumber.rawValue + 1) ?? 55555
+            self.listener = try! NWListener(using: .tcp, on: vdbPortNumber)
             self.timer = DispatchSource.makeTimerSource(queue: .main)
             self.vdb = vdb
         }
@@ -14267,6 +14988,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
                 vdb.isolates = []
                 vdb.lineageArray = []
                 vdb.aliasDict = [:]
+                vdb.aliasDict2Rev = [:]
                 vdb.countriesStates = []
                 vdb.loadVDB([mostRecentFileName])
                 vdb.offerCompletions(vdb.completions, nil)
@@ -14416,6 +15138,23 @@ enum Token {
 
 }
 
+struct VDBNumber : CustomStringConvertible {
+    let intValue : Int?
+    let doubleValue : Double?
+    
+    var description: String {
+        if let intValue = intValue {
+            return "\(intValue)"
+        }
+        else if let doubleValue = doubleValue {
+            return "\(doubleValue)"
+        }
+        else {
+            return "unknown value"
+        }
+    }
+}
+
 // Expr is the type used for nodes of the abstract syntax tree
 indirect enum Expr {
     case Identifier(String)            //  --> Cluster or Pattern or String
@@ -14427,9 +15166,9 @@ indirect enum Expr {
     case Minus(Expr,Expr)              // Cluster or Pattern x2            --> Expr(Cluster or Pattern)
     case Multiply(Expr,Expr)           // Cluster or Pattern x2            --> Expr(Cluster or Pattern)
     case Diff(Expr,Expr)               // Cluster or Pattern x2            --> List
-    case GreaterThan(Expr,Int)         // Cluster                          --> Cluster
-    case LessThan(Expr,Int)            // Cluster                          --> Cluster
-    case EqualMutationCount(Expr,Int)  // Cluster                          --> Cluster
+    case GreaterThan(Expr,VDBNumber)   // Cluster                          --> Cluster
+    case LessThan(Expr,VDBNumber)      // Cluster                          --> Cluster
+    case EqualMutationCount(Expr,VDBNumber) // Cluster                     --> Cluster
     case ConsensusFor(Expr)            // Identifier or Cluster            --> Pattern
     case PatternsIn(Expr,Int)          // Cluster                          --> Pattern or List if n is given
     case From(Expr,Expr)               // Cluster, Identifier(country)     --> Cluster
@@ -14892,35 +15631,65 @@ indirect enum Expr {
         case let .GreaterThan(exprCluster, n):
             let cluster = exprCluster.clusterFromExpr(vdb: vdb)
             let cluster2 : [Isolate]
-            if !vdb.nucleotideMode || !vdb.excludeNFromCounts {
-                cluster2 = cluster.filter { $0.mutations.count > n }
+            if let n = n.intValue {
+                if !vdb.nucleotideMode || !vdb.excludeNFromCounts {
+                    cluster2 = cluster.filter { $0.mutations.count > n }
+                }
+                else {
+                    cluster2 = cluster.filter { $0.mutationsExcludingN.count > n }
+                }
+                print(vdb: vdb, "\(nf(cluster2.count)) isolates with > \(n) mutations in set of size \(nf(cluster.count))")
+            }
+            else if let completeness = n.doubleValue {
+                let nC : Double = 1.0 - completeness
+                cluster2 = cluster.filter { $0.nContent() < nC }
+                print(vdb: vdb, "\(nf(cluster2.count)) isolates with > \(completeness) completeness in set of size \(nf(cluster.count))")
             }
             else {
-                cluster2 = cluster.filter { $0.mutationsExcludingN.count > n }
+                cluster2 = []
             }
-            print(vdb: vdb, "\(nf(cluster2.count)) isolates with > \(n) mutations in set of size \(nf(cluster.count))")
             return Expr.Cluster(cluster2)
         case let .LessThan(exprCluster, n):
             let cluster = exprCluster.clusterFromExpr(vdb: vdb)
             let cluster2 : [Isolate]
-            if !vdb.nucleotideMode || !vdb.excludeNFromCounts {
-                cluster2 = cluster.filter { $0.mutations.count < n }
+            if let n = n.intValue {
+                if !vdb.nucleotideMode || !vdb.excludeNFromCounts {
+                    cluster2 = cluster.filter { $0.mutations.count < n }
+                }
+                else {
+                    cluster2 = cluster.filter { $0.mutationsExcludingN.count < n }
+                }
+                print(vdb: vdb, "\(nf(cluster2.count)) isolates with < \(n) mutations in set of size \(nf(cluster.count))")
+            }
+            else if let completeness = n.doubleValue {
+                let nC : Double = 1.0 - completeness
+                cluster2 = cluster.filter { $0.nContent() > nC }
+                print(vdb: vdb, "\(nf(cluster2.count)) isolates with < \(completeness) completeness in set of size \(nf(cluster.count))")
             }
             else {
-                cluster2 = cluster.filter { $0.mutationsExcludingN.count < n }
+                cluster2 = []
             }
-            print(vdb: vdb, "\(nf(cluster2.count)) isolates with < \(n) mutations in set of size \(nf(cluster.count))")
             return Expr.Cluster(cluster2)
         case let .EqualMutationCount(exprCluster, n):
             let cluster = exprCluster.clusterFromExpr(vdb: vdb)
             let cluster2 : [Isolate]
-            if !vdb.nucleotideMode || !vdb.excludeNFromCounts {
-                cluster2 = cluster.filter { $0.mutations.count == n }
+            if let n = n.intValue {
+                if !vdb.nucleotideMode || !vdb.excludeNFromCounts {
+                    cluster2 = cluster.filter { $0.mutations.count == n }
+                }
+                else {
+                    cluster2 = cluster.filter { $0.mutationsExcludingN.count == n }
+                }
+                print(vdb: vdb, "\(nf(cluster2.count)) isolates with exactly \(n) mutations in set of size \(nf(cluster.count))")
+            }
+            else if let completeness = n.doubleValue {
+                let nC : Double = 1.0 - completeness
+                cluster2 = cluster.filter { $0.nContent() == nC }
+                print(vdb: vdb, "\(nf(cluster2.count)) isolates with exactly \(completeness) completeness in set of size \(nf(cluster.count))")
             }
             else {
-                cluster2 = cluster.filter { $0.mutationsExcludingN.count == n }
+                cluster2 = []
             }
-            print(vdb: vdb, "\(nf(cluster2.count)) isolates with exactly \(n) mutations in set of size \(nf(cluster.count))")
             return Expr.Cluster(cluster2)
         case let .ConsensusFor(exprCluster):
             vdb.printToPager = true
@@ -15741,12 +16510,208 @@ indirect enum Expr {
     
 }
 
+#if VDB_TEST
+extension VDB {
+
+    func testPerformance() {
+        
+//        _ = VDB.listFrequenciesOfLineage("B.1.1.7", inCluster: self.isolates, binnedBy: .countries, vdb: self, quiet: false)
+        
+        print(vdb: self, "Testing vdb performance ...")
+        let startTime0 : DispatchTime = DispatchTime.now()
+        
+        // save program settings
+        let debugSetting : Bool = debug
+        let printISLSetting : Bool = printISL
+        let printAvgMutSetting : Bool = printAvgMut
+        let includeSublineagesSetting : Bool = includeSublineages
+        let simpleNuclPatternsSetting : Bool = simpleNuclPatterns
+        let excludeNFromCountsSetting = excludeNFromCounts
+        let sixelSetting : Bool = sixel
+        let trendGraphsSetting : Bool = trendGraphs
+        let stackGraphsSetting : Bool = stackGraphs
+        let completionsSetting : Bool = completions
+        let displayTextWithColorSetting : Bool = displayTextWithColor
+        let quietModeSetting : Bool = quietMode
+        let listSpecificitySetting : Bool = listSpecificity
+        let minimumPatternsCountSetting : Int = minimumPatternsCount
+        let trendsLineageCountSetting : Int = trendsLineageCount
+        let maxMutationsInFreqListSetting : Int = maxMutationsInFreqList
+        let consensusPercentageSetting : Int = consensusPercentage
+        let caseMatchingSetting : CaseMatching = caseMatching
+        let arrayBaseSetting : Int = arrayBase
+
+        let existingClusterNames : [String] = Array(clusters.keys)
+
+        reset()
+        displayTextWithColor = displayTextWithColorSetting
+        excludeNFromCounts = excludeNFromCountsSetting
+        caseMatching = caseMatchingSetting
+
+        let mpValues : [Int] = [1,12]
+        let fromCmds : [String] = ["from ny"]
+        let containingCmds : [String] = ["w/ E484K"]
+        let notContainingCmds : [String] = ["w/o D253G"]
+        let beforeCmds : [String] = ["before 6/1/21"]
+        let afterCmds : [String] = ["after 2/1/21"]
+        let greaterCmds : [String] = ["> 5"]
+        let namedCmds : [String] = ["named CDC"]
+        let lineageCmds : [String] = ["B.1.1.7"]
+        let filterCmds : [String] = [fromCmds,containingCmds,notContainingCmds,beforeCmds,afterCmds,greaterCmds,namedCmds,lineageCmds].flatMap { $0 }
+        let repeats_filters : Int = 10
+        let repeats_lists : Int = 5
+
+        let listCmds : [String] = ["x = countries","states","lineages","trends","weekly trends","freq","monthly","weekly","consensus world","y = lineages x"]
+        
+        var resultsArray : [[String]] = []
+        resultsArray.append(["Command","Result count","MP Number","Avg Time (s)","  MP Ratio"])
+        for filterCmd in filterCmds {
+            var mp1Time : Double = 0
+            for mpValue in mpValues {
+                mpTest = mpValue
+                
+                var totalTime : UInt64 = 0
+                var resultCount : Int = 0
+                for _ in 0..<repeats_filters {
+                    let clusterName : String = "a"
+                    let cmdString : String = "\(clusterName) = \(filterCmd)"
+                    self.quietMode = true
+                    let startTime : DispatchTime = DispatchTime.now()
+                    _ =  interpretInput(cmdString)
+                    let endTime : DispatchTime = DispatchTime.now()
+                    let nanoTime : UInt64 = endTime.uptimeNanoseconds - startTime.uptimeNanoseconds
+                    totalTime += nanoTime
+                    resultCount = clusters[clusterName]?.count ?? 0
+                    clusters[clusterName] = nil
+                }
+
+        
+                let timeInterval : Double = (Double(totalTime) / 1_000_000_000) / Double(repeats_filters)
+                var ratioString : String = ""
+                if mpValue == 1 {
+                    mp1Time = timeInterval
+                }
+                else {
+                    let ratio : Double = mp1Time/timeInterval
+                    ratioString = String(format: "%4.2f",ratio)
+                }
+                let timeString : String = String(format: "%5.3f", timeInterval)
+                resultsArray.append(["\(filterCmd)","\(nf(resultCount))  ","\(mpValue)   ","  \(timeString)","\(ratioString)  "])
+                if mpValue == mpValues.last {
+                    resultsArray.append(["","","","",""])
+                }
+            }
+        }
+        let title : String = "Performance Testing   repeats = \(repeats_filters)"
+        let leftAlign : [Bool] = [true,false,false,true,false]
+        let colors : [String] = [TColor.lightGreen,TColor.lightCyan,TColor.lightGreen,TColor.lightCyan,TColor.reset]
+        printTable(array: resultsArray, title: title, leftAlign: leftAlign, colors: colors)
+        print(vdb: self,"")
+      
+        resultsArray = []
+        for listCmd in listCmds {
+            var mp1Time : Double = 0
+            for mpValue in mpValues {
+                mpTest = mpValue
+                
+                var totalTime : UInt64 = 0
+                var resultCount : Int = 0
+                for _ in 0..<repeats_lists {
+                    let defaultClusterName : String = "a"
+                    let cmdString : String
+                    let clusterName : String
+                    if !listCmd.contains("=") {
+                        clusterName = defaultClusterName
+                        cmdString = "\(clusterName) = \(listCmd)"
+                    }
+                    else {
+                        clusterName = listCmd.components(separatedBy: " ")[0]
+                        cmdString = listCmd
+                    }
+                    self.quietMode = true
+                    let startTime : DispatchTime = DispatchTime.now()
+                    _ =  interpretInput(cmdString)
+                    let endTime : DispatchTime = DispatchTime.now()
+                    let nanoTime : UInt64 = endTime.uptimeNanoseconds - startTime.uptimeNanoseconds
+                    totalTime += nanoTime
+                    resultCount = 0
+                    if let list = lists[clusterName] {
+                        resultCount = list.items.count
+                    }
+                    if clusterName == defaultClusterName {
+                        lists[clusterName] = nil
+                    }
+                }
+
+        
+                let timeInterval : Double = (Double(totalTime) / 1_000_000_000) / Double(repeats_lists)
+                var ratioString : String = ""
+                if mpValue == 1 {
+                    mp1Time = timeInterval
+                }
+                else {
+                    let ratio : Double = mp1Time/timeInterval
+                    ratioString = String(format: "%4.2f",ratio)
+                }
+                let timeString : String = String(format: "%5.3f", timeInterval)
+                resultsArray.append(["\(listCmd)","\(nf(resultCount))  ","\(mpValue)   ","  \(timeString)","  \(ratioString)  "])
+                if mpValue == mpValues.last {
+                    resultsArray.append(["","","","",""])
+                }
+            }
+        }
+        let title2 : String = "Performance Testing   repeats = \(repeats_lists)"
+        printTable(array: resultsArray, title: title2, leftAlign: leftAlign, colors: colors)
+        print(vdb: self,"")
+
+        //  restore program settings
+        debug = debugSetting
+        printISL = printISLSetting
+        printAvgMut = printAvgMutSetting
+        includeSublineages = includeSublineagesSetting
+        simpleNuclPatterns = simpleNuclPatternsSetting
+        excludeNFromCounts = excludeNFromCountsSetting
+        sixel = sixelSetting
+        trendGraphs = trendGraphsSetting
+        stackGraphs = stackGraphsSetting
+        completions = completionsSetting
+        displayTextWithColor = displayTextWithColorSetting
+        quietMode = quietModeSetting
+        listSpecificity = listSpecificitySetting
+        minimumPatternsCount = minimumPatternsCountSetting
+        trendsLineageCount = trendsLineageCountSetting
+        maxMutationsInFreqList = maxMutationsInFreqListSetting
+        consensusPercentage = consensusPercentageSetting
+        caseMatching = caseMatchingSetting
+        arrayBase = arrayBaseSetting
+
+        for key in clusters.keys {
+            if !existingClusterNames.contains(key) {
+                clusters[key] = nil
+            }
+        }
+        
+        let endTime0 : DispatchTime = DispatchTime.now()
+        let nanoTime0 : UInt64 = endTime0.uptimeNanoseconds - startTime0.uptimeNanoseconds
+        let timeInterval0 : Double = (Double(nanoTime0) / 1_000_000_000)
+        let timeString : String = String(format: "%4.2f", timeInterval0/60.0)
+        print(vdb: self,"Total testing time: \(timeString) min")
+        
+    }
+    
+}
+#endif
+
 public let minimumArrayCountMP : Int = 10_000
 
 extension Array where Element == Isolate {
     
     @inlinable internal func filter(_ isIncluded: (Element) throws -> Bool) rethrows -> [Element] {
+#if VDB_TEST
+        let mp_number : Int = mpTest
+#else
         let mp_number : Int = mpNumber
+#endif
         if self.count < minimumArrayCountMP || mp_number == 1 {
             var result = ContiguousArray<Element>()
             var iterator = self.makeIterator()
@@ -15812,7 +16777,11 @@ extension Array where Element == Isolate {
 
     // for producing lists
     @inlinable internal func reduce<Result: ParallelResult>(into initialResult: Result, _ updateAccumulatingResult: (inout Result, Self.Element) -> ()) -> Result {
+#if VDB_TEST
+        let mp_number : Int = mpTest
+#else
         let mp_number : Int = mpNumber
+#endif
         if self.count < minimumArrayCountMP || mp_number == 1 {
             var result : Result = initialResult
             for i in 0..<self.count {
@@ -15846,7 +16815,11 @@ extension Array where Element == Isolate {
     }
 
     @inlinable internal func reduceRange<Result: ParallelResult>(into initialResult: Result, _ updateAccumulatingResult: (inout Result, Int, Int) -> ()) -> Result {
+#if VDB_TEST
+        let mp_number : Int = mpTest
+#else
         let mp_number : Int = mpNumber
+#endif
         if self.count < minimumArrayCountMP || mp_number == 1 {
             var result : Result = initialResult
             updateAccumulatingResult(&result,0,self.count)
@@ -15877,7 +16850,11 @@ extension Array where Element == Isolate {
     
     // for producing lists
     @inlinable internal func reduceEnumerated<Result: ParallelResult>(into initialResult: Result, _ updateAccumulatingResult: (inout Result, Self.Element, Int) -> ()) -> Result {
+#if VDB_TEST
+        let mp_number : Int = mpTest
+#else
         let mp_number : Int = mpNumber
+#endif
         if self.count < minimumArrayCountMP || mp_number == 1 {
             var result : Result = initialResult
             for i in 0..<self.count {
@@ -17117,6 +18094,8 @@ static func obtainAlignmentHirschberg(query: [EdlibChar], rQuery: [EdlibChar], q
     if (queryIdxLeftAlignmentFound == false) {
         // If there was no move that is part of optimal alignment, then there is no such alignment
         // or given bestScore is not correct!
+        scoresLeft.deallocate()
+        scoresRight.deallocate()
         return EDLIB_STATUS_ERROR
     }
     //----------------------------------------------------------//
@@ -17142,6 +18121,8 @@ static func obtainAlignmentHirschberg(query: [EdlibChar], rQuery: [EdlibChar], q
                                              equalityDefinition: equalityDefinition, alphabetLength: alphabetLength, bestScore: rightScore,
                                              alignment: &lrAlignment, alignmentLength: &lrAlignmentLength)
     if (ulStatusCode == EDLIB_STATUS_ERROR || lrStatusCode == EDLIB_STATUS_ERROR) {
+        scoresLeft.deallocate()
+        scoresRight.deallocate()
         return EDLIB_STATUS_ERROR
     }
      
@@ -17167,6 +18148,8 @@ static func obtainAlignmentHirschberg(query: [EdlibChar], rQuery: [EdlibChar], q
             }
         }
  */
+    scoresLeft.deallocate()
+    scoresRight.deallocate()
     return EDLIB_STATUS_OK
 }
 
@@ -17400,6 +18383,46 @@ static func edlibAlignmentToCigar(alignment: [EdlibChar], alignmentLength: Int, 
 
 extension VDB {
     
+    class func accStringFromNumber(_ num: Int) -> String {
+        if num == 402123 {
+            return "NC_045512"
+        }
+        let zeroChar : UInt8 = 48
+        var partialAccNumber : Int = num % 1_000_000
+        let rem : Int = num / 1_000_000
+        let p1 = rem % 26
+        let p2 = rem / 26
+        var bytes : [UInt8] = [UInt8(p1+65),UInt8(p2+65)]
+        var tmpArray : [UInt8] = []
+        while partialAccNumber > 0 {
+            tmpArray.append(zeroChar + UInt8(partialAccNumber % 10))
+            partialAccNumber /= 10
+        }
+        while tmpArray.count < 6 {
+            tmpArray.append(zeroChar)
+        }
+        tmpArray.reverse()
+        bytes.append(contentsOf: tmpArray)
+        let str = String(bytes: bytes, encoding: .utf8) ?? ""
+        return str
+    }
+    
+    class func numberFromAccString(_ s: String) -> Int? {
+        let s = s.uppercased()
+        if s == "NC_045512" {
+            return 402123
+        }
+        if let partialAccNumber = Int(s.suffix(s.count-2)), let first = s.first, let second = s.dropFirst().first {
+            if first.isASCII, second.isASCII, let f1 = first.utf8.first, let f2 = second.utf8.first {
+                let p1 : Int = Int(f1 - 65)
+                let p2 : Int = Int(f2 - 65)
+                let epiIslNumber : Int = ((p1 + 26*p2) * 1_000_000) + partialAccNumber
+                return epiIslNumber
+            }
+        }
+        return nil
+    }
+    
     @discardableResult
     class func loadCluster(_ clusterName: String, fromFastaFile fileName: String, vdb: VDB, verbose: Bool = false) -> Double {
         if !vdb.nucleotideMode {
@@ -17407,15 +18430,19 @@ extension VDB {
             return 0.0
         }
         let startTime : DispatchTime = DispatchTime.now()
-        var fastaArray : [UInt8] = []
-        do {
-            let fastaData : Data = try Data(contentsOf: URL(fileURLWithPath: "\(basePath)/\(fileName)"))
-            fastaArray = [UInt8](fastaData)
-        }
-        catch {
-            print(vdb: vdb, "Error reading \(fileName)")
-            return -1.0
-        }
+        let blockBufferSize : Int = 1_000_000_000
+        let lastMaxSize : Int = 50_000
+        let fastaData : UnsafeMutablePointer<UInt8> = UnsafeMutablePointer<UInt8>.allocate(capacity: blockBufferSize + lastMaxSize)
+        guard let fileStream : InputStream = InputStream(fileAtPath: fileName) else { print(vdb: vdb, "Error reading \(fileName)"); return -1.0 }
+        fileStream.open()
+        let ncbiMode : Bool = fileName.contains("ncbi")
+        var ncbiUnmatched : Int = 0
+        var tmpClusterCount : Int = 0
+//        let outFileName : String = fileName + "_tnucl.txt"
+//        guard let outFileHandle : FileHandle = ncbiMode ? FileHandle(forWritingAtPath: outFileName) : FileHandle.standardOutput else {
+//            print(vdb: vdb, "Error - could not write to file \(outFileName)")
+//            return -1.0
+//        }
         if vdb.nuclRefForLoading.isEmpty {
             vdb.nuclRefForLoading = Array(nucleotideReference(vdb: vdb, firstCall: false).dropFirst())
         }
@@ -17423,12 +18450,9 @@ extension VDB {
         let lf :  UInt8 = 10
         let greaterChar : UInt8 = 62
         let spaceChar :  UInt8 = 32
+        let periodChar : UInt8 = 46
         let dashChar : UInt8 = 45
-        var pos : Int = 0
-        var startID : Int  = 0
-        var endID : Int = 0
-        var seq : [UInt8] = []
-        var lastLf : Int = 0
+//        var pos : Int = 0
         
         if vdb.codonStartsForLoading.isEmpty {
             for protein in VDBProtein.allCases {
@@ -17463,8 +18487,10 @@ extension VDB {
             }
             if vdb.delScores.isEmpty {
                 if !vdb.isolates.isEmpty {
-                    let maxIsolatesForDelScores : Int = 100_000
-                    let isolatesForDelScores : [Isolate] = VDB.isolatesSample(Float(maxIsolatesForDelScores), inCluster: vdb.isolates, vdb: vdb)
+                    print(vdb: vdb, "calculating delScores")
+//                    let maxIsolatesForDelScores : Int = 100_000
+//                    let isolatesForDelScores : [Isolate] = VDB.isolatesSample(Float(maxIsolatesForDelScores), inCluster: vdb.isolates, vdb: vdb)
+                    let isolatesForDelScores : [Isolate] = vdb.isolates
                     var delScoresInt : [Int] = Array(repeating: 0, count: VDBProtein.SARS2_nucleotide_refLength+1)
                     let dashChar : UInt8 = 45
                     for iso in isolatesForDelScores {
@@ -17488,6 +18514,7 @@ extension VDB {
                     catch {
                         print(vdb: vdb, "Error writing \(delScoresFile)")
                     }
+                    print(vdb: vdb, "done calculating delScores")
                 }
                 else {
                     vdb.delScores = Array(repeating: 0, count: VDBProtein.SARS2_nucleotide_refLength+1)
@@ -17503,130 +18530,253 @@ extension VDB {
         tmpInsDict[28269]?[[65, 65, 65, 67]] = nil
         tmpInsDict[29859]?[[78]] = nil
         tmpInsDict[29859]?[[78,78]] = nil
-
-/*
-        func isolateFromAlignment() -> Isolate? {
-            if endID > startID {
-                if let id : String = String(bytes: fastaArray[startID+1..<endID], encoding: .utf8), let seqString = String(bytes: seq, encoding: .utf8) {
-    //                print(vdb: vdb, "id = \(id)")
-    //                print(vdb: vdb, "seqString = \(seqString)")
-                    if seqString.isEmpty {
-                        return nil
-                    }
-                    var alignedQueryArray : [EdlibChar] = []
-                    var alignedTargetArray : [EdlibChar] = []
-                    let (mutations,nRegions) = alignSequences(seq, with: vdb.nuclRefForLoading, alignedQuery: &alignedQueryArray, alignedTarget: &alignedTargetArray, codonStarts: &vdb.codonStartsForLoading, delScores: &vdb.delScores, vdb: vdb, verbose: verbose)
-                    let idParts : [String] =  id.split(separator: "|").map { String($0) }
-                    let id0Parts : [String] = idParts[0].split(separator: "/").map { String($0) }
-                    let country = id0Parts[0]
-                    let state = id0Parts.count > 1 ? id0Parts[1] : "unknown"
-                    let accNumberTmp : Int? = idParts.count > 1 && idParts[1].prefix(8) == "EPI_ISL_" ? Int(idParts[1].suffix(idParts[1].count-8)) : nil
-                    let accNumber : Int
-                    if let accNumberTmp = accNumberTmp {
-                        accNumber = accNumberTmp + missingAccessionNumberBase
-                    }
-                    else {
-                        accNumber = Int.random(in: 50_000_000..<60_000_000)
-                    }
-                    let date : Date = idParts.count > 2 ? dateFormatter.date(from: idParts[2]) ?? Date.distantFuture : Date.distantFuture
-                    let isolate : Isolate = Isolate(country: country, state: state, date: date, epiIslNumber: accNumber, mutations: mutations)
-                    isolate.nRegions = nRegions.map { Int16($0) }
-                    return isolate
-    //                print(vdb: vdb, "alignedQueryArray.count = \(alignedQueryArray.count)")
-    //                print(vdb: vdb, "alignedTargetArray.count = \(alignedTargetArray.count)")
-
-                }
-            }
-            return nil
-        }
-*/
         
-        var newIsolatesInfo : [(ArraySlice<UInt8>,[UInt8])] = []
-        while pos < fastaArray.count {
-            switch fastaArray[pos] {
-            case greaterChar:
-                if endID > startID {
-                    newIsolatesInfo.append((fastaArray[startID+1..<endID],seq))
-                }
-                startID = pos
-                endID = 0
-                seq = []
-            case lf:
-                if endID <= startID {
-                    endID  = pos
-                }
-                else {
-                    if pos >= lastLf+1 {
-                        seq.append(contentsOf: fastaArray[lastLf+1..<pos])
-                    }
-                }
-                lastLf = pos
-            case spaceChar, dashChar:
-                if endID > startID {
-                    if pos >= lastLf+1 {
-                        seq.append(contentsOf: fastaArray[lastLf+1..<pos])
-                    }
-                    lastLf = pos
-                }
-            default:
-                break
-            }
-            pos += 1
-        }
-        if endID > startID {
-            newIsolatesInfo.append((fastaArray[startID+1..<endID],seq))
-        }
+        var metaIsolates : [Isolate] = []
+        var isoDict : [String:Isolate] = [:]
 
-        func align_MP_task(_ isoNum: Int) -> Isolate? {
-            if let id : String = String(bytes: newIsolatesInfo[isoNum].0, encoding: .utf8) {
-                if newIsolatesInfo[isoNum].1.isEmpty {
-                    return nil
-                }
-                var alignedQueryArray : [EdlibChar] = []
-                var alignedTargetArray : [EdlibChar] = []
-                let (mutations,nRegions) = alignSequences(newIsolatesInfo[isoNum].1, with: vdb.nuclRefForLoading, alignedQuery: &alignedQueryArray, alignedTarget: &alignedTargetArray, codonStarts: &vdb.codonStartsForLoading, codonStartArray: &codonStartArray, delScores: &vdb.delScores, tmpInsDict: &tmpInsDict, vdb: vdb, verbose: verbose)
-                let idParts : [String] =  id.split(separator: "|").map { String($0) }
-                let id0Parts : [String] = idParts[0].split(separator: "/").map { String($0) }
-                let country = id0Parts[0]
-                let state = id0Parts.count > 1 ? id0Parts[1] : "unknown"
-                let accNumberTmp : Int? = idParts.count > 1 && idParts[1].prefix(8) == "EPI_ISL_" ? Int(idParts[1].suffix(idParts[1].count-8)) : nil
-                let accNumber : Int
-                if let accNumberTmp = accNumberTmp {
-                    accNumber = accNumberTmp + missingAccessionNumberBase
-                }
-                else {
-                    accNumber = Int.random(in: 50_000_000..<60_000_000)
-                }
-                let date : Date = idParts.count > 2 ? dateFormatter.date(from: idParts[2]) ?? Date.distantFuture : Date.distantFuture
-                let isolate : Isolate = Isolate(country: country, state: state, date: date, epiIslNumber: accNumber, mutations: mutations)
-                isolate.nRegions = nRegions.map { Int16($0) }
-                return isolate
+        if ncbiMode {
+            metaIsolates = loadNCBI_CSV("sequences.csv", vdb: vdb)
+            print(vdb: vdb, "metaIsolates.count = \(metaIsolates.count)")
+            for iso in metaIsolates {
+                isoDict[accStringFromNumber(iso.epiIslNumber)] = iso
             }
-            return nil
+            print(vdb: vdb, "isoDict.count = \(isoDict.count)")
         }
         
         var newIsolates : [Isolate] = []
-        let mp_number : Int = newIsolatesInfo.count > mpNumber ? mpNumber*3 : 1
-        var cuts : [Int] = [0]
-        let cutSize : Int = newIsolatesInfo.count/mp_number
-        for i in 1..<mp_number {
-            let cutPos : Int = i*cutSize
-            cuts.append(cutPos+1)
-        }
-        cuts.append(newIsolatesInfo.count)
-        var newIsolatesMP : [[Isolate]] = Array(repeating: [], count: mp_number)
-        DispatchQueue.concurrentPerform(iterations: mp_number) { index in
-            for isoNum in cuts[index]..<cuts[index+1] {
-                if let newIsolate = align_MP_task(isoNum) {
-                    newIsolatesMP[index].append(newIsolate)
+        // setup multithreaded processing
+        var mp_number : Int = mpNumber
+
+        let skipToClusterCount : Int = 0
+        var firstRead : Bool = true
+        while fileStream.hasBytesAvailable {
+            let _ = autoreleasepool { () -> Void in
+            var bytesRead : Int = fileStream.read(&fastaData[firstRead ? 0 : 1], maxLength: blockBufferSize)
+            firstRead = false
+            
+            var greaterFound : Bool = false
+            while fileStream.hasBytesAvailable {
+                let additionalBytesRead : Int = fileStream.read(&fastaData[bytesRead], maxLength: 1)
+                bytesRead += additionalBytesRead
+                if fastaData[bytesRead-1] == greaterChar {
+                    greaterFound = true
+                    break
                 }
             }
-//            print(vdb: vdb, "\(index) ",terminator: "")
+            if greaterFound {
+                bytesRead -= 1
+            }
+            
+            if ncbiMode && tmpClusterCount < skipToClusterCount {
+                tmpClusterCount += 1
+                return // continue
+            }
+            
+            func read_MP_task(mp_index: Int, mp_range: (Int,Int)) {
+                
+                var seqBuffer : [UInt8] = Array(repeating: 0, count: lastMaxSize)
+                var seqBufferCount : Int = 0
+                var startID : Int = 0
+                var endID : Int = 0
+                var lastLf : Int = 0
+
+                func alignFastaSeq(idRange: Range<Int>) -> Isolate? {
+                    var idArray : [UInt8] = []
+                    for x in idRange {
+                        idArray.append(fastaData[x])
+                    }
+                    if let id : String = String(bytes: idArray, encoding: .utf8) {
+                        if seqBufferCount == 0 {
+                            return nil
+                        }
+                        let seq : [UInt8] = Array(seqBuffer[0..<seqBufferCount])
+                        var alignedQueryArray : [EdlibChar] = []
+                        var alignedTargetArray : [EdlibChar] = []
+                        let (mutations,nRegions) = alignSequences(seq, with: vdb.nuclRefForLoading, alignedQuery: &alignedQueryArray, alignedTarget: &alignedTargetArray, codonStarts: &vdb.codonStartsForLoading, codonStartArray: &codonStartArray, delScores: &vdb.delScores, tmpInsDict: &tmpInsDict, vdb: vdb, verbose: verbose)
+                        if !nRegions.isEmpty && nRegions[0] == -1 {
+                            print(vdb: vdb, "Alignment timed out for \(id)")
+                            return nil
+                        }
+                        let idParts : [String] =  id.split(separator: "|").map { String($0) }
+                        let id0Parts : [String] = idParts[0].split(separator: "/").map { String($0) }
+                        let country = id0Parts[0]
+                        let state = id0Parts.count > 1 ? id0Parts[1] : "unknown"
+                        let accNumberTmp : Int? = idParts.count > 1 && idParts[1].prefix(8) == "EPI_ISL_" ? Int(idParts[1].suffix(idParts[1].count-8)) : nil
+                        let accNumber : Int
+                        if let accNumberTmp = accNumberTmp {
+                            accNumber = accNumberTmp + missingAccessionNumberBase
+                        }
+                        else {
+                            accNumber = Int.random(in: 50_000_000..<60_000_000)
+                        }
+                        let date : Date = idParts.count > 2 ? dateFormatter.date(from: idParts[2]) ?? Date.distantFuture : Date.distantFuture
+                        let isolate : Isolate = Isolate(country: country, state: state, date: date, epiIslNumber: accNumber, mutations: mutations)
+                        isolate.nRegions = nRegions.map { Int16($0) }
+                        return isolate
+                    }
+                    return nil
+                }
+
+                
+                for pos in mp_range.0..<mp_range.1 {
+                    switch fastaData[pos] {
+                    case greaterChar:
+                        if endID > startID {
+//                            newIsolatesInfo.append((fastaData[startID+1..<endID],seq))
+                            var modEnd : Int = endID
+                            if ncbiMode {
+                                for ni in startID+1..<endID {
+                                    if fastaData[ni] == periodChar || fastaData[ni] == spaceChar {
+                                        modEnd = ni
+                                        break
+                                    }
+                                }
+                            }
+                            if let newIsolate = alignFastaSeq(idRange: startID+1..<modEnd) {
+                                newIsolatesMP[mp_index].append(newIsolate)
+                            }
+                        }
+                        startID = pos
+                        endID = 0
+                        seqBufferCount = 0
+                    case lf:
+                        if endID <= startID {
+                            endID  = pos
+                        }
+                        else {
+                            if pos >= lastLf+1 {
+//                                seq.append(contentsOf: fastaData[lastLf+1..<pos])
+                                memmove(&seqBuffer[seqBufferCount], &fastaData[lastLf+1], pos - (lastLf+1))
+                                seqBufferCount += pos - (lastLf+1)
+                            }
+                        }
+                        lastLf = pos
+                    case spaceChar, dashChar:
+                        if endID > startID {
+                            if pos >= lastLf+1 {
+//                                seq.append(contentsOf: fastaData[lastLf+1..<pos])
+                                memmove(&seqBuffer[seqBufferCount], &fastaData[lastLf+1], pos - (lastLf+1))
+                                seqBufferCount += pos - (lastLf+1)
+                            }
+                            lastLf = pos
+                        }
+                    default:
+                        break
+                    }
+                }
+                let pos : Int = mp_range.1
+                if pos > lastLf+1 {
+//                    seq.append(contentsOf: fastaData[lastLf+1..<pos])
+                    memmove(&seqBuffer[seqBufferCount], &fastaData[lastLf+1], pos - (lastLf+1))
+                    seqBufferCount += pos - (lastLf+1)
+                }
+                if endID > startID {
+//                    newIsolatesInfo.append((fastaData[startID+1..<endID],seq))
+                    var modEnd : Int = endID
+                    if ncbiMode {
+                        for ni in startID+1..<endID {
+                            if fastaData[ni] == periodChar || fastaData[ni] == spaceChar {
+                                modEnd = ni
+                                break
+                            }
+                        }
+                    }
+                    if let newIsolate = alignFastaSeq(idRange: startID+1..<modEnd) {
+                        newIsolatesMP[mp_index].append(newIsolate)
+                    }
+                }
+                
+            }
+            
+            mp_number = bytesRead < 10_000_000 ? 1 : mpNumber * 3
+            print(vdb: vdb, "mp_number = \(mp_number)")
+            var cuts : [Int] = [0]
+            let cutSize : Int = bytesRead/mp_number
+            for i in 1..<mp_number {
+                var cutPos : Int = i*cutSize
+                while fastaData[cutPos] != greaterChar {
+                    cutPos += 1
+                }
+                cuts.append(cutPos)
+            }
+            cuts.append(bytesRead)
+            var ranges : [(Int,Int)] = []
+            for i in 0..<mp_number {
+                ranges.append((cuts[i],cuts[i+1]))
+            }
+            var newIsolatesMP : [[Isolate]] = Array(repeating: [], count: mp_number)
+            DispatchQueue.concurrentPerform(iterations: mp_number) { index in
+                read_MP_task(mp_index: index, mp_range: ranges[index])
+            }
+            var tmpCluster : [Isolate] = []
+            for i in 0..<mp_number {
+                newIsolates.append(contentsOf: newIsolatesMP[i])
+                if ncbiMode {
+                    for iso in newIsolatesMP[i] {
+                        var endIndex = iso.country.count
+                        for (index,char) in iso.country.enumerated() {
+                            if char == "." || char == " " {
+                                endIndex = index
+                                break
+                            }
+                        }
+                        let accShort : String = String(iso.country.prefix(endIndex))
+                        if let knownIso = isoDict[accShort] {
+                            knownIso.mutations = iso.mutations
+                            knownIso.nRegions = iso.nRegions
+                            tmpCluster.append(knownIso)
+                        }
+                        else {
+                            ncbiUnmatched += 1
+                        }
+                    }
+                }
+            }
+            if ncbiMode {
+/*
+                do {
+                    if #available(iOS 13.4,*) {
+                        let outArray : [UInt8] = []
+                        
+                        try outFileHandle.write(contentsOf: outArray)
+                    }
+                }
+                catch {
+                    Swift.print("Error writing vdb mutation file")
+                    return -1.0
+                }
+*/
+                
+                saveCluster(tmpCluster, toFile: "tmpCluster_\(tmpClusterCount)", fasta: false, includeLineage: true, vdb: vdb)
+/*
+                if !ncbiMode {
+                    let tmpClusterName : String = "tmpClusterForMetadata"
+                    vdb.clusters[tmpClusterName] = tmpCluster
+                    VDB.writeMetadataForCluster(tmpClusterName, metadataFileName: "metadata_tmpCluster_\(tmpClusterCount).tsv", vdb: vdb)
+                    vdb.clusters[tmpClusterName] = nil
+                }
+*/
+                tmpClusterCount += 1
+            }
         }
-//        print(vdb: vdb, "all mp done")
-        for i in 0..<mp_number {
-            newIsolates.append(contentsOf: newIsolatesMP[i])
         }
+        fileStream.close()
+        if ncbiMode {
+/*
+            do {
+                if #available(iOS 13.0,*) {
+                    try outFileHandle.synchronize()
+                    try outFileHandle.close()
+                }
+            }
+            catch {
+                print(vdb: vdb, "Error 2 writing vdb mutation file")
+                return -1.0
+            }
+*/
+            print(vdb: vdb, "NCBI unmatched: \(ncbiUnmatched)")
+        }
+
         let endTime : DispatchTime = DispatchTime.now()
         let nanoTime : UInt64 = endTime.uptimeNanoseconds - startTime.uptimeNanoseconds
         let timeInterval : Double = Double(nanoTime) / 1_000_000_000
@@ -17638,11 +18788,52 @@ extension VDB {
             }
             vdb.clusterHasBeenAssigned(clusterName)
         }
+        fastaData.deallocate()
         return timeInterval
     }
 
+    class func saveUpdatedWithCluster(_ cluster: [Isolate], vdb: VDB) {
+        var tmpCluster : [Isolate] = []
+        var metaIsolates : [Isolate] = []
+        var isoDict : [Int:Isolate] = [:]
+        metaIsolates = loadNCBI_CSV("sequences.csv", vdb: vdb)
+        print(vdb: vdb, "metaIsolates.count = \(metaIsolates.count)")
+        for iso in metaIsolates {
+            isoDict[iso.epiIslNumber] = iso
+        }
+        print(vdb: vdb, "isoDict.count = \(isoDict.count)")
+        var ncbiUnmatched : Int = 0
+        var uniqAcc : Set<Int> = []
+        var duplicate : Int = 0
+        for cl in [vdb.isolates,cluster] {
+            for iso in cl {
+                if let knownIso = isoDict[iso.epiIslNumber] {
+                    iso.pangoLineage = knownIso.pangoLineage
+                }
+                else {
+                    ncbiUnmatched += 1
+                }
+                let (inserted,_) = uniqAcc.insert(iso.epiIslNumber)
+                if inserted {
+                    tmpCluster.append(iso)
+                }
+                else {
+                    duplicate += 1
+                }
+            }
+            print(vdb: vdb, "ncbiUnmatched = \(ncbiUnmatched)   duplicate = \(duplicate)  uniqAcc.count = \(uniqAcc.count)")
+        }
+        let dateFormatter3 = DateFormatter()
+        dateFormatter3.locale = Locale(identifier: "en_US_POSIX")
+        dateFormatter3.dateFormat = "MMddyy"
+        let dateString = dateFormatter3.string(from: Date())
+        let ncbiFileName : String = "_ncbi_\(dateString)_tnucl.txt"
+        saveCluster(tmpCluster, toFile: ncbiFileName, fasta: false, includeLineage: true, vdb: vdb)
+        compressVDBDataFile(filePath: ncbiFileName)
+    }
+    
     class func alignSequences(_ query: [EdlibChar], with target: [EdlibChar], alignedQuery queryAligned: inout [EdlibChar], alignedTarget targetAligned: inout [EdlibChar], codonStarts: inout [Int], codonStartArray codonStart: inout [Int], delScores: inout [Double], tmpInsDict: inout [Int : [[UInt8] : UInt16]], vdb: VDB, verbose: Bool, localOpt: Bool = true) -> ([Mutation],[Int]) {
-
+        
         func doubleForPosition(_ pos:Int, insertion: [UInt8]) -> Double {
             var allN : Double = -1.5
             for char in insertion {
@@ -17667,6 +18858,8 @@ extension VDB {
             }
         }
         
+        let alignmentStartTime : DispatchTime = DispatchTime.now()
+        var alignmentTimedOut : Bool = false
         let silent : Bool = false
         let mode : String = "HW" // "NW" // "SHW"
         // How many best sequences (those with smallest score) do we want.
@@ -17743,9 +18936,13 @@ extension VDB {
                 if startLocations[queryNum][0] > 0 {
                     for _ in 0..<startLocations[queryNum][0] {
 //                        let refChar : Character = Character(UnicodeScalar(target[refPos]))
-                        mutations.append(Mutation(wt: target[refPos], pos: refPos+1, aa: dashChar))
+  //                      mutations.append(Mutation(wt: target[refPos], pos: refPos+1, aa: dashChar))
 //                        print(vdb: vdb, "\(refChar)\(refPos+1)- ", terminator: "")
                         refPos += 1
+                        if nStart == nil {
+                            nStart = refPos
+                        }
+                        nEnd = refPos
                     }
                 }
                 
@@ -17828,12 +19025,6 @@ extension VDB {
                     }
                     pos += 1
                 }
-                if endLocations[queryNum][0] < target.count-2 {
-                    for _ in 0..<target.count-2 - endLocations[queryNum][0] {
-                        mutations.append(Mutation(wt: target[refPos], pos: refPos+1, aa: dashChar))
-                        refPos += 1
-                    }
-                }
 
                 if insStart != nil, !insInProgress.isEmpty {
                     let (code,offset) = vdb.insertionCodeForPosition(refPos, withInsertion: insInProgress)
@@ -17841,8 +19032,21 @@ extension VDB {
                     insStart = nil
                     insInProgress = []
                 }
-
                 checkNRegions()
+                nStart = nil
+                if endLocations[queryNum][0] < target.count-2 {
+                    for _ in 0..<target.count-2 - endLocations[queryNum][0] {
+//                        mutations.append(Mutation(wt: target[refPos], pos: refPos+1, aa: dashChar))
+                        refPos += 1
+                        if nStart == nil {
+                            nStart = refPos
+                        }
+                        nEnd = refPos
+                    }
+                    checkNRegions()
+                }
+
+                
 /*
                 print(vdb: vdb, "")
                 print(vdb: vdb, "endLocations[queryNum][0] = \(endLocations[queryNum][0])")
@@ -18090,8 +19294,25 @@ extension VDB {
                                 }
                                 return score
                             }
+                            let subAlignmentStartTime : DispatchTime = DispatchTime.now()
                             for insertionSearch in insertionSearchStart...insertionSearchEnd {
+                                // check here for time return ([],[-1])
+                                let currentTime : DispatchTime = DispatchTime.now()
+                                let nanoTime : UInt64 = currentTime.uptimeNanoseconds - alignmentStartTime.uptimeNanoseconds
+                                if nanoTime > 120_000_000_000 {  // time out limit 120 s
+                                    let nanoTime2 : UInt64 = currentTime.uptimeNanoseconds - subAlignmentStartTime.uptimeNanoseconds
+                                    if nanoTime2 > 100_000_000 {
+                                        if !alignmentTimedOut {
+                                            let qHash = query.hashValue
+                                            print(vdb: vdb, "timed out during realignment  hash = \(qHash)")
+                                            alignmentTimedOut = true
+                                        }
+                                        break
+//                                    return ([],[-1])
+                                    }
+                                }
                                 for w in tSet {
+                                    // or check here for time
                                     var v : [UInt8] = []
                                     let lMask : BinaryWord = 1
                                     var iBits : BinaryWord = w
@@ -18249,6 +19470,8 @@ extension VDB {
                             keep[cStart+2] = true
                         }
                     }
+                    keep[1] = false
+                    keep[2] = false
                     var mutationsN : [Mutation] = []
                     for n1 in stride(from: 0, to: nRegions.count, by: 2) {
                         for n2 in nRegions[n1]...nRegions[n1+1] {
@@ -18464,7 +19687,10 @@ extension VDB {
                 
             }
             // compare fasta of isoCluster vs isoCluster2
-            let ref : String = String(bytes:referenceArray, encoding: .utf8) ?? ""
+            var ref : String = String(bytes:referenceArray, encoding: .utf8) ?? ""
+            if ref.last == "\n" {
+                ref.removeLast()
+            }
             let seq0 = sample[isoNum].vdbString(dateFormatter, includeLineage: false, ref: ref, vdb: self).components(separatedBy: "\n")
             let seq1 = loaded[isoNum].vdbString(dateFormatter, includeLineage: false, ref: ref, vdb: self).components(separatedBy: "\n")
             if seq0.count > 1 && seq1.count > 1 && seq0[1] == seq1[1]  {
@@ -18543,6 +19769,366 @@ extension VDB {
         print(vdb: self, "Matches: muts \(matchCountMut.value)/\(sample.count)  diff \(matchCount)/\(sample.count)  seq \(matchCountSeq.value)/\(sample.count)")
     }
 
+    // reads metadata tsv file downloaded from GISAID
+    class func loadNCBI_CSV(_ fileName: String, vdb: VDB) -> [Isolate] {
+        // read mutations
+        print(vdb: vdb, "   Loading NCBI info from file \(fileName) ... ", terminator:"")
+        fflush(stdout)
+        let metadataFile : String = "\(basePath)/\(fileName)"
+        var fileSize : Int = 0
+        do {
+            let attr = try FileManager.default.attributesOfItem(atPath: metadataFile)
+            if let fileSizeUInt64 : UInt64 = attr[FileAttributeKey.size] as? UInt64 {
+                fileSize = Int(fileSizeUInt64)
+            }
+        } catch {
+            print(vdb: vdb, "Error reading csv file \(metadataFile)")
+            return []
+        }
+        var metadata : [UInt8] = []
+        var metaFields : [String] = []
+        var isolates : [Isolate] = []
+
+        if fileSize < maximumFileStreamSize {
+            metadata = Array(repeating: 0, count: fileSize)
+            guard let fileStream : InputStream = InputStream(fileAtPath: metadataFile) else { print(vdb: vdb, "Error reading tsv file \(metadataFile)"); return [] }
+            fileStream.open()
+            let bytesRead : Int = fileStream.read(&metadata, maxLength: fileSize)
+            fileStream.close()
+            if bytesRead < 0 {
+                print(vdb: vdb, "Error 2 reading csv file \(metadataFile)")
+                return []
+            }
+        }
+        else {
+            do {
+                let data : Data = try Data(contentsOf: URL(fileURLWithPath: metadataFile))
+                metadata = [UInt8](data)
+            }
+            catch {
+                print(vdb: vdb, "Error reading large csv file \(metadataFile)")
+                return []
+            }
+        }
+
+        let lf : UInt8 = 10     // \n
+        let dashChar : UInt8 = 45
+        let commaChar : UInt8 = 44
+        let periodChar : UInt8 = 46
+        let quoteChar : UInt8 = 34
+        var buf : UnsafeMutablePointer<CChar>? = nil
+        buf = UnsafeMutablePointer<CChar>.allocate(capacity: 1000)
+
+        // extract integer from byte stream
+        func intA(_ range : CountableRange<Int>) -> Int {
+            var counter : Int = 0
+            for i in range {
+                if metadata[i] > 127 {
+                    return 0
+                }
+                buf?[counter] = CChar(metadata[i])
+                counter += 1
+            }
+            buf?[counter] = 0 // zero terminate
+            return strtol(buf!,nil,10)
+        }
+        
+        // extract string from byte stream
+        func stringA(_ range : CountableRange<Int>) -> String {
+            var counter : Int = 0
+            for i in range {
+                buf?[counter] = CChar(metadata[i])
+                counter += 1
+            }
+            buf?[counter] = 0 // zero terminate
+            let s = String(cString: buf!)
+            return s
+        }
+                        
+        let yearBase : Int = 2019
+        let yearsMax : Int = 4
+        var dateCache : [[[Date?]]] = Array(repeating: Array(repeating: Array(repeating: nil, count: 32), count: 13), count: yearsMax)
+        // create Date objects faster using a cache
+        func getDateFor(year: Int, month: Int, day: Int) -> Date {
+            let y : Int = year - yearBase
+            if y >= 0 && y < yearsMax, let cachedDate = dateCache[y][month][day] {
+                return cachedDate
+            }
+            else {
+                let dateComponents : DateComponents = DateComponents(year:year,month:month,day:day)
+                if let dateFromComp = Calendar.current.date(from: dateComponents) {
+                    if y >= 0 && y < yearsMax {
+                        dateCache[year-yearBase][month][day] = dateFromComp
+                    }
+                    return dateFromComp
+                }
+                else {
+                    print(vdb:vdb,"Error - invalid date components \(month)/\(day)/\(year)")
+                    return Date.distantFuture
+                }
+            }
+        }
+
+        var commaCount : Int = 0
+        var firstLine : Bool = true
+        var lastCommaPos : Int = -1
+        
+        let accessionFieldName : String = "Accession"
+        let pangoFieldName : String = "Pangolin"
+        let isolateFieldName : String = "Isolate"
+        let lengthFieldName : String = "Length"
+        let geo_LocationFieldName : String = "Geo_Location"
+        let countryFieldName : String = "Country"
+        let usaFieldName : String = "USA"
+        let dateFieldName : String = "Collection_Date"
+        let bioSampleFieldName : String = "BioSample"
+        // ignore field name "PangoVersions"
+               
+        var accessionField : Int = -1
+        var pangoField : Int = -1
+        var isolateField : Int = -1
+        var lengthField : Int = -1
+        var geo_LocationField : Int = -1
+        var countryField : Int = -1
+        var usaField : Int = -1
+        var dateField : Int = -1
+        var bioSampleField : Int = -1
+
+        var accession : String = ""
+        var pangoLineage : String = ""
+        var isolateInfo : String = ""
+        var length : Int = 0
+        var geo_Location : String = ""
+        var countryInfo : String = ""
+        var usa : String = ""
+        var date : Date = Date()
+        var bioSample : String = ""
+        
+        var country : String = ""
+        var state : String = ""
+        var epiIslNumber : Int = 0
+        var inQuote : Bool = false
+        var quotedField : Bool = false
+
+        for pos in 0..<metadata.count {
+            switch metadata[pos] {
+            case lf:
+                if firstLine {
+                    let fieldName : String = stringA(lastCommaPos+1..<pos)
+                    metaFields.append(fieldName)
+                    firstLine = false
+                    for i in 0..<metaFields.count {
+                        switch metaFields[i] {
+                        case accessionFieldName:
+                            accessionField = i
+                        case pangoFieldName:
+                            pangoField = i
+                        case isolateFieldName:
+                            isolateField = i
+                        case lengthFieldName:
+                            lengthField = i
+                        case geo_LocationFieldName:
+                            geo_LocationField = i
+                        case countryFieldName:
+                            countryField = i
+                        case usaFieldName:
+                            usaField = i
+                        case dateFieldName:
+                            dateField = i
+                        case bioSampleFieldName:
+                            bioSampleField = i
+                        default:
+                            break
+                        }
+                    }
+                    if [accessionField,pangoField,isolateField,lengthField,geo_LocationField,countryField,usaField,dateField,bioSampleField].contains(-1) {
+                        print(vdb: vdb, "Error - Missing csv field")
+                        return []
+                    }
+                }
+                else {
+                    if length > 0 && epiIslNumber != 0 {
+                        if !isolateInfo.isEmpty {
+                            state = isolateInfo
+                            if !usa.isEmpty && usa.prefix(2) != state.prefix(2) {
+                                state = "\(usa)-\(state)"
+                            }
+                        }
+                        else {
+                            if !usa.isEmpty {
+                                if !bioSample.isEmpty {
+                                    state = usa + "-" + bioSample
+                                }
+                                else {
+                                    state = usa
+                                }
+                            }
+                            else {
+                                if !bioSample.isEmpty {
+                                    state = bioSample
+                                }
+                                else {
+                                    state = accession
+                                }
+                            }
+                        }
+                        if !countryInfo.isEmpty {
+                            country = countryInfo
+                        }
+                        else {
+                            country = geo_Location
+                        }
+                        let newIsolate = Isolate(country: country, state: state, date: date, epiIslNumber: epiIslNumber, mutations: [])
+                        newIsolate.pangoLineage = pangoLineage
+                        isolates.append(newIsolate)
+                        accession = ""
+                        pangoLineage = ""
+                        isolateInfo = ""
+                        length = 0
+                        geo_Location = ""
+                        countryInfo = ""
+                        usa = ""
+                        date = Date.distantFuture
+                        bioSample  = ""
+                        country = ""
+                        state = ""
+                        epiIslNumber = 0
+                        inQuote = false
+                        quotedField = false
+                    }
+                }
+                commaCount = 0
+                lastCommaPos = pos
+            case commaChar:
+                if inQuote {
+                    break
+                }
+                if firstLine {
+                    let fieldName : String = stringA(lastCommaPos+1..<pos)
+                    metaFields.append(fieldName)
+                }
+                else {
+                    switch commaCount {
+/*
+                    case nameField:
+                        var slashPos : Int = 0
+                        var ppos : Int = lastTabPos+1+8
+                        repeat {
+                            if metadata[ppos] == slashChar {
+                                slashPos = ppos
+                                break
+                            }
+                            ppos += 1
+                        } while true
+                        country = stringA(lastTabPos+1+8..<slashPos)
+                        state = stringA(slashPos+1..<pos)
+                    case idField:
+                        epiIslNumber = intA(lastTabPos+1+8..<pos)
+*/
+                    case accessionField:
+                        var endAcc : Int = pos
+                        if metadata[pos-2] == periodChar {
+                            endAcc = pos-2
+                        }
+                        accession = stringA(lastCommaPos+1..<endAcc)
+                        let partialAccNumber : Int = intA(lastCommaPos+3..<endAcc)
+                        if metadata[lastCommaPos+1] < 65 || metadata[lastCommaPos+1] > 90 || metadata[lastCommaPos+2] < 65 || metadata[lastCommaPos+2] > 90 ||
+                            partialAccNumber == 0 || partialAccNumber > 999999 {
+                            if accession == "NC_045512" {
+                                epiIslNumber = 402123
+                            }
+                        }
+                        else {
+                            let p1 : Int = Int(metadata[lastCommaPos+1] - 65)
+                            let p2 : Int = Int(metadata[lastCommaPos+2] - 65)
+                            epiIslNumber = ((p1 + 26*p2) * 1_000_000) + partialAccNumber
+                            let accStr2 = accStringFromNumber(epiIslNumber)
+                            if accStr2 != accession {
+                                print(vdb: vdb, "accStr2 = \(accStr2) != \(accession) = accession")
+                            }
+                        }
+                    case pangoField:
+                        pangoLineage = stringA(lastCommaPos+1..<pos)
+                    case isolateField:
+                        isolateInfo = stringA(lastCommaPos+1..<pos)
+                        if metadata[lastCommaPos+1] == quoteChar {
+                            isolateInfo = isolateInfo.replacingOccurrences(of: "\"", with: "").replacingOccurrences(of: ",", with: "_").replacingOccurrences(of: " ", with: "_")
+                        }
+                    case lengthField:
+                        length = intA(lastCommaPos+1..<pos)
+                    case geo_LocationField:
+                        geo_Location = stringA(lastCommaPos+1..<pos)
+                        if quotedField && geo_Location.first == "\"" {
+                            geo_Location.removeFirst()
+                            geo_Location.removeLast()
+                        }
+                    case countryField:
+                        countryInfo = stringA(lastCommaPos+1..<pos)
+                    case usaField:
+                        usa = stringA(lastCommaPos+1..<pos)
+                    case dateField:
+                        var firstDash : Int = 0
+                        var secondDash : Int = 0
+                        for i in lastCommaPos..<pos {
+                            if metadata[i] == dashChar {
+                                if firstDash == 0 {
+                                    firstDash = i
+                                }
+                                else {
+                                    secondDash = i
+                                    break
+                                }
+                            }
+                        }
+                        let year : Int
+                        var month : Int = 0
+                        var day : Int = 0
+                        if firstDash != 0 && secondDash != 0 {
+                            year = intA(lastCommaPos+1..<firstDash)
+                            month = intA(firstDash+1..<secondDash)
+                            day = intA(secondDash+1..<pos)
+                        }
+                        else {
+                            if firstDash != 0 {
+                                year = intA(lastCommaPos+1..<firstDash)
+                                month = intA(firstDash+1..<pos)
+
+                            }
+                            else {
+                                year = intA(lastCommaPos+1..<pos)
+                            }
+                        }
+                        if day == 0 {
+                            day = 15
+                        }
+                        if month == 0 {
+                            month = 7
+                            day = 1
+                        }
+                        date = getDateFor(year: year, month: month, day: day)
+
+                    case bioSampleField:
+                        bioSample = stringA(lastCommaPos+1..<pos)
+                    default:
+                        break
+                    }
+                }
+                lastCommaPos = pos
+                commaCount += 1
+            case quoteChar:
+                inQuote.toggle()
+                quotedField = true
+            default:
+                break
+            }
+        }
+        buf?.deallocate()
+        if isolates.count > 40_000 {
+            print(vdb: vdb, "  \(nf(isolates.count)) isolates loaded")
+        }
+        return isolates
+    }
+    
 }
 
 // MARK: - start vdb
@@ -18563,6 +20149,6 @@ else {
             trimmedFileName = clFileNames[0].replacingOccurrences(of: "nucl", with: "tnucl")
         }
     }
-    VDB.loadAndTrimMutationDB_MP(inputFileName,trimmedFileName,extendN: trimExtendN)
+    VDB.loadAndTrimMutationDB_MP(inputFileName,trimmedFileName,extendN: trimExtendN, compress: trimAndCompress)
 }
 #endif
