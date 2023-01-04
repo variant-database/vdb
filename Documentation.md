@@ -316,6 +316,10 @@ Controls whether output of list commands being assigned to a variable should be 
 
 Controls whether the `frequencies` command displays information about the specificity of a mutation to the given cluster. By default `listSpecificity` is off.  
 <br />
+#### `treeDeltaMode`/`treeDeltaMode off`  
+
+Controls whether delta mutations from a mutation annotated tree are used when evaluating expressions containing a tree. By default `treeDeltaMode` is off.  
+<br />
 
 #### `minimumPatternsCount = `\<n>  
 
@@ -343,4 +347,4 @@ For cluster or list subscripts, this setting determines whether zero- or one-bas
 <br />
 
 <br />
-Version 3.0
+Version 3.1
