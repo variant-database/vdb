@@ -52,6 +52,11 @@ Next, download the **vdb** repository ("Download ZIP" under the "Code" button on
               swiftc -O -sdk %SDKROOT% -I %SDKROOT%/usr/lib/swift -L SDKROOT%/usr/lib/swift/windows -emit-executable -o vdbCreate.exe vdbCreate.swift
               swiftc -O -sdk %SDKROOT% -I %SDKROOT%/usr/lib/swift -L SDKROOT%/usr/lib/swift/windows -emit-executable -o vdb.exe vdb.swift
 
+**Phylogenetic Trees:** To build a version of **vdb** that supports phylogenetic trees, the vdbTreeModule.swift file is combined with vdb.swift before compilation:
+
+              cat vdbTreeModule.swift vdb.swift > vdbtree.swift
+              swiftc -O -DVDB_TREE vdbtree.swift
+
 Any questions about the installation process can be sent to vdb_support@icloud.com.
 
 ## 4. Data files
