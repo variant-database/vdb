@@ -3,14 +3,14 @@
 //  VDBCreate
 //
 //  Copyright (c) 2022  Anthony West, Caltech
-//  Last modified 8/4/22
+//  Last modified 1/4/23
 
 import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
 
-let version : String = "3.0"
+let version : String = "3.1"
 let checkForVDBUpdate : Bool = true
 let mpNumberDefault : Int = 12
 let basePath : String = FileManager.default.currentDirectoryPath
@@ -206,7 +206,7 @@ final class VDBCreate {
         let blockBufferSize : Int = 1_000_000_000
         let streamBufferSize : Int =  950_000_000
         
-        let bufferSize : Int = 50000
+        let bufferSize : Int = 60_000
         let lastMaxSize : Int = bufferSize
         let lineN : UnsafeMutablePointer<UInt8> = UnsafeMutablePointer<UInt8>.allocate(capacity: blockBufferSize + lastMaxSize)
         
