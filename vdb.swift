@@ -6,14 +6,14 @@
 //
 //  Created by Anthony West on 1/31/21.
 //  Copyright (c) 2022  Anthony West, Caltech
-//  Last modified 8/4/22
+//  Last modified 1/4/23
 
 import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
 
-let version : String = "3.0"
+let version : String = "3.1"
 let checkForVDBUpdate : Bool = true         // to inform users of updates; the updates are not downloaded
 let allowGitHubDownloads : Bool = true      // to download nucl. ref. and documentation, if missing
 let basePath : String = FileManager.default.currentDirectoryPath
@@ -33,6 +33,8 @@ let nRegionsFileExt : String = "_Nregions"
 let insertionCodeStart : UInt8 = 0 // 97
 let insertionChar : UInt8 = 105 // "i"
 let minDeletionToNLength : Int = 10
+let pbSuffix : String = ".pb"
+let yearsMaxForDateCache : Int = 6
 
 var trimMode : Bool = false
 var useStdInput : Bool = true
@@ -48,7 +50,8 @@ var clFileNames : [String] = []
 //   VDB_EMBEDDED - for building vdb within a larger application
 //   VDB_SERVER - for building the vdb.live web server
 //   VDB_MULTI - for building either of the above cases to support muliple vdb instances
-// Only the "-O" flag should be used for the command line version of vdb
+//   VDB_TREE - for building with phylogenetic tree functions (not necessary if VDB_EMBEDDED is defined)
+// Only the "-O" and VDB_TREE flags should be used for the command line version of vdb
 //   VDB_EMBEDDED and VDB_SERVER are mutually exclusive
 //   VDB_EMBEDDED requires building with an enclosing application
 //   VDB_SERVER requires an alternative data file format
@@ -1730,6 +1733,7 @@ let maxMutationsInFreqListKeyword : String = "maxMutationsInFreqList"
 let consensusPercentageKeyword : String = "consensusPercentage"
 let caseMatchingKeyword : String = "caseMatching"
 let arrayBaseKeyword : String = "arrayBase"
+let updateGroupsKeyword : String = "updateGroups"
 let controlC : String = "\(Character(UnicodeScalar(UInt8(3))))"
 let controlD : String = "\(Character(UnicodeScalar(UInt8(4))))"
 
@@ -1799,16 +1803,20 @@ public final class AtomicInteger {
         }
     }
     
-    public func decrement() {
+    @discardableResult
+    public func decrement() -> Int {
         lock.wait()
         defer { lock.signal() }
         _value -= 1
+        return _value
     }
     
-    public func increment() {
+    @discardableResult
+    public func increment() -> Int {
         lock.wait()
         defer { lock.signal() }
         _value += 1
+        return _value
     }
 }
 
@@ -2359,7 +2367,7 @@ final class Isolate : Equatable, Hashable {
             return "GenBank_\(VDB.accStringFromNumber(self.epiIslNumber))"
         }
     }
-    
+
     // whether the isolate contains at least n of the mutations in mutationsArray
     func containsMutations(_ mutationsArray : [Mutation], _ n: Int) -> Bool {
         if n == 0 {
@@ -2383,8 +2391,45 @@ final class Isolate : Equatable, Hashable {
         return true
     }
 
+    // whether the isolate contains at least n of the mutations in mutationsArray
+    func containsMutationsWithWildcard(_ mutationsArray : [Mutation], _ n: Int) -> Bool {
+        if n == 0 {
+            for mutation in mutationsArray {
+                if mutation.aa != 42 {
+                    if !mutations.contains(mutation) {
+                        return false
+                    }
+                }
+                else {
+                    if !mutations.contains(where: {$0.pos == mutation.pos}) {
+                        return false
+                    }
+                }
+            }
+        }
+        else {
+            var mutCounter : Int = 0
+            for mutation in mutationsArray {
+                if mutation.aa != 42 {
+                    if mutations.contains(mutation) {
+                        mutCounter += 1
+                    }
+                }
+                else {
+                    if mutations.contains(where: {$0.pos == mutation.pos}) {
+                        mutCounter += 1
+                    }
+                }
+            }
+            if mutCounter < n {
+                return false
+            }
+        }
+        return true
+    }
+    
     // whether the isolate contains at least n of the mutation sets in mutationsArray
-    func containsMutationSets(_ mutationsArray : [[[Mutation]]], _ n: Int) -> Bool {
+    func containsMutationSets(_ mutationsArray: [[[Mutation]]], _ n: Int) -> Bool {
         let nn : Int
         if n == 0 {
             nn = mutationsArray.count
@@ -2394,16 +2439,44 @@ final class Isolate : Equatable, Hashable {
         }
         var mutCounter : Int = 0
         for mutationSets in mutationsArray {
-            for mutationSet in mutationSets {
-                var mCounter : Int = 0
-                for mutation in mutationSet {
-                    if mutations.contains(mutation) {
-                        mCounter += 1
+            let checkCodon : Bool = mutationSets[0].count == 3
+            if !checkCodon {
+                if mutationSets[0][0].aa != 42 {
+                    if mutations.contains(mutationSets[0][0]) {
+                        mutCounter += 1
                     }
                 }
-                if mCounter == mutationSet.count {
-                    mutCounter += 1
-                    break
+                else {
+                    if mutations.contains(where: {$0.pos == mutationSets[0][0].pos}) {
+                        mutCounter += 1
+                    }
+                }
+            }
+            else {
+                var codon : [UInt8] = [mutationSets[0][0].wt,mutationSets[0][1].wt,mutationSets[0][1].wt]
+                let pos1 : Int = mutationSets[0][0].pos
+                for m in mutations {
+                    if m.pos < pos1 {
+                        continue
+                    }
+                    if m.pos > pos1 + 2 {
+                        break
+                    }
+                    if m.pos == pos1 {
+                        codon[0] = m.aa
+                    }
+                    if m.pos == pos1 + 1 {
+                        codon[1] = m.aa
+                    }
+                    if m.pos == pos1 + 2 {
+                        codon[2] = m.aa
+                    }
+                }
+                for mutationSet in mutationSets {
+                    if mutationSet[0].aa == codon[0] && mutationSet[1].aa == codon[1] && mutationSet[2].aa == codon[2] {
+                        mutCounter += 1
+                        break
+                    }
                 }
             }
         }
@@ -2412,7 +2485,76 @@ final class Isolate : Equatable, Hashable {
         }
         return true
     }
-    
+
+    // whether the isolate contains at least n of the mutation sets in mutationsArray
+    func containsMutationSetsWithWildcard(_ mutationsArray: [[[Mutation]]], _ wildcards: [Bool], _ n: Int) -> Bool {
+        let nn : Int
+        if n == 0 {
+            nn = mutationsArray.count
+        }
+        else {
+            nn = n
+        }
+        var mutCounter : Int = 0
+        for (setIndex,mutationSets) in mutationsArray.enumerated() {
+            let checkCodon : Bool = mutationSets[0].count == 3
+            if !checkCodon {
+                if mutationSets[0][0].aa != 42 {
+                    if mutations.contains(mutationSets[0][0]) {
+                        mutCounter += 1
+                    }
+                }
+                else {
+                    if mutations.contains(where: {$0.pos == mutationSets[0][0].pos}) {
+                        mutCounter += 1
+                    }
+                }
+            }
+            else {
+                var codon : [UInt8] = [mutationSets[0][0].wt,mutationSets[0][1].wt,mutationSets[0][1].wt]
+                let pos1 : Int = mutationSets[0][0].pos
+                for m in mutations {
+                    if m.pos < pos1 {
+                        continue
+                    }
+                    if m.pos > pos1 + 2 {
+                        break
+                    }
+                    if m.pos == pos1 {
+                        codon[0] = m.aa
+                    }
+                    if m.pos == pos1 + 1 {
+                        codon[1] = m.aa
+                    }
+                    if m.pos == pos1 + 2 {
+                        codon[2] = m.aa
+                    }
+                }
+                if !wildcards[setIndex] {
+                    for mutationSet in mutationSets {
+                        if mutationSet[0].aa == codon[0] && mutationSet[1].aa == codon[1] && mutationSet[2].aa == codon[2] {
+                            mutCounter += 1
+                            break
+                        }
+                    }
+                }
+                else {
+                    mutCounter += 1
+                    for mutationSet in mutationSets {
+                        if mutationSet[0].aa == codon[0] && mutationSet[1].aa == codon[1] && mutationSet[2].aa == codon[2] {
+                            mutCounter -= 1
+                            break
+                        }
+                    }
+                }
+            }
+        }
+        if mutCounter < nn {
+            return false
+        }
+        return true
+    }
+
     var stateShort : String {
         get {
             if country == "USA" {
@@ -2902,7 +3044,7 @@ final class VDB {
             }
     */
             let yearBase : Int = 2019
-            let yearsMax : Int = 4
+            let yearsMax : Int = yearsMaxForDateCache
             var dateCache : [[[Date?]]] = Array(repeating: Array(repeating: Array(repeating: nil, count: 32), count: 13), count: yearsMax)
             
             // create Date objects faster using a cache
@@ -3712,7 +3854,7 @@ final class VDB {
         }
         
         let yearBase : Int = 2019
-        let yearsMax : Int = 4
+        let yearsMax : Int = yearsMaxForDateCache
         var dateCache : [[[Date?]]] = Array(repeating: Array(repeating: Array(repeating: nil, count: 32), count: 13), count: yearsMax)
         // create Date objects faster using a cache
         func getDateFor(year: Int, month: Int, day: Int) -> Date {
@@ -4121,7 +4263,7 @@ final class VDB {
         }
         
         let yearBase : Int = 2019
-        let yearsMax : Int = 4
+        let yearsMax : Int = yearsMaxForDateCache
         var dateCache : [[[Date?]]] = Array(repeating: Array(repeating: Array(repeating: nil, count: 32), count: 13), count: yearsMax)
         // create Date objects faster using a cache
         func getDateFor(year: Int, month: Int, day: Int) -> Date {
@@ -4613,43 +4755,8 @@ final class VDB {
                 allLineagesSet.insert(iso.pangoLineage)
             }
             vdb.lineageArray = Array(allLineagesSet)
+            vdb.fullLineageArray = vdb.lineageArray.map { VDB.fullLineageName($0, vdb: vdb) }
         }
-    }
-    
-    // returns a list of the sublineages that depend on the alias list
-    // this list does NOT include plain sublineages (those that don't depend on aliases) unless requested
-    class func additionalSublineagesOf(_ lineage: String, includePlainSublineages: Bool = false, vdb: VDB) -> [String] {
-        let lineageUC : String = lineage.uppercased()
-        var subLineages : [String] = [lineageUC]
-        let sString : String = lineageUC + "."
-        for aLineage in vdb.lineageArray {
-            if aLineage.prefix(sString.count) == sString {
-                subLineages.append(aLineage)
-            }
-        }
-        var addSub : [String] = []
-        if includePlainSublineages {
-            addSub.append(contentsOf: subLineages)
-        }
-        for (key,value) in vdb.aliasDict {
-            if subLineages.contains(value) {
-                let sString2 : String = key + "."
-                for aLineage in vdb.lineageArray {
-                    if aLineage.prefix(sString2.count) == sString2 {
-                        addSub.append(aLineage)
-                        if let level2Alias = vdb.aliasDict2Rev[aLineage] {
-                            let sString22 : String = level2Alias + "."
-                            for aLineage2 in vdb.lineageArray {
-                                if aLineage2.prefix(sString22.count) == sString22 {
-                                    addSub.append(aLineage2)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        return addSub
     }
     
     class func dealiasedLineageNameFor(_ lineage: String, vdb: VDB) -> String {
@@ -4664,8 +4771,24 @@ final class VDB {
                     break
                 }
             }
+            else {
+                break
+            }
         }
         return dName
+    }
+    
+    class func fullLineageName(_ lName: String, vdb: VDB) -> String {
+        return VDB.dealiasedLineageNameFor(lName, vdb: vdb)
+    }
+    
+    class func vdbOrBasePath() -> String {
+#if VDB_EMBEDDED && swift(>=1)
+        if let vdbPath : String = UserDefaults_standard.string(forKey: vdbDataPathKey) {
+            return vdbPath
+        }
+#endif
+        return basePath
     }
     
     // MARK: - Trim Only Mode
@@ -6268,13 +6391,7 @@ final class VDB {
                 let groupSublineages : Bool = group.count == 1 && vdb.clusters[group[0]] == nil
                 var lGroup : [String] = group
                 if groupSublineages {
-                    let sString : String = group[0] + "."
-                    for lin in lineageCounts {
-                        if lin.0.prefix(sString.count) == sString {
-                            lGroup.append(lin.0)
-                        }
-                    }
-                    lGroup.append(contentsOf: additionalSublineagesOf(group[0], vdb: vdb))
+                    lGroup = VDB.sublineagesOfLineage(group[0], vdb: vdb)
                 }
                 lGroups.append(lGroup)
                 var foundGroup : Bool = false
@@ -7082,7 +7199,7 @@ plot
         print(vdb: vdb, "")
     }
     
-    class func listVariants(vdb: VDB) -> List {
+    class func listVariants(_ cluster: [Isolate], vdb: VDB) -> List {
         var variants : [(String,String,[String],Int,Int,Int)] = []
         // (0: variant name, 1: lineage name(s), 2: lineage list, 3: variant order, 4: virus count, 5: original lineage count)
         var listItems : [[CustomStringConvertible]] = []
@@ -7092,16 +7209,18 @@ plot
             if vdb.includeSublineages {
                 var subs : [String] = []
                 for lName in lNames {
-                    subs.append(contentsOf: VDB.additionalSublineagesOf(lName, vdb: vdb))
+                    subs.append(contentsOf: VDB.sublineagesOfLineage(lName, includeLineage: false, vdb: vdb))
                 }
                 lNames.append(contentsOf: subs)
             }
             variants.append((key,value.0,lNames,value.1,0,originalLineageCount))
         }
         variants.sort { $0.3 < $1.3 }
-        let all : [Isolate] = vdb.clusters[allIsolatesKeyword] ?? []
+        let all : [Isolate] = cluster
+        let allCluster : [Isolate] = vdb.clusters[allIsolatesKeyword] ?? []
+        let clusterDescription : String = all.count != allCluster.count ? "in cluster with \(all.count) isolates " : ""
         
-        print(vdb: vdb, "Counting variants ...")
+        print(vdb: vdb, "Counting variants \(clusterDescription)...")
         var variantCountsMP : [[Int]] = Array(repeating: Array(repeating:0, count: variants.count), count: mpNumber)
         var cuts : [Int] = [0]
         let cutSize : Int = all.count/mpNumber
@@ -7345,7 +7464,7 @@ plot
         }
         return fromIsolates
     }
-        
+    
     // returns isolates containing the mutations in the mutationPatternString
     // for non-zero n, returns isolates that have at least n of the mutations
     // if negate is true, returns isolates not having the mutation pattern
@@ -7364,6 +7483,7 @@ plot
         var mutations : [Mutation] = []
         
         var nMutationSets : [[[Mutation]]] = []
+        var nMutationSetsWildcard : [Bool] = []
         if vdb.nucleotideMode {
             let nuclRef : [UInt8] = vdb.referenceArray // nucleotideReference()
             let nuclChars : [UInt8] = [65,67,71,84] // A,C,G,T
@@ -7371,6 +7491,7 @@ plot
             var nMutationSetsUsed : Bool = false
             for mutationP in mutationPs {
                 var nMutations : [[Mutation]] = []
+                let isWildcard : Bool = mutationP.aa == 42
                 var protein : VDBProtein = VDBProtein.Spike
                 var isPMutation : Bool = false
                 if let pMutation = mutationP as? PMutation {
@@ -7393,7 +7514,8 @@ plot
                         }
                         var cdsBuffer: [UInt8] = Array(repeating: 0, count: 3)
                         var possCodons : [[UInt8]] = []
-                        if mutation.aa != dashChar {
+                        let aaToMatch : UInt8 = !isWildcard ? mutation.aa : mutation.wt
+                        if aaToMatch != dashChar {
                             for n0 in nuclChars {
                                 cdsBuffer[0] = n0
                                 for n1 in nuclChars {
@@ -7401,7 +7523,7 @@ plot
                                     for n2 in nuclChars {
                                         cdsBuffer[2] = n2
                                         let tr : UInt8 = translateCodon(cdsBuffer)
-                                        if tr == mutation.aa {
+                                        if tr == aaToMatch {
                                             possCodons.append(cdsBuffer)
                                         }
                                     }
@@ -7430,14 +7552,17 @@ plot
                             for codon in possCodons {
                                 var nMut : [Mutation] = []
                                 for i in 0..<3 {
-                                    if codon[i] != wtCodon[i] {
+//                                    if codon[i] != wtCodon[i] {
                                         nMut.append(Mutation(wt: wtCodon[i], pos: codonStart+i, aa: codon[i]))
-                                    }
+//                                    }
                                 }
                                 if !nMut.isEmpty {
                                     nMutations.append(nMut)
                                 }
                             }
+                        }
+                        else {
+                            print(vdb: vdb, "WARNING - mutation wildtype (\(Character(UnicodeScalar(mutation.wt)))) != reference (\(Character(UnicodeScalar(wtTrans))))")
                         }
                     }
                 }
@@ -7448,6 +7573,7 @@ plot
                 else {
                     nMutationSets.append([[mutation]])
                 }
+                nMutationSetsWildcard.append(isWildcard)
             }
             if !nMutationSetsUsed {
                 nMutationSets = []
@@ -7457,13 +7583,31 @@ plot
             mutations = mutationsStrings.map { Mutation(mutString: $0, vdb: vdb) }
         }
         
+        let searchWithWildCard : Bool
+        if nMutationSets.isEmpty {
+            searchWithWildCard = mutations.contains(where: {$0.aa == 42}) //reduce(false, {$0 || $1.aa == 42})
+        }
+        else {
+            searchWithWildCard = nMutationSetsWildcard.contains(true)
+        }
+        
         let mut_isolates : [Isolate]
         if !negate {
             if nMutationSets.isEmpty {
-                mut_isolates = isolates.filter { $0.containsMutations(mutations,n) }
+                if !searchWithWildCard {
+                    mut_isolates = isolates.filter { $0.containsMutations(mutations,n) }
+                }
+                else {
+                    mut_isolates = isolates.filter { $0.containsMutationsWithWildcard(mutations,n) }
+                }
             }
             else {
-                mut_isolates = isolates.filter { $0.containsMutationSets(nMutationSets,n) }
+                if !searchWithWildCard {
+                    mut_isolates = isolates.filter { $0.containsMutationSets(nMutationSets,n) }
+                }
+                else {
+                    mut_isolates = isolates.filter { $0.containsMutationSetsWithWildcard(nMutationSets,nMutationSetsWildcard,n) }
+                }
             }
             if n == 0 {
                 print(vdb: vdb, "Number of isolates containing \(mutationPatternString) = \(nf(mut_isolates.count))")
@@ -7488,6 +7632,7 @@ plot
                 var bestSet : [Mutation] = []
                 var bestFrac : Double = 0
                 for nMutations in nMutationSets[0] {
+                    // FIXME: This no longer works due to changes in nMutations
                     let subCount : Int = mut_isolates.filter { $0.containsMutations(nMutations, 0) }.count
                     if subCount == 0 {
                         continue
@@ -7516,10 +7661,20 @@ plot
         }
         else {
             if nMutationSets.isEmpty {
-                mut_isolates = isolates.filter { !$0.containsMutations(mutations,n) }
+                if !searchWithWildCard {
+                    mut_isolates = isolates.filter { !$0.containsMutations(mutations,n) }
+                }
+                else {
+                    mut_isolates = isolates.filter { !$0.containsMutationsWithWildcard(mutations,n) }
+                }
             }
             else {
-                mut_isolates = isolates.filter { !$0.containsMutationSets(nMutationSets,n) }
+                if !searchWithWildCard {
+                    mut_isolates = isolates.filter { !$0.containsMutationSets(nMutationSets,n) }
+                }
+                else {
+                    mut_isolates = isolates.filter { !$0.containsMutationSetsWithWildcard(nMutationSets,nMutationSetsWildcard,n) }
+                }
             }
             print(vdb: vdb, "Number of isolates not containing \(mutationPatternString) = \(nf(mut_isolates.count))")
         }
@@ -7533,7 +7688,7 @@ plot
         }
         return mut_isolates
     }
-    
+
     // returns isolates with collection dates before the given date
     class func isolatesBefore(_ date: Date, inCluster isolates:[Isolate], vdb: VDB) -> [Isolate] {
         let filteredIsolates : [Isolate] = isolates.filter { $0.date < date }
@@ -7632,16 +7787,14 @@ plot
         else {
             nameUC = name
         }
-        var cluster : [Isolate] = isolates.filter { $0.pangoLineage == nameUC }
+
+        let cluster : [Isolate]
         if vdb.includeSublineages {
-            let namePlus : String = nameUC + "."
-            let namePlusCount : Int = namePlus.count
-            var subLineages : [Isolate] = isolates.filter { $0.pangoLineage.prefix(namePlusCount) == namePlus }
-            let subLineageNames : [String] = additionalSublineagesOf(name, vdb: vdb)
-            if subLineageNames.count > 0 {
-                subLineages += isolates.filter { subLineageNames.contains($0.pangoLineage) }
-            }
-            cluster += subLineages
+            let sublineages : [String] = VDB.sublineagesOfLineage(nameUC, vdb: vdb)
+            cluster = isolates.filter { sublineages.contains($0.pangoLineage) }
+        }
+        else {
+            cluster = isolates.filter { $0.pangoLineage == nameUC }
         }
         if !quiet {
             print(vdb: vdb, "  found \(nf(cluster.count)) in cluster of size \(nf(isolates.count))")
@@ -8186,15 +8339,8 @@ plot
             allIsolates = []
         }
         let nameUC : String = lineageName.uppercased()
-        let namePlus : String = nameUC + "."
-        let namePlusCount : Int = namePlus.count
-        var sublineageNames : [String] = []
-        for aLineage in vdb.lineageArray {
-            if aLineage.prefix(namePlusCount) == namePlus {
-                sublineageNames.append(aLineage)
-            }
-        }
-        sublineageNames.append(contentsOf: additionalSublineagesOf(lineageName, vdb: vdb))
+        let sublineageNames : [String] = VDB.sublineagesOfLineage(nameUC, includeLineage: false, vdb: vdb)
+
         for aSublineageName in sublineageNames {
             let isolates : [Isolate] = allIsolates.filter { $0.pangoLineage == aSublineageName }
             let nameParts : [String] = aSublineageName.components(separatedBy: ".")
@@ -8229,6 +8375,28 @@ plot
         return sublineages.map { ($0.0,$0.1) }
     }
     
+    // returns a list of all sublineages of a specified lineage (takes into account the alias list)
+    //   option for whether to include the lineage itself in the list
+    class func sublineagesOfLineage(_ lineageName: String, includeLineage: Bool = true, vdb: VDB) -> [String] {
+        var sublineages : [String]
+        if includeLineage {
+            sublineages = [lineageName]
+        }
+        else {
+            sublineages = []
+        }
+        var lineageNamePlus : String = lineageName + "."
+        if let index = vdb.lineageArray.firstIndex(of: lineageName) {
+            lineageNamePlus = vdb.fullLineageArray[index] + "."
+        }
+        for i in 0..<vdb.lineageArray.count {
+            if vdb.fullLineageArray[i].contains(lineageNamePlus) {
+                sublineages.append(vdb.lineageArray[i])
+            }
+        }
+        return sublineages
+    }
+    
     // returns all lineages from a WHO variant lineage description string as in the whoVariants dictionary
     class func lineagesFor(variantString: String, vdb:VDB) -> [String] {
         var lineageNames : [String] = []
@@ -8251,8 +8419,8 @@ plot
             if lineageName ~~ key {
                 let lNames : [String] = value.0.components(separatedBy: " + ")
                 lineageName = lNames[0]
-                let additionalLineages : [String] = VDB.additionalSublineagesOf(lineageName, vdb: vdb)
-                if lNames.count > 1 || !additionalLineages.isEmpty {
+                let withSublineages : [String] = VDB.sublineagesOfLineage(lineageName, vdb: vdb)
+                if lNames.count > 1 || withSublineages.count > 1 {
                     print(vdb: vdb, "Using \(lineageName) as representative of variant \(key)")
                 }
             }
@@ -8308,8 +8476,8 @@ plot
             if lineageName ~~ key {
                 let lNames : [String] = value.0.components(separatedBy: " + ")
                 lineageName = lNames[0]
-                let additionalLineages : [String] = VDB.additionalSublineagesOf(lineageName, vdb: vdb)
-                if lNames.count > 1 || !additionalLineages.isEmpty {
+                let withSublineages : [String] = VDB.sublineagesOfLineage(lineageName, vdb: vdb)
+                if lNames.count > 1 || withSublineages.count > 1 {
                     print(vdb: vdb, "Using \(lineageName) as representative of variant \(key)")
                 }
             }
@@ -9171,6 +9339,64 @@ plot
         catch {
             print(vdb: vdb, "Error writing list to file \(fileName)")
         }
+    }
+    
+    // load phylogenetic tree
+    class func loadTree(name: String, file: String, vdb: VDB) {
+#if (VDB_EMBEDDED || VDB_TREE) && swift(>=1)
+        if !identifierAvailable(identifier: name, variableType: .TreeVar, vdb: vdb) {
+            return
+        }
+        var file : String = file
+        var rootTreeNode : PhTreeNode? = nil
+        let vdbPath : String = vdbOrBasePath()
+        if file.lowercased() == "global" {
+            if FileManager.default.fileExists(atPath: "\(vdbPath)/global.data.tree") {
+                file = "global.data.tree"
+            }
+            else if FileManager.default.fileExists(atPath: "\(vdbPath)/global.tree") {
+                file = "global.tree"
+            }
+        }
+        if file.lowercased() == "mat" || file.lowercased() == "matv" {
+            let _ = autoreleasepool { () -> Void in
+                let mutAnnotatedTree : PhTreeNode? = VDB.loadMutationAnnotatedTree(pbTreeFileName, expandTree: true, createIsolates: true, printMutationCounts: false, compareWithIsolates: false, quiet: file.count == 3, vdb: vdb)
+                if let mutAnnotatedTree = mutAnnotatedTree {
+                    vdb.trees[name] = mutAnnotatedTree
+                    print(vdb: vdb, "Tree \(name) assigned to mutation annotated tree")
+                }
+                else {
+                    print(vdb: vdb, "Error loading mutation annotated tree")
+                }
+            }
+            return
+        }
+        if file.contains("global.") {
+            do {
+                rootTreeNode = try PhTreeNode.loadTree(basePath: vdbPath)
+            }
+            catch {
+                print(vdb: vdb, "Error loading global tree")
+            }
+        }
+#if VDB_EMBEDDED && swift(>=1)
+        if !file.contains("global.") {
+            if file.lowercased() == "usher" {
+                if FileManager.default.fileExists(atPath: "\(vdbPath)/usher.nwk.txt") {
+                    file = "usher.nwk.txt"
+                }
+            }
+            rootTreeNode = loadUsherTree("\(vdbPath)/\(file)", vdb: vdb)
+        }
+#endif
+        if let rootTreeNode = rootTreeNode {
+            trimTree(rootTreeNode, vdb: vdb)
+            vdb.trees[name] = rootTreeNode
+        }
+        else {
+            print(vdb: vdb, "Error loading tree from file \(file)")
+        }
+#endif
     }
     
     // for each nucleotide in a coding region, the codon start position
@@ -10670,6 +10896,7 @@ plot
     var clusters : AtomicDict = AtomicDict<String,[Isolate]>() // cluster = group of isolates
     var patterns : [String:[Mutation]] = [:]                   // pattern = group of mutations
     var lists : AtomicDict = AtomicDict<String,List>()         // list = a list produced by a command
+    var trees : AtomicDict = AtomicDict<String,PhTreeNode>()   // tree = phylogenetic tree
     var patternNotes : [String:String] = [:]
     var countries : [String] = []
     var stateNamesPlus : [String] = []
@@ -10727,6 +10954,7 @@ plot
 #endif
     static let defaultMaxMutationsInFreqList : Int = 50
     static let defaultListSpecificity : Bool = false
+    static let defaultTreeDeltaMode : Bool = false
     static let defaultConsensusPercentage : Int = 50
     static let defaultCaseMatching : CaseMatching = .all
     static let defaultArrayBase : Int = 0
@@ -10746,6 +10974,7 @@ plot
     var batchMode : Bool = false                                  // whether to suppress printing by page (false = paging on)
     var quietMode : Bool = false                                  // whether to suppress printing during commands on lists
     var listSpecificity : Bool = defaultListSpecificity           // whether to show mutation specifity in freq command
+    var treeDeltaMode : Bool = defaultTreeDeltaMode               // whether trees are converted to clusters via dMutations
     var minimumPatternsCount : Int = defaultMinimumPatternsCount  // excludes smaller patterns from list
     var trendsLineageCount : Int = defaultTrendsLineageCount      // number of lineages for trends table
     var maxMutationsInFreqList : Int = defaultMaxMutationsInFreqList    // number of mutations to freq list
@@ -10763,6 +10992,7 @@ plot
     var aliasDict : [String:String] = [:]      // short alias : extended lineage name
     var aliasDict2Rev : [String:String] = [:]  // lineage with 2nd level alias : second level alias
     var lineageArray : [String] = []
+    var fullLineageArray : [String] = []
     var countriesStates : [String] = []
     
     // info from Pango designation file lineages.csv
@@ -10830,6 +11060,11 @@ plot
     deinit {
         NSLog("vdb \(pidString) deinit")
     }
+#endif
+
+#if VDB_EMBEDDED || VDB_TREE
+    var epiToPublic : EpiToPublic = EpiToPublic()
+    var treeLoadingInfo : TreeLoadingInfo = TreeLoadingInfo()
 #endif
     
     // returns true if the given string is a valid integer
@@ -10922,8 +11157,26 @@ plot
             print(vdb: self, "Error - no database file found")
             return
         }
-
+#if !VDB_EMBEDDED && !VDB_TREE
         isolates = VDB.loadMutationDB_MP(fileName, mp_number: mpNumber, vdb: self)
+#else
+        if fileName.suffix(3) != pbSuffix {
+            isolates = VDB.loadMutationDB_MP(fileName, mp_number: mpNumber, vdb: self)
+        }
+        else {
+            let _ = autoreleasepool { () -> Void in
+                treeLoadingInfo.databaseSource = .USHER
+                isolates = VDB.loadPBMetadataDBTSV_MP(pbMetadataFileName, loadMetadataOnly: false, quiet: true, vdb: self)
+                let mutAnnotatedTree : PhTreeNode? = VDB.loadMutationAnnotatedTree(pbTreeFileName, expandTree: true, createIsolates: true, printMutationCounts: false, compareWithIsolates: false, quiet: true, vdb: self)
+                if let mutAnnotatedTree = mutAnnotatedTree {
+                    let pbTreeIdentifier : String = "m"
+                    trees[pbTreeIdentifier] = mutAnnotatedTree
+                    print(vdb: self, "Tree \(pbTreeIdentifier) assigned to mutation annotated tree")
+                }
+            }
+        }
+#endif
+
         clusters[allIsolatesKeyword] = isolates
         var notProtein : Bool = false
         checkMutations: for _ in 0..<min(10,isolates.count) {
@@ -10935,7 +11188,7 @@ plot
                 }
             }
         }
-        if fileName.contains("nucl") || notProtein {
+        if fileName.contains("nucl") || notProtein || fileName.suffix(3) == pbSuffix {
             self.nucleotideMode = true
             self.refLength = VDBProtein.SARS2_nucleotide_refLength
             self.referenceArray = VDB.nucleotideReference(vdb: self, firstCall: true)
@@ -11044,6 +11297,22 @@ plot
             print(vdb: self, "  \(key):  \(nf(value.items.count))  \(value.command)")
         }
     }
+
+    func listTrees() {
+#if VDB_EMBEDDED || VDB_TREE
+        print(vdb: self, "Tree name:  number of leaves")
+        let treesCopy = trees.copy()
+        if treesCopy.isEmpty {
+            print(vdb: self, " No trees defined")
+        }
+        for (key,value) in treesCopy.sorted(by: { $0.0 < $1.0 }) {
+            let note : String = value.parent != nil ? "(subtree)" : ""
+            print(vdb: self, "  \(key):  \(nf(value.leafCount()))   \(note)")
+        }
+#else
+        print(vdb: self, "Error - vdb not compiled with tree functions")
+#endif
+    }
     
     func printTable(array: [[String]], title: String, leftAlign: [Bool], colors:[String], titleRowUsed: Bool = true, maxColumnWidth: Int = 60) {
         if array.isEmpty {
@@ -11149,6 +11418,7 @@ plot
 //        batchMode = false     // not reset since batchMode is based on terminal type
         quietMode = false
         listSpecificity = VDB.defaultListSpecificity
+        treeDeltaMode = VDB.defaultTreeDeltaMode
         minimumPatternsCount = VDB.defaultMinimumPatternsCount
         trendsLineageCount = VDB.defaultTrendsLineageCount
         maxMutationsInFreqList = VDB.defaultMaxMutationsInFreqList
@@ -11181,6 +11451,7 @@ plot
         printSwitch("paging", batchMode)
         printSwitch("quiet", quietMode)
         printSwitch("listSpecificity",listSpecificity)
+        printSwitch("treeDeltaMode", treeDeltaMode)
         print(vdb: self, "\(minimumPatternsCountKeyword) = \(minimumPatternsCount)")
         print(vdb: self, "\(trendsLineageCountKeyword) = \(trendsLineageCount)")
         print(vdb: self, "\(maxMutationsInFreqListKeyword) = \(maxMutationsInFreqList)")
@@ -11192,7 +11463,7 @@ plot
     func offerCompletions(_ offer: Bool, _ ln: LineNoise?) {
         if offer {
             var countriesStates : [String] = []
-            var completions : [String] = [beforeKeyword,afterKeyword,namedKeyword,lineageKeyword,consensusKeyword,patternsKeyword,countriesKeyword,statesKeyword,trendsKeyword,monthlyKeyword,weeklyKeyword,"clusters","proteins","history","settings","includeSublineages","excludeSublineages","simpleNuclPatterns","excludeNFromCounts","sixel","trendGraphs","stackGraphs","completions","displayTextWithColor",minimumPatternsCountKeyword,trendsLineageCountKeyword,containingKeyword,"group","reset",variantsKeyword,maxMutationsInFreqListKeyword,"listSpecificity",consensusPercentageKeyword,"sublineages",caseMatchingKeyword,arrayBaseKeyword]
+            var completions : [String] = [beforeKeyword,afterKeyword,namedKeyword,lineageKeyword,consensusKeyword,patternsKeyword,countriesKeyword,statesKeyword,trendsKeyword,monthlyKeyword,weeklyKeyword,"clusters","proteins","history","settings","includeSublineages","excludeSublineages","simpleNuclPatterns","excludeNFromCounts","sixel","trendGraphs","stackGraphs","completions","displayTextWithColor",minimumPatternsCountKeyword,trendsLineageCountKeyword,containingKeyword,"group","reset",variantsKeyword,maxMutationsInFreqListKeyword,"listSpecificity","treeDeltaMode",consensusPercentageKeyword,"sublineages",caseMatchingKeyword,arrayBaseKeyword]
             completions.append(contentsOf:Array(VDB.whoVariants.keys))
             if self.countriesStates.isEmpty {
                 var countrySet : Set<String> = []
@@ -11372,10 +11643,16 @@ plot
             self.refLength = existingVDB.refLength
             self.referenceArray = existingVDB.referenceArray
             self.lineageArray = existingVDB.lineageArray
+            self.fullLineageArray = existingVDB.fullLineageArray
             self.aliasDict = existingVDB.aliasDict
             self.aliasDict2Rev = existingVDB.aliasDict2Rev
             self.countriesStates = existingVDB.countriesStates
             self.accessionMode = existingVDB.accessionMode
+#if VDB_EMBEDDED || VDB_TREE
+            self.trees = existingVDB.trees.copyObject()
+            self.treeLoadingInfo.databaseSource = existingVDB.treeLoadingInfo.databaseSource
+            Swift.print("self.treeLoadingInfo.databaseSource = \(self.treeLoadingInfo.databaseSource)")
+#endif
         }
 #endif
         if shouldLoadDatabase {
@@ -11885,7 +12162,7 @@ plot
             changed = false
             for i in 0..<parts.count {
                 if parts[i].contains(".") && (i == 0 || (!(parts[i-1] ~~ lineageKeyword) && !(parts[i-1] ~~ namedKeyword)  && !(parts[i-1] ~~ sampleKeyword)) ) {
-                    if clusters[parts[i]] != nil || patterns[parts[i]] != nil || lists[parts[i]] != nil {
+                    if clusters[parts[i]] != nil || patterns[parts[i]] != nil || lists[parts[i]] != nil || trees[parts[i]] != nil {
                         continue
                     }
                     if i < parts.count-1 {
@@ -11896,7 +12173,14 @@ plot
                     if let first = parts[i].first, first >= "0" && first <= "9" {
                         continue
                     }
-                    if !parts[i].contains("..") {
+#if VDB_EMBEDDED || VDB_TREE
+                    if let dotIndex = parts[i].firstIndex(of: "."), let tree = trees[String(parts[i][parts[i].startIndex..<dotIndex])] {
+                        parts[i].insert(contentsOf: "[\(tree.id)]", at: dotIndex)
+                        changed = true
+                        continue
+                    }
+#endif
+                    if !parts[i].contains("..") && !parts[i].contains("].") && !parts[i].contains(".all") && !parts[i].contains("[") {
                         parts.insert(lineageKeyword, at: i)
                         changed = true
                     }
@@ -12111,7 +12395,7 @@ plot
             var exprCluster : Expr?
             if tokens.count > 1 {
                 switch tokens[0] {
-                case .listFrequenciesFor, .listCountriesFor, .listStatesFor, .listLineagesFor, .listTrendsFor, .listMonthlyFor, .listWeeklyFor, .list:
+                case .listFrequenciesFor, .listCountriesFor, .listStatesFor, .listLineagesFor, .listTrendsFor, .listMonthlyFor, .listWeeklyFor, .list, .listVariants:
                     (_,exprCluster) = parse(Array(tokens[1..<tokens.count]),node: nil)
                 default:
                     break
@@ -12234,8 +12518,14 @@ plot
                     return ([],nil)
                 }
             case .listVariants:
-                let expr : Expr = Expr.ListVariants
-                return ([],expr)
+                if let exprCluster = exprCluster {
+                    let expr : Expr = Expr.ListVariants(exprCluster)
+                    return ([],expr)
+                }
+                else {
+                    print(vdb: self, "Syntax error - cluster expression is nil")
+                    return ([],nil)
+                }
             default:
                 break
             }
@@ -12245,10 +12535,17 @@ plot
         if topLevel && tokens.count == 1 {
             switch tokens[0] {
             case let .textBlock(identifier):
+                var identifier = identifier
+                let propParts : [String] = identifier.components(separatedBy: "].")
+                var propertyKey : String? = nil
+                if propParts.count == 2 {
+                    identifier = propParts[0] + "]"
+                    propertyKey = propParts[1].lowercased()
+                }
                 if identifier.last == "]" {
                     let parts : [String] = identifier.dropLast().components(separatedBy: "[")
                     if parts.count == 2 {
-                        if let cluster = clusters[parts[0]], let indexTmp = Int(parts[1]) {
+                        if let cluster = clusters[parts[0]], let indexTmp = Int(parts[1]), propertyKey == nil {
                             let index = indexTmp - arrayBase
                             if index >= 0 && index < cluster.count {
                                 print(vdb: self, "Isolate \(index+1) of \(nf(cluster.count)) from cluster \(parts[0])")
@@ -12256,9 +12553,19 @@ plot
                                 return ([],nil)
                             }
                         }
+                        else if let tree = trees[parts[0]], let indexTmp = Int(parts[1]) {
+#if VDB_EMBEDDED || VDB_TREE
+                            VDB.infoForTree(tree, node_id: indexTmp, property: propertyKey, vdb: self)
+#endif
+                        }
+                        else if let tree = trees[parts[0]], parts[1] == "" {
+#if VDB_EMBEDDED || VDB_TREE
+                            VDB.infoForTree(tree, node_id: tree.id, property: propertyKey, vdb: self)
+#endif
+                        }
                     }
                     else if parts.count == 3 {
-                        if let cluster = clusters[parts[0]], parts[1].last == "]", let indexTmp = Int(parts[1].dropLast()) {
+                        if let cluster = clusters[parts[0]], parts[1].last == "]", let indexTmp = Int(parts[1].dropLast()), propertyKey == nil {
                             var seqRange : ClosedRange<Int> = 0...0
                             if let resIndex = Int(parts[2]) {
                                 seqRange = resIndex...resIndex
@@ -12309,6 +12616,12 @@ plot
                         printProteinMutations = true
                     }
                     return ([],Expr.Containing(allIsolates, Expr.Identifier(identifier), 0))
+                }
+                else if let tree = trees[identifier] {
+#if VDB_EMBEDDED || VDB_TREE
+                    VDB.infoForTree(tree, treeName: identifier, vdb: self)
+                    return ([],nil)
+#endif
                 }
                 else {
                     return ([],Expr.From(allIsolates, Expr.Identifier(identifier)))
@@ -12999,6 +13312,8 @@ plot
             listPatterns()
         case "list lists", "lists":
             listLists()
+        case "list trees", "trees":
+            listTrees()
         case "help", "?":
             let (_,columns) = rowsAndColumns()
             if columns > 50 {
@@ -13043,7 +13358,7 @@ list [<n>] <cluster>
 [list] patterns         lists built-in and user defined patterns
 [list] clusters         lists built-in and user defined clusters
 [list] proteins
-[list] variants
+[list] variants <cluster>
 
 sort <cluster>  (by date)
 help [<command>]   alias ?
@@ -13087,6 +13402,7 @@ displayTextWithColor/displayTextWithColor off
 paging/paging off
 quiet/quiet off
 listSpecificity/listSpecificity off
+treeDeltaMode/treeDeltaMode off
 
 minimumPatternsCount = <n>
 trendsLineageCount = <n>
@@ -13127,7 +13443,7 @@ list [<n>] <cluster>
 [list] patterns
 [list] clusters
 [list] proteins
-[list] variants
+[list] variants <cluster>
 
 sort <cluster>  (by date)
 help [<command>]   alias ?
@@ -13159,6 +13475,7 @@ displayTextWithColor
 paging/paging off
 quiet/quiet off
 listSpecificity/listSpecificity off
+treeDeltaMode/treeDeltaMode off
 
 minimumPatternsCount = <n>
 trendsLineageCount = <n>
@@ -13323,6 +13640,12 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         case "listspecificity off":
             listSpecificity = false
             printSwitch(lowercaseLine, listSpecificity)
+        case "treedeltamode", "treedeltamode on":
+            treeDeltaMode = true
+            printSwitch(lowercaseLine, treeDeltaMode)
+        case "treedeltamode off":
+            treeDeltaMode = false
+            printSwitch(lowercaseLine, treeDeltaMode)
         case "list proteins", "proteins":
             VDB.listProteins(vdb: self)
         case "history":
@@ -13353,6 +13676,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
                 if variableNameString == "lineage groups" || variableNameString == "lineage group" || variableNameString == "groups" || variableNameString == "group" {
                     lineageGroups = []
                     print(vdb: self, "All lineage groups cleared")
+                    clusterHasBeenAssigned(updateGroupsKeyword)
                 }
                 else {
                     let groupsToClear : [String] = variableNameString.replacingOccurrences(of: "lineage groups ", with: "", options: .caseInsensitive, range: nil).replacingOccurrences(of: "lineage group ", with: "", options: .caseInsensitive, range: nil).replacingOccurrences(of: "groups ", with: "", options: .caseInsensitive, range: nil).replacingOccurrences(of: "group ", with: "", options: .caseInsensitive, range: nil).components(separatedBy: " ")
@@ -13366,6 +13690,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
                         }
                         print(vdb: self, "Lineage group \(groupName) not found")
                     }
+                    clusterHasBeenAssigned(updateGroupsKeyword)
                 }
                 break
             }
@@ -13400,6 +13725,16 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
             var fasta : Bool = loadCmdParts[0].lowercased() == "fasta"
             if fasta {
                 loadCmdParts.removeFirst()
+            }
+            let shouldLoadTree : Bool = loadCmdParts[0].lowercased() == "tree"
+            if shouldLoadTree {
+                if loadCmdParts.count == 3 {
+                    VDB.loadTree(name: loadCmdParts[1], file: loadCmdParts[2], vdb: self)
+                }
+                else {
+                    print(vdb: self, "Error - the 'load tree' command requires exactly two arguments: the tree name and the tree file")
+                }
+                break
             }
             switch loadCmdParts.count {
             case 1:
@@ -13618,6 +13953,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
                 if !existingNames.contains(lineageNames[0]) {
                     lineageGroups.append(lineageNames)
                     print(vdb: self, "New lineage group: \(lineageNames.joined(separator: " "))")
+                    clusterHasBeenAssigned(updateGroupsKeyword)
                 }
                 else {
                     print(vdb: self, "Error - lineage group \(lineageNames[0]) already defined")
@@ -13660,7 +13996,20 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
                 print(vdb: self, "Error - the parpare command is only available in nucleotide mode")
             }
         case _ where lowercaseLine.hasPrefix("assign ") || lowercaseLine == "assign":
-            if nucleotideMode {
+            let parts : [String] = line.components(separatedBy: " ")
+            if parts.count == 3, let rootTreeNode = trees[parts[2]] {
+#if VDB_EMBEDDED || VDB_TREE
+                switch parts[1].lowercased() {
+                case "lineages":
+                    PhTreeNode.assignLineagesForInternalNodes(tree: rootTreeNode, vdb: self)
+                case "mutations":
+                    PhTreeNode.assignMutationsForInternalNodes(tree: rootTreeNode, vdb: self)
+                default:
+                    print(vdb: self, "Error - invalid assign command")
+                }
+#endif
+            }
+            else if nucleotideMode {
                 var clusterName1 : String = ""
                 var clusterName2 : String = ""
                 if lowercaseLine != "assign" {
@@ -13710,6 +14059,13 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
             else {
                 print(vdb: self, "Error - the compare command is only available in nucleotide mode")
             }
+#if VDB_EMBEDDED || VDB_TREE
+        case _ where lowercaseLine == "download mat":
+            print(vdb: self, "Downloading mutation annotated tree ...")
+            self.treeLoadingInfo.pbFilesUpToDate.value = 0
+            VDB.downloadMutationAnnotatedTreeDataFiles(vdb: self, viewController: VDBViewController())
+            VDB.downloadEpiToPublicFile(vdb: self, viewController: VDBViewController())
+#endif
 #if VDB_SERVER && swift(>=1)
         case _ where lowercaseLine.hasPrefix("font ") || lowercaseLine.hasPrefix("fontsize ") || lowercaseLine.hasPrefix("font size "):
                 let fontSizeString : String = line.replacingOccurrences(of: "font size ", with: "", options: .caseInsensitive, range: nil).replacingOccurrences(of: "fontsize ", with: "", options: .caseInsensitive, range: nil).replacingOccurrences(of: "font ", with: "", options: .caseInsensitive, range: nil)
@@ -14355,6 +14711,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         let displayTextWithColorSetting : Bool = displayTextWithColor
         let quietModeSetting : Bool = quietMode
         let listSpecificitySetting : Bool = listSpecificity
+        let treeDeltaModeSetting : Bool = treeDeltaMode
         let minimumPatternsCountSetting : Int = minimumPatternsCount
         let trendsLineageCountSetting : Int = trendsLineageCount
         let maxMutationsInFreqListSetting : Int = maxMutationsInFreqList
@@ -14546,6 +14903,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         displayTextWithColor = displayTextWithColorSetting
         quietMode = quietModeSetting
         listSpecificity = listSpecificitySetting
+        treeDeltaMode = treeDeltaModeSetting
         minimumPatternsCount = minimumPatternsCountSetting
         trendsLineageCount = trendsLineageCountSetting
         maxMutationsInFreqList = maxMutationsInFreqListSetting
@@ -14580,6 +14938,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         let displayTextWithColorSetting : Bool = displayTextWithColor
         let quietModeSetting : Bool = quietMode
         let listSpecificitySetting : Bool = listSpecificity
+        let treeDeltaModeSetting : Bool = treeDeltaMode
         let minimumPatternsCountSetting : Int = minimumPatternsCount
         let trendsLineageCountSetting : Int = trendsLineageCount
         let maxMutationsInFreqListSetting : Int = maxMutationsInFreqList
@@ -14699,6 +15058,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         displayTextWithColor = displayTextWithColorSetting
         quietMode = quietModeSetting
         listSpecificity = listSpecificitySetting
+        treeDeltaMode = treeDeltaModeSetting
         minimumPatternsCount = minimumPatternsCountSetting
         trendsLineageCount = trendsLineageCountSetting
         maxMutationsInFreqList = maxMutationsInFreqListSetting
@@ -14987,6 +15347,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
                 vdb.clusters[allIsolatesKeyword] = []
                 vdb.isolates = []
                 vdb.lineageArray = []
+                vdb.fullLineageArray = []
                 vdb.aliasDict = [:]
                 vdb.aliasDict2Rev = [:]
                 vdb.countriesStates = []
@@ -15189,7 +15550,7 @@ indirect enum Expr {
     case ListIsolates(Expr,Int)        // Cluster                          --> nil
     case Range(Expr,Date,Date)         // Cluster                          --> Cluster
     case List(List)                    //  --> List  (a list expression, not a list command)
-    case ListVariants                  // -                                --> List
+    case ListVariants(Expr)            // Cluster                          --> List
     case Nil
     
     // evaluate node of abstract syntax tree
@@ -15238,39 +15599,16 @@ indirect enum Expr {
                 }
                 let expr3 = expr2.eval(caller: self, vdb: vdb)
                 
-                enum VariableType {
-                    case ClusterVar
-                    case PatternVar
-                    case ListVar
-                }
-                
-                // returns whether the identifier is available for assignment to the specified type
-                func identifierAvailable(identifier: String, variableType: VariableType) -> Bool {
-                    if variableType != .ClusterVar && vdb.clusters[identifier] != nil {
-                        print(vdb: vdb, "Error - name \(identifier) is already defined as a cluster")
-                        return false
-                    }
-                    if variableType != .PatternVar && vdb.patterns[identifier] != nil {
-                        print(vdb: vdb, "Error - name \(identifier) is already defined as a pattern")
-                        return false
-                    }
-                    if variableType != .ListVar && vdb.lists[identifier] != nil {
-                        print(vdb: vdb, "Error - name \(identifier) is already defined as a list")
-                        return false
-                    }
-                    return true
-                }
-                
                 switch expr3 {
                 case let .Cluster(cluster):
-                    if identifierAvailable(identifier: identifier, variableType: .ClusterVar) {
+                    if identifierAvailable(identifier: identifier, variableType: .ClusterVar, vdb: vdb) {
                         vdb.clusters[identifier] = cluster
                         print(vdb: vdb, "Cluster \(identifier) assigned to \(nf(cluster.count)) isolates")
                         vdb.clusterHasBeenAssigned(identifier)
                     }
                     break
                 case let .Pattern(pattern):
-                    if identifierAvailable(identifier: identifier, variableType: .PatternVar) {
+                    if identifierAvailable(identifier: identifier, variableType: .PatternVar, vdb: vdb) {
                         vdb.patterns[identifier] = pattern
                         print(vdb: vdb, "Pattern \(identifier) defined as \(VDB.stringForMutations(pattern, vdb: vdb))")
                     }
@@ -15335,11 +15673,37 @@ indirect enum Expr {
                             mutList = VDB.mutationsFromStringCoercing(identifier2, vdb: vdb)
                         }
                         if (mutList.count == identifier2.components(separatedBy: " ").count || coercePMutation) && mutList.count > 0 {
-                            if identifierAvailable(identifier: identifier, variableType: .PatternVar) {
+                            if identifierAvailable(identifier: identifier, variableType: .PatternVar, vdb: vdb) {
                                 vdb.patterns[identifier] = mutList
                                 print(vdb: vdb, "Pattern \(identifier) defined as \(VDB.stringForMutations(mutList, vdb: vdb))")
                             }
+                            break
                         }
+                    }
+                    if identifier2.last == "]" {
+                        let parts : [String] = identifier2.dropLast().components(separatedBy: "[")
+                        if parts.count == 2 {
+#if VDB_EMBEDDED || VDB_TREE
+                            if let tree = vdb.trees[parts[0]], Int(parts[1]) == nil, identifierAvailable(identifier: identifier, variableType: .TreeVar, vdb: vdb), let node = PhTreeNode.treeNodeForLineage(parts[1], tree: tree, vdb: vdb) {
+                                vdb.trees[identifier] = node
+                                print(vdb: vdb, "Tree node for \(parts[1]) found and assigned as subtree to variable \(identifier)")
+                                break
+                            }
+#endif
+                        }
+                    }
+                    if identifier2.lowercased().suffix(6) == "].copy" {
+#if VDB_EMBEDDED || VDB_TREE
+                        let parts : [String] = identifier2.dropLast(6).components(separatedBy: "[")
+                        if parts.count == 2, let tree = vdb.trees[parts[0]], let node_id = Int(parts[1]), let node = PhTreeNode.treeNodeWithId(rootTreeNode: tree, node_id:  node_id) {
+                            if identifierAvailable(identifier: identifier, variableType: .TreeVar, vdb: vdb) {
+                                let nodeCopy : PhTreeNode = node.deepCopyWithoutParent()
+                                vdb.trees[identifier] = nodeCopy
+                                print(vdb: vdb, "Tree \(identifier) assigned to subtree copy from node \(node_id)")
+                                break
+                            }
+                        }
+#endif
                     }
                     else {
                         var cluster : [Isolate] = []
@@ -15350,7 +15714,7 @@ indirect enum Expr {
                             cluster = VDB.isolatesFromCountry(identifier2, inCluster: vdb.isolates, vdb: vdb)
                         }
                         if cluster.count > 0 {
-                            if identifierAvailable(identifier: identifier, variableType: .ClusterVar) {
+                            if identifierAvailable(identifier: identifier, variableType: .ClusterVar, vdb: vdb) {
                                 vdb.clusters[identifier] = cluster
                                 print(vdb: vdb, "Cluster \(identifier) assigned to \(nf(cluster.count)) isolates")
                                 vdb.clusterHasBeenAssigned(identifier)
@@ -15387,7 +15751,7 @@ indirect enum Expr {
                                 }
                             }
                             if let existingList : List = vdb.lists[listID] {
-                                if identifierAvailable(identifier: identifier, variableType: .ListVar) {
+                                if identifierAvailable(identifier: identifier, variableType: .ListVar, vdb: vdb) {
                                     if let closedRange = closedRange {
                                         if closedRange.upperBound < existingList.items.count {
                                             let newItems : [[CustomStringConvertible]] = Array(existingList.items[closedRange])
@@ -15408,7 +15772,7 @@ indirect enum Expr {
                         }
                     }
                 case let .List(list):
-                    if identifierAvailable(identifier: identifier, variableType: .ListVar) {
+                    if identifierAvailable(identifier: identifier, variableType: .ListVar, vdb: vdb) {
                         vdb.lists[identifier] = list
                         print(vdb: vdb, "List \(identifier) assigned to list with  \(nf(list.items.count)) items")
                     }
@@ -15880,8 +16244,9 @@ indirect enum Expr {
             return Expr.Cluster(cluster2)
         case let .List(list):
             return Expr.List(list)
-        case .ListVariants:
-            let list : List = VDB.listVariants(vdb: vdb)
+        case let .ListVariants(exprCluster):
+            let cluster = exprCluster.clusterFromExpr(vdb: vdb)
+            let list : List = VDB.listVariants(cluster, vdb: vdb)
             return Expr.List(list)
         case let .Diff(expr1, expr2):
             
@@ -16053,13 +16418,272 @@ indirect enum Expr {
             if vdb.debug {
                 print(vdb: vdb, "clusterFromExpr  case .Identifier(_\(identifier)_)")
             }
-            if let cluster = vdb.clusters[identifier] {
+            var identifier = identifier
+            let propParts : [String] = identifier.components(separatedBy: "].")
+            var propertyKey : String? = nil
+            if propParts.count == 2 {
+                identifier = propParts[0] + "]"
+                propertyKey = propParts[1].lowercased()
+            }
+            if identifier.suffix(4) == ".all" {
+                identifier = String(identifier.dropLast(4))
+                propertyKey = "all"
+            }
+
+#if VDB_EMBEDDED || VDB_TREE
+            func clusterFromNode(_ node: PhTreeNode, propertyKey: String?) -> [Isolate]? {
+                let leafNodes : [PhTreeNode] = node.leafNodes()
+                var leafIsolates : [Isolate] = leafNodes.compactMap { $0.isolate }
+                if propertyKey == nil {
+                    return leafIsolates
+                }
+                else if propertyKey == "all" {
+                    let interiorNodes : [PhTreeNode] = node.allInteriorNodes()
+                    let interiorIsolates : [Isolate] = interiorNodes.map { node in
+                        Isolate(country: "unknown", state: "UK", date: Date.distantPast, epiIslNumber: node.id, mutations: node.mutations, pangoLineage: node.lineage, age: 0)
+                    }
+                    leafIsolates.append(contentsOf: interiorIsolates)
+                    return leafIsolates
+                }
+                return nil
+            }
+            
+            func clusterFromNodeDelta(_ node: PhTreeNode, propertyKey: String?) -> [Isolate]? {
+                if propertyKey == nil {
+                    let allNodes : [PhTreeNode] = node.allNodes()
+                    let cluster : [Isolate] = allNodes.map { node in
+                        Isolate(country: "unknown", state: "UK", date: Date.distantPast, epiIslNumber: node.id, mutations: node.dMutations, pangoLineage: node.lineage, age: 0)
+                    }
+                    return cluster
+                }
+                return nil
+            }
+            
+            if let tree = vdb.trees[identifier] {
+                if !vdb.treeDeltaMode {
+                    if let treeCluster = clusterFromNode(tree, propertyKey: propertyKey) {
+                        return treeCluster
+                    }
+                }
+                else {
+                    if let treeCluster = clusterFromNodeDelta(tree, propertyKey: propertyKey) {
+                        return treeCluster
+                    }
+                }
+            }
+            
+            // returns isolates with specified dMutation, but excluding those that occur after reversion
+            func clusterFromTree(_ treeNode: PhTreeNode, withDMutation mutationPatternString: String) -> [Isolate] {
+                var cluster : [Isolate] = []
+                let tmpDate : Date = Date()
+                
+                // allow protein mutations as in isolatesContainingMutations()
+                let mutationsStrings : [String] = mutationPatternString.components(separatedBy: CharacterSet(charactersIn: " ,")).filter { $0.count > 0}
+                var mutationPs : [MutationProtocol] = mutationsStrings.map { mutString in //Mutation(mutString: $0) }
+                    let mutParts = mutString.components(separatedBy: CharacterSet(charactersIn: pMutationSeparator))
+                    switch mutParts.count {
+                    case 2:
+                        return PMutation(mutString: mutString)
+                    default:
+                        return Mutation(mutString: mutString, vdb: vdb)
+                    }
+                }
+                mutationPs.sort { $0.pos < $1.pos }
+                var mutations : [Mutation] = []
+                
+                var nMutationSets : [[[Mutation]]] = []
+                var nMutationSetsWildcard : [Bool] = []
+                if vdb.nucleotideMode {
+                    let nuclRef : [UInt8] = vdb.referenceArray // nucleotideReference()
+                    let nuclChars : [UInt8] = [65,67,71,84] // A,C,G,T
+                    let dashChar : UInt8 = 45
+                    var nMutationSetsUsed : Bool = false
+                    for mutationP in mutationPs {
+                        var nMutations : [[Mutation]] = []
+                        let isWildcard : Bool = mutationP.aa == 42
+                        var protein : VDBProtein = VDBProtein.Spike
+                        var isPMutation : Bool = false
+                        if let pMutation = mutationP as? PMutation {
+                            protein = pMutation.protein
+                            isPMutation = true
+                        }
+                        let mutation : Mutation
+                        if let mut = mutationP as? Mutation {
+                            mutation = mut
+                        }
+                        else {
+                            mutation = Mutation(wt: mutationP.wt, pos: mutationP.pos, aa: mutationP.aa)
+                        }
+                        mutations.append(mutation)
+                        if mutationP.pos <= protein.length {
+                            if !(nuclChars.contains(mutation.wt) && nuclChars.contains(mutation.aa)) || isPMutation {
+                                if nuclRef.isEmpty {
+                                    print(vdb: vdb, "Error - protein mutations in nucleotide mode require the nucleotide reference file")
+                                    return []
+                                }
+                                var cdsBuffer: [UInt8] = Array(repeating: 0, count: 3)
+                                var possCodons : [[UInt8]] = []
+                                if mutation.aa != dashChar {
+                                    for n0 in nuclChars {
+                                        cdsBuffer[0] = n0
+                                        for n1 in nuclChars {
+                                            cdsBuffer[1] = n1
+                                            for n2 in nuclChars {
+                                                cdsBuffer[2] = n2
+                                                let tr : UInt8 = VDB.translateCodon(cdsBuffer)
+                                                if tr == mutation.aa {
+                                                    possCodons.append(cdsBuffer)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                else {
+                                    possCodons.append([dashChar,dashChar,dashChar])
+                                }
+                                
+                                let proteinStart : Int = protein.range.lowerBound
+                                let frameShift : Bool = protein == .NSP12
+                                var codonStart : Int = proteinStart + 3*(mutation.pos-1)
+
+                                if !frameShift || codonStart < 13468 {
+        //                            codonStart = mut.pos - ((mut.pos-protein.range.lowerBound) % 3)
+                                }
+                                else {
+        //                            codonStart = mut.pos - ((mut.pos-protein.range.lowerBound+1) % 3)
+                                    codonStart -= 1
+                                }
+                                
+                                let wtCodon : [UInt8] = Array(nuclRef[codonStart..<(codonStart+3)])
+                                let wtTrans : UInt8 = VDB.translateCodon(wtCodon)
+                                if mutation.wt == wtTrans {
+                                    for codon in possCodons {
+                                        var nMut : [Mutation] = []
+                                        for i in 0..<3 {
+                                            if codon[i] != wtCodon[i] {
+                                                nMut.append(Mutation(wt: wtCodon[i], pos: codonStart+i, aa: codon[i]))
+                                            }
+                                        }
+                                        if !nMut.isEmpty {
+                                            nMutations.append(nMut)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if !nMutations.isEmpty {
+                            nMutationSets.append(nMutations)
+                            nMutationSetsUsed = true
+                        }
+                        else {
+                            nMutationSets.append([[mutation]])
+                        }
+                        nMutationSetsWildcard.append(isWildcard)
+                    }
+                    if !nMutationSetsUsed {
+                        nMutationSets = []
+                    }
+                }
+                else {
+                    mutations = mutationsStrings.map { Mutation(mutString: $0, vdb: vdb) }
+                }
+                
+                
+                func clusterWithMut(_ node: PhTreeNode) {
+                    
+                    // whether the node contains at least n of the mutations in mutationsArray
+                    func containsMutations(_ mutationsArray : [Mutation], _ n: Int) -> Bool {
+                        if n == 0 {
+                            for mutation in mutationsArray {
+                                if !node.dMutations.contains(mutation) {
+                                    return false
+                                }
+                            }
+                        }
+                        else {
+                            var mutCounter : Int = 0
+                            for mutation in mutationsArray {
+                                if node.dMutations.contains(mutation) {
+                                    mutCounter += 1
+                                }
+                            }
+                            if mutCounter < n {
+                                return false
+                            }
+                        }
+                        return true
+                    }
+
+                    // whether the node contains at least n of the mutation sets in mutationsArray
+                    func containsMutationSets(_ mutationsArray : [[[Mutation]]], _ n: Int) -> Bool {
+                        let nn : Int
+                        if n == 0 {
+                            nn = mutationsArray.count
+                        }
+                        else {
+                            nn = n
+                        }
+                        var mutCounter : Int = 0
+                        for mutationSets in mutationsArray {
+                            for mutationSet in mutationSets {
+                                var mCounter : Int = 0
+                                for mutation in mutationSet {
+                                    if node.dMutations.contains(mutation) {
+                                        mCounter += 1
+                                    }
+                                }
+                                if mCounter == mutationSet.count {
+                                    mutCounter += 1
+                                    break
+                                }
+                            }
+                        }
+                        if mutCounter < nn {
+                            return false
+                        }
+                        return true
+                    }
+
+                    let containsMutation : Bool = nMutationSets.isEmpty ? containsMutations(mutations,0) : containsMutationSets(nMutationSets,0)  // node.dMutations.contains(mutation)
+                    if containsMutation {
+                        if let isolate = node.isolate {
+                            cluster.append(isolate)
+                        }
+                        else {
+                            let tmpIsolate = Isolate(country: "", state: "", date: tmpDate, epiIslNumber: node.id, mutations: node.mutations)
+                            tmpIsolate.pangoLineage = node.calculatedLineage
+                            cluster.append(tmpIsolate)
+                        }
+                    }
+                    else {
+                        for child in node.children {
+                            clusterWithMut(child)
+                        }
+                    }
+                }
+                
+                clusterWithMut(treeNode)
+                print(vdb: vdb, "Cluster with dMutation count = \(cluster.count)")
+                return cluster
+            }
+            
+            if identifier.contains(" ") {
+                let parts : [String] = identifier.components(separatedBy: " ")
+                if parts.count > 1, let tree = vdb.trees[parts[0]] {
+                    let mutString : String = parts.dropFirst().joined(separator: " ")
+                    if VDB.isPattern(mutString, vdb: vdb) {
+                        return clusterFromTree(tree, withDMutation: mutString)
+                    }
+                }
+            }
+#endif
+            if let cluster = vdb.clusters[identifier], propertyKey == nil {
                 return cluster
             }
             else if identifier.last == "]" {
                 let parts : [String] = identifier.dropLast().components(separatedBy: "[")
                 if parts.count == 2 {
-                    if let cluster = vdb.clusters[parts[0]] {
+                    if let cluster = vdb.clusters[parts[0]], propertyKey == nil {
                         var shift : Int = 0
                         var rParts : [String] = parts[1].components(separatedBy: "...")
                         if rParts.count == 1 {
@@ -16091,9 +16715,16 @@ indirect enum Expr {
                             }
                         }
                     }
+#if (VDB_EMBEDDED || VDB_TREE) && swift(>=1)
+                    if let tree = vdb.trees[parts[0]], let node_id = Int(parts[1]) {
+                        if let node = PhTreeNode.treeNodeWithId(rootTreeNode: tree, node_id: node_id), let  nodeCluster = clusterFromNode(node, propertyKey: propertyKey) {
+                            return nodeCluster
+                        }
+                    }
+#endif
                 }
             }
-            else {
+            else if propertyKey == nil {
                 return VDB.isolatesFromCountry(identifier, inCluster: vdb.isolates, vdb: vdb)
             }
         case let .Cluster(cluster):
@@ -16510,6 +17141,34 @@ indirect enum Expr {
     
 }
 
+enum VariableType {
+    case ClusterVar
+    case PatternVar
+    case ListVar
+    case TreeVar
+}
+
+// returns whether the identifier is available for assignment to the specified type
+func identifierAvailable(identifier: String, variableType: VariableType, vdb: VDB) -> Bool {
+    if variableType != .ClusterVar && vdb.clusters[identifier] != nil {
+        print(vdb: vdb, "Error - name \(identifier) is already defined as a cluster")
+        return false
+    }
+    if variableType != .PatternVar && vdb.patterns[identifier] != nil {
+        print(vdb: vdb, "Error - name \(identifier) is already defined as a pattern")
+        return false
+    }
+    if variableType != .ListVar && vdb.lists[identifier] != nil {
+        print(vdb: vdb, "Error - name \(identifier) is already defined as a list")
+        return false
+    }
+    if variableType != .TreeVar && vdb.trees[identifier] != nil {
+        print(vdb: vdb, "Error - name \(identifier) is already defined as a tree")
+        return false
+    }
+    return true
+}
+
 #if VDB_TEST
 extension VDB {
 
@@ -16534,6 +17193,7 @@ extension VDB {
         let displayTextWithColorSetting : Bool = displayTextWithColor
         let quietModeSetting : Bool = quietMode
         let listSpecificitySetting : Bool = listSpecificity
+        let treeDeltaModeSetting : Bool = treeDeltaMode
         let minimumPatternsCountSetting : Int = minimumPatternsCount
         let trendsLineageCountSetting : Int = trendsLineageCount
         let maxMutationsInFreqListSetting : Int = maxMutationsInFreqList
@@ -16678,6 +17338,7 @@ extension VDB {
         displayTextWithColor = displayTextWithColorSetting
         quietMode = quietModeSetting
         listSpecificity = listSpecificitySetting
+        treeDeltaMode = treeDeltaModeSetting
         minimumPatternsCount = minimumPatternsCountSetting
         trendsLineageCount = trendsLineageCountSetting
         maxMutationsInFreqList = maxMutationsInFreqListSetting
@@ -18387,6 +19048,9 @@ extension VDB {
         if num == 402123 {
             return "NC_045512"
         }
+        if num > 675999999 {
+            return "\(num)"
+        }
         let zeroChar : UInt8 = 48
         var partialAccNumber : Int = num % 1_000_000
         let rem : Int = num / 1_000_000
@@ -18416,13 +19080,18 @@ extension VDB {
             if first.isASCII, second.isASCII, let f1 = first.utf8.first, let f2 = second.utf8.first {
                 let p1 : Int = Int(f1 - 65)
                 let p2 : Int = Int(f2 - 65)
-                let epiIslNumber : Int = ((p1 + 26*p2) * 1_000_000) + partialAccNumber
-                return epiIslNumber
+                if p1 >= 0 && p2 >= 0 {
+                    let epiIslNumber : Int = ((p1 + 26*p2) * 1_000_000) + partialAccNumber
+                    return epiIslNumber
+                }
             }
+        }
+        if let num = Int(s) {
+            return num
         }
         return nil
     }
-    
+
     @discardableResult
     class func loadCluster(_ clusterName: String, fromFastaFile fileName: String, vdb: VDB, verbose: Bool = false) -> Double {
         if !vdb.nucleotideMode {
@@ -19846,7 +20515,7 @@ extension VDB {
         }
                         
         let yearBase : Int = 2019
-        let yearsMax : Int = 4
+        let yearsMax : Int = yearsMaxForDateCache
         var dateCache : [[[Date?]]] = Array(repeating: Array(repeating: Array(repeating: nil, count: 32), count: 13), count: yearsMax)
         // create Date objects faster using a cache
         func getDateFor(year: Int, month: Int, day: Int) -> Date {
@@ -20150,5 +20819,17 @@ else {
         }
     }
     VDB.loadAndTrimMutationDB_MP(inputFileName,trimmedFileName,extendN: trimExtendN, compress: trimAndCompress)
+}
+
+#endif
+
+#if VDB_TREE && !VDB_EMBEDDED
+final class VDBViewController {
+    func decrementTreeCounter() {
+    }
+}
+#endif
+#if !VDB_TREE && !VDB_EMBEDDED
+final class PhTreeNode {
 }
 #endif
