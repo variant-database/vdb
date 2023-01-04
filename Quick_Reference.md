@@ -92,6 +92,7 @@ Subscripts can be applied to cluster variables to extract one or more viruses.
 `paging`/`paging off`  
 `quiet`/`quiet off`  
 `listSpecificity`/`listSpecificity off`  
+`treeDeltaMode`/`treeDeltaMode off`  
 
 `minimumPatternsCount = `\<n>  
 `trendsLineageCount = `\<n>       alias `trends` \<n>  
