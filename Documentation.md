@@ -146,11 +146,16 @@ Lists the built-in and user-defined clusters.
 
 Lists the SARS-CoV-2 proteins and their gene positions.  
 <br />
-#### [`list`] `variants`
+#### [`list`] `variants` [\<cluster>]  
 
 Lists the WHO-designated variants.  
 <br />
+#### [`list`] `sequence` \<pattern>  
 
+Lists the reconstructed sequence for the specified pattern.  
+<br />
+
+#
 ## Other commands
 #### `sort` \<cluster>  
 
@@ -176,13 +181,13 @@ Loads the specified **vdb** database file.
 
 In nucleotide mode this removes extraneous 'N' bases from the mutation list of all viruses in the database. This trimmed version of the database can be saved to a file by the command `save world <filename>`.  
 <br />
-#### `char` \<Pango lineage>        alias `characteristics`  
+#### `char` \<Pango lineage>        aliases `characteristics`, `parent`, `info`  
 
 Prints characteristic (consensus) mutations of the specified lineage. Mutations are shown in bold if they are not present in the parent lineage consensus pattern. This command does not include sublineages in its analysis.  
 <br />
-#### `sublineages` \<Pango lineage>        alias `sub`  
+#### `sublineages` [`direct`] \<Pango lineage>        alias `sub`  
 
-Prints characteristic (consensus) mutations of the sublineages of the specified lineage. Mutations are shown in bold if they are not present in the parent lineage consensus pattern.  
+Prints characteristic (consensus) mutations of the sublineages of the specified lineage. Mutations are shown in bold if they are not present in the parent lineage consensus pattern. Optionally only list direct sublineages.  
 <br />
 #### `diff` \<cluster or pattern> [-] \<cluster or pattern>  
 
@@ -347,4 +352,4 @@ For cluster or list subscripts, this setting determines whether zero- or one-bas
 <br />
 
 <br />
-Version 3.1
+Version 3.2
