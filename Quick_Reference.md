@@ -45,7 +45,8 @@ Subscripts can be applied to cluster variables to extract one or more viruses.
 [`list`] `patterns`        lists built-in and user defined patterns  
 [`list`] `clusters`        lists built-in and user defined clusters  
 [`list`] `proteins`  
-[`list`] `variants`        lists WHO-designated variants
+[`list`] `variants` [\<cluster>]   lists WHO-designated variants  
+[`list`] `sequence` \<pattern>   lists reconstructed sequence for pattern  
 
 ## Other commands
 `sort` \<cluster>    (by date)  
