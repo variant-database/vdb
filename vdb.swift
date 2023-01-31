@@ -6,14 +6,14 @@
 //
 //  Created by Anthony West on 1/31/21.
 //  Copyright (c) 2022  Anthony West, Caltech
-//  Last modified 1/18/23
+//  Last modified 1/30/23
 
 import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
 
-let version : String = "3.2"
+let version : String = "3.3"
 let checkForVDBUpdate : Bool = true         // to inform users of updates; the updates are not downloaded
 let allowGitHubDownloads : Bool = true      // to download nucl. ref. and documentation, if missing
 let basePath : String = FileManager.default.currentDirectoryPath
@@ -38,6 +38,7 @@ let yearsMaxForDateCache : Int = 6
 let blankLineageNameAlias : String = "root"
 let wildcardChar : UInt8 = 42 // "*"
 let stopChar : UInt8 = 42 // "*"
+let nucleotideSearchOverrideString : String = "nuc"
 
 var trimMode : Bool = false
 var useStdInput : Bool = true
@@ -64,6 +65,11 @@ var clFileNames : [String] = []
 internal var mpTest : Int = mpNumberDefault
 #endif
 
+let epiToPublicFileName : String = "epiToPublic.tsv"
+let pbTreeSource : String = "https://hgdownload.soe.ucsc.edu/goldenPath/wuhCor1/UShER_SARS-CoV-2/"
+let pbTreeFileName : String = "public-latest.all.masked.pb"
+let pbMetadataFileName : String = "public-latest.metadata.tsv"
+
 #if !VDB_SERVER && swift(>=1)
 let serverMode : Bool = false
 let gisaidVirusName : String = ""
@@ -78,6 +84,10 @@ let gnuplotFontSize : Int = 13
 let gnuplotGraphSize : (Int,Int) = (800,500)
 let sessionTimeoutLimit : TimeInterval = 1200    // 20 minutes
 let timeoutCheckInterval : Int = 120
+enum DatabaseSource {
+    case VDB
+    case USHER
+}
 #endif
 
 #if !VDB_EMBEDDED && swift(>=1)
@@ -1693,6 +1703,12 @@ enum AccessionMode {
     case ncbi
 }
 
+enum NucleotideSearchMode {
+    case normal
+    case wildcard
+    case wildtype
+}
+
 // MARK: - keywords
 
 let listKeyword : String = "list"
@@ -1721,6 +1737,7 @@ let namedKeyword : String = "named"
 let lineageKeyword : String = "lineage"
 let lineagesKeyword : String = "lineages"
 let trendsKeyword : String = "trends"
+let trackKeyword : String = "track"
 let sampleKeyword : String = "sample"
 let listLineagesForKeyword : String = "listLineagesFor"
 let listTrendsForKeyword : String = "listTrendsFor"
@@ -1867,6 +1884,10 @@ public final class AtomicDict<Key: Hashable, Value>: CustomDebugStringConvertibl
     
     public func copyObject() -> AtomicDict<Key,Value> {
         return AtomicDict<Key,Value>(dict: self.copy())
+    }
+    
+    public var count: Int {
+        get { queue.sync { dictStorage.count } }
     }
     
 }
@@ -2403,7 +2424,12 @@ final class Isolate : Equatable, Hashable {
     func containsMutationsWithWildcard(_ mutationsArray : [Mutation], _ n: Int) -> Bool {
         if n == 0 {
             for mutation in mutationsArray {
-                if mutation.aa != wildcardChar {
+                if mutation.aa == mutation.wt {
+                    if mutations.contains(where: {$0.pos == mutation.pos}) {
+                        return false
+                    }
+                }
+                else if mutation.aa != wildcardChar {
                     if !mutations.contains(mutation) {
                         return false
                     }
@@ -2418,7 +2444,12 @@ final class Isolate : Equatable, Hashable {
         else {
             var mutCounter : Int = 0
             for mutation in mutationsArray {
-                if mutation.aa != wildcardChar {
+                if mutation.aa == mutation.wt {
+                    if !mutations.contains(where: {$0.pos == mutation.pos}) {
+                        mutCounter += 1
+                    }
+                }
+                else if mutation.aa != wildcardChar {
                     if mutations.contains(mutation) {
                         mutCounter += 1
                     }
@@ -2495,7 +2526,7 @@ final class Isolate : Equatable, Hashable {
     }
 
     // whether the isolate contains at least n of the mutation sets in mutationsArray
-    func containsMutationSetsWithWildcard(_ mutationsArray: [[[Mutation]]], _ wildcards: [Bool], _ n: Int) -> Bool {
+    func containsMutationSetsWithWildcard(_ mutationsArray: [[[Mutation]]], _ wildcards: [NucleotideSearchMode], _ n: Int) -> Bool {
         let nn : Int
         if n == 0 {
             nn = mutationsArray.count
@@ -2507,7 +2538,12 @@ final class Isolate : Equatable, Hashable {
         for (setIndex,mutationSets) in mutationsArray.enumerated() {
             let checkCodon : Bool = mutationSets[0].count == 3
             if !checkCodon {
-                if mutationSets[0][0].aa != wildcardChar {
+                if mutationSets[0][0].aa == mutationSets[0][0].wt {
+                    if !mutations.contains(where: {$0.pos == mutationSets[0][0].pos}) {
+                        mutCounter += 1
+                    }
+                }
+                else if mutationSets[0][0].aa != wildcardChar {
                     if mutations.contains(mutationSets[0][0]) {
                         mutCounter += 1
                     }
@@ -2538,19 +2574,26 @@ final class Isolate : Equatable, Hashable {
                         codon[2] = m.aa
                     }
                 }
-                if !wildcards[setIndex] {
+                switch wildcards[setIndex] {
+                case .normal:
                     for mutationSet in mutationSets {
                         if mutationSet[0].aa == codon[0] && mutationSet[1].aa == codon[1] && mutationSet[2].aa == codon[2] {
                             mutCounter += 1
                             break
                         }
                     }
-                }
-                else {
+                case .wildcard:
                     mutCounter += 1
                     for mutationSet in mutationSets {
                         if mutationSet[0].aa == codon[0] && mutationSet[1].aa == codon[1] && mutationSet[2].aa == codon[2] {
                             mutCounter -= 1
+                            break
+                        }
+                    }
+                case .wildtype:
+                    for mutationSet in mutationSets {
+                        if mutationSet[0].aa == codon[0] && mutationSet[1].aa == codon[1] && mutationSet[2].aa == codon[2] {
+                            mutCounter += 1
                             break
                         }
                     }
@@ -2789,6 +2832,7 @@ enum ListType {
     case variants
     case list
     case lineageFrequenciesByLocation
+    case tracking
     case empty
 }
 
@@ -3141,6 +3185,7 @@ final class VDB {
                 let del : Bool = aa == 108  // l (last char of 'del')
                 let stop : Bool = aa == 112 // p (last char of 'stop')
                 var endPos : Int = endPos
+                let dashChar : UInt8 = 45
                 if del {
                     aa = dashChar
                     endPos -= 2
@@ -4846,9 +4891,15 @@ final class VDB {
     
     class func vdbOrBasePath() -> String {
 #if VDB_EMBEDDED && swift(>=1)
+#if !os(iOS)
         if let vdbPath : String = UserDefaults_standard.string(forKey: vdbDataPathKey) {
             return vdbPath
         }
+#else
+        if let path = (FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).last?.path) {
+            return path
+        }
+#endif
 #endif
         return basePath
     }
@@ -6572,7 +6623,7 @@ final class VDB {
         var definedClusters : [[Isolate]] = Array(repeating: [], count: lineageNames.count)
         var definedClusterNumbers : [Int] = []
         var definedClusterMembership : [[Bool]] = []
-        let maxAccNumber : Int = 15_000_000
+        let maxAccNumber : Int = 20_000_000
         var nonClusterNumbers : [Int] = []
         for i in 0..<lineagesToTrackPlus {
             if (i < lineagesToTrack) && (vdb.clusters[lineageNames[i]] != nil) {
@@ -7175,6 +7226,225 @@ plot
         let list : List = List(type: .trends, command: vdb.currentCommand, items: listItems, baseCluster: cluster)
         return list
     }
+    
+    // follows the frequencies of a pattern's mutations over time for a specified cluster
+    class func trackPattern(_ mutations: [Mutation]?, _ mutationsString: String?, forCluster cluster: [Isolate], vdb: VDB, quiet: Bool = false) -> List {
+        if (mutations == nil && mutationsString == nil) || (mutations != nil && mutationsString != nil) || cluster.isEmpty {
+            print(vdb: vdb, "Error - invalid input for track pattern command")
+            return EmptyList
+        }
+        // use [Mutation] for protein mode, [String] for nucleotide mode
+        var mutations : [Mutation] = (mutations ?? []).sorted { $0.pos < $1.pos }
+        var mutationStrings : [String] = (mutationsString ?? "").components(separatedBy: CharacterSet(charactersIn: " ,")).filter { $0.count > 0}
+        if vdb.nucleotideMode && !mutations.isEmpty {
+            mutationStrings = mutations.map { $0.string(vdb: vdb) }
+            mutations = []
+        }
+        else if !vdb.nucleotideMode && !mutationStrings.isEmpty {
+            mutations = mutationStrings.map { Mutation(mutString: $0, vdb: vdb) }.sorted { $0.pos < $1.pos }
+            mutationStrings = []
+        }
+        let mCount : Int = mutations.count + mutationStrings.count
+        if mCount == 0 {
+            print(vdb: vdb, "Error - invalid input for track pattern command")
+            return EmptyList
+        }
+        print(vdb: vdb, "tracking pattern with \(mCount) mutation\(mCount > 1 ? "s" : "") for \(nf(cluster.count)) isolates")
+
+        // 1st month = Dec 2019      last month = current month
+        let cal : Calendar = Calendar.current
+        let currentDate : Date = Date()
+        let currentDateComp : DateComponents = cal.dateComponents([.year, .month, .weekOfYear, .yearForWeekOfYear], from: currentDate)
+        var weekNames : [String] = []
+        var weekDates : [(Date,Date)] = []
+        let numberOfWeeks : Int
+        // first date 2019-12-24  week 52  2019    week 53 only in 2022
+        if let currentYearForWeekOfYear = currentDateComp.yearForWeekOfYear, let currentWeek = currentDateComp.weekOfYear {
+            let yearDiff : Int = currentYearForWeekOfYear - 2019
+            numberOfWeeks = 1 + 52 * (yearDiff-1) + currentWeek // + (currentYearForWeekOfYear > 2022 ? 1 : 0)
+            if let tmpDate = dateFormatter.date(from:"2019-12-22") {    // was 12-24
+                for i in 0...numberOfWeeks {
+                    let nextDate : Date = tmpDate.addWeek(n: i)
+                    let dateString : String = dateFormatter.string(from: nextDate)
+                    weekNames.append(dateString)
+                    weekDates.append((nextDate,nextDate.addWeek(n: 1)))
+                }
+            }
+        }
+        else {
+            print(vdb: vdb, "Error - could not obtain current date")
+            return EmptyList
+        }
+        var totalCountsByWeek : [Int] = Array(repeating: 0, count: numberOfWeeks)
+        var countOfMutationByWeek : [[Int]] = Array(repeating: Array(repeating: 0, count: numberOfWeeks), count: mCount)
+        var mutationsCountByWeek : [[Int]] = Array(repeating: Array(repeating: 0, count: mCount+1), count: numberOfWeeks)
+        var skippedIsolates : Int = 0
+        var earliestWeek : Int = Int.max
+        var latestWeek : Int = 0
+        if !vdb.nucleotideMode {
+            for iso in cluster {
+                let week : Int = iso.weekNumber()
+                if week < 0 || week >= numberOfWeeks {
+                    skippedIsolates += 1
+                    continue
+                }
+                if week < earliestWeek {
+                    earliestWeek = week
+                }
+                if week > latestWeek {
+                    latestWeek = week
+                }
+                totalCountsByWeek[week] += 1
+                var totalMutationCount : Int = 0
+                var patternIndex : Int = 0
+                var isoIndex : Int = 0
+                while true {
+                    if patternIndex < mutations.count && isoIndex < iso.mutations.count {
+                        let selfPos : Int = mutations[patternIndex].pos
+                        let isoPos : Int = iso.mutations[isoIndex].pos
+                        if selfPos == isoPos {
+                            if mutations[patternIndex].aa == iso.mutations[isoIndex].aa || mutations[patternIndex].aa == wildcardChar {
+                                totalMutationCount += 1
+                                countOfMutationByWeek[patternIndex][week] += 1
+                            }
+                            // conditional advance of isoIndex to allow tracking of multiple mutations at the same position
+                            if patternIndex+1 == mutations.count || mutations[patternIndex+1].pos != selfPos {
+                                isoIndex += 1
+                            }
+                            patternIndex += 1
+                        }
+                        else if selfPos > isoPos {
+                            isoIndex += 1
+                        }
+                        else {  // selfPos < isoPos
+                            patternIndex += 1
+                        }
+                    }
+                    else if patternIndex < mutations.count {
+                        patternIndex += 1
+                    }
+                    else if isoIndex < iso.mutations.count {
+                        isoIndex += 1
+                    }
+                    else {
+                        break
+                    }
+                }
+                mutationsCountByWeek[week][totalMutationCount] += 1
+            }
+        }
+        else {
+            var goodCluster : [Isolate] = []
+            for iso in cluster {
+                let week : Int = iso.weekNumber()
+                if week < 0 || week >= numberOfWeeks {
+                    skippedIsolates += 1
+                    continue
+                }
+                if week < earliestWeek {
+                    earliestWeek = week
+                }
+                if week > latestWeek {
+                    latestWeek = week
+                }
+                goodCluster.append(iso)
+                totalCountsByWeek[week] += 1
+            }
+            var totalMutationCountDict : [Int:Int] = [:]
+            for (patternIndex, mutationString) in mutationStrings.enumerated() {
+                let isoWithMutation : [Isolate] = VDB.isolatesContainingMutations(mutationString, inCluster: goodCluster, vdb: vdb, quiet: true)
+//                let isoWithoutMutation : [Isolate] = Array(cluster1Set.subtracting(isoWithMutation))
+                for iso in isoWithMutation {
+                    countOfMutationByWeek[patternIndex][iso.weekNumber()] += 1
+                    totalMutationCountDict[iso.epiIslNumber, default: 0] += 1
+                }
+            }
+            for iso in goodCluster {
+                let totalMutationCount : Int = totalMutationCountDict[iso.epiIslNumber, default: 0]
+                mutationsCountByWeek[iso.weekNumber()][totalMutationCount] += 1
+            }
+        }
+        
+        if skippedIsolates > 0 {
+            print(vdb: vdb, "skipped \(nf(skippedIsolates)) isolates out of \(nf(cluster.count)) due to invalid collection date")
+        }
+        
+        var fractionWithMutationByWeek : [[Double]] = Array(repeating: Array(repeating: 0, count: numberOfWeeks), count: mCount)
+        var fractionMutationsByWeek : [[Double]] = Array(repeating: Array(repeating: 0, count: mCount+1), count: numberOfWeeks)
+        for w in 0..<numberOfWeeks {
+            if totalCountsByWeek[w] > 0 {
+                for mIndex in 0..<mCount {
+                    fractionWithMutationByWeek[mIndex][w] = Double(100*countOfMutationByWeek[mIndex][w]) / Double(totalCountsByWeek[w])
+                }
+                for countNumber in 0...mCount {
+                    fractionMutationsByWeek[w][countNumber] = Double(100*mutationsCountByWeek[w][countNumber]) / Double(totalCountsByWeek[w])
+                }
+            }
+        }
+
+        // Table 1. Fraction of isolates with each mutation by week
+        var table1Strings : [[String]] = [["Week"]]
+        var listItems1 : [[CustomStringConvertible]] = []
+        if !vdb.nucleotideMode {
+            table1Strings[0].append(contentsOf: mutations.map { VDB.stringForMutations([$0], vdb: vdb)})
+        }
+        else {
+            table1Strings[0].append(contentsOf: mutationStrings)
+        }
+        listItems1.append(table1Strings[0])
+        for w in 0..<numberOfWeeks {
+            var aListItem : [CustomStringConvertible] = []
+            let dateRangeStart : Date
+            let dateRangeEnd : Date
+            (dateRangeStart,dateRangeEnd) = weekDates[w]
+            aListItem.append(DateRangeStruct(description:weekNames[w], start: dateRangeStart, end: dateRangeEnd))
+            var nextLine : [String] = [weekNames[w]]
+            for i in 0..<mCount {
+                nextLine.append(String(format:"%5.3f",fractionWithMutationByWeek[i][w]))
+                aListItem.append(fractionWithMutationByWeek[i][w])
+            }
+            if w >= earliestWeek && w <= latestWeek {
+                table1Strings.append(nextLine)
+            }
+            listItems1.append(aListItem)
+        }
+        if !quiet {
+            let title : String = "% Fraction of isolates with each mutation by week"
+            var leftAlign : [Bool] = Array(repeating: false, count: mCount+1)
+            leftAlign[0] = true
+            vdb.printTable(array: table1Strings, title: title, leftAlign: leftAlign, colors: [], titleRowUsed: true)
+        }
+
+        // Table 2. Fraction of isolates with each count of mutations by week
+        var table2Strings : [[String]] = [["Week"]]
+        var listItems2 : [[CustomStringConvertible]] = []
+        for i in 0...mCount {
+            table2Strings[0].append("\(i)")
+        }
+        for w in 0..<numberOfWeeks {
+            var aListItem : [CustomStringConvertible] = []
+            let dateRangeStart : Date
+            let dateRangeEnd : Date
+            (dateRangeStart,dateRangeEnd) = weekDates[w]
+            aListItem.append(DateRangeStruct(description:weekNames[w], start: dateRangeStart, end: dateRangeEnd))
+            var nextLine : [String] = [weekNames[w]]
+            nextLine.append(contentsOf: fractionMutationsByWeek[w].map { String(format:"%5.3f",$0) })
+            aListItem.append(contentsOf: fractionMutationsByWeek[w])
+            if w >= earliestWeek && w <= latestWeek {
+                table2Strings.append(nextLine)
+            }
+            listItems2.append(aListItem)
+       }
+        if !quiet {
+            let title : String = "% Fraction of isolates with each count of mutations by week"
+            var leftAlign : [Bool] = Array(repeating: false, count: mCount+2)
+            leftAlign[0] = true
+            vdb.printTable(array: table2Strings, title: title, leftAlign: leftAlign, colors: [], titleRowUsed: true)
+        }
+ 
+        let list : List = List(type: .tracking, command: vdb.currentCommand, items: [[listItems1,listItems2],[earliestWeek,latestWeek]], baseCluster: cluster)
+        return list
+    }
 
     // returns a string describing the most frequent lineage in the given cluster
     class func lineageSummary(_ cluster: [Isolate]) -> String {
@@ -7544,10 +7814,20 @@ plot
     // if negate is true, returns isolates not having the mutation pattern
     class func isolatesContainingMutations(_ mutationPatternString: String, inCluster isolates:[Isolate], vdb: VDB, quiet: Bool = false, negate: Bool = false, n: Int = 0, coercePMutationString: Bool = false) -> [Isolate] {
         let mutationsStrings : [String] = mutationPatternString.components(separatedBy: CharacterSet(charactersIn: " ,")).filter { $0.count > 0}
+        let nuclOverride : [Bool]
+        if vdb.nucleotideMode {
+            nuclOverride = mutationsStrings.map { String($0.prefix(3)) ~~ nucleotideSearchOverrideString }
+        }
+        else {
+            nuclOverride = []
+        }
         var mutationPs : [MutationProtocol] = mutationsStrings.map { mutString in //Mutation(mutString: $0) }
             let mutParts = mutString.components(separatedBy: CharacterSet(charactersIn: pMutationSeparator))
             switch mutParts.count {
             case 2:
+                if mutParts[0] ~~ nucleotideSearchOverrideString {
+                    return Mutation(mutString: mutParts[1], vdb: vdb)
+                }
                 return PMutation(mutString: mutString)
             default:
                 return Mutation(mutString: mutString, vdb: vdb)
@@ -7557,15 +7837,24 @@ plot
         var mutations : [Mutation] = []
         
         var nMutationSets : [[[Mutation]]] = []
-        var nMutationSetsWildcard : [Bool] = []
+        var nMutationSetsWildcard : [NucleotideSearchMode] = []
         if vdb.nucleotideMode {
             let nuclRef : [UInt8] = vdb.referenceArray // nucleotideReference()
             let dashChar : UInt8 = 45
             let nuclChars : [UInt8] = [65,67,71,84,wildcardChar,dashChar] // A,C,G,T,*,-
             var nMutationSetsUsed : Bool = false
-            for mutationP in mutationPs {
+            for (mutationPIndex,mutationP) in mutationPs.enumerated() {
                 var nMutations : [[Mutation]] = []
-                let isWildcard : Bool = mutationP.aa == wildcardChar
+                let isWildcard : NucleotideSearchMode
+                if mutationP.aa == wildcardChar {
+                    isWildcard = .wildcard
+                }
+                else if mutationP.aa == mutationP.wt {
+                    isWildcard = .wildtype
+                }
+                else {
+                    isWildcard = .normal
+                }
                 var protein : VDBProtein = VDBProtein.Spike
                 var isPMutation : Bool = false
                 if let pMutation = mutationP as? PMutation {
@@ -7581,14 +7870,18 @@ plot
                 }
                 mutations.append(mutation)
                 if mutationP.pos <= protein.length {
-                    if !(nuclChars.contains(mutation.wt) && nuclChars.contains(mutation.aa)) || isPMutation {
+                    let tmpReferenceArray = [UInt8](VDB.ref.utf8)
+                    if tmpReferenceArray[mutationP.pos-1] == mutation.wt {
+                        isPMutation = true
+                    }
+                    if !nuclOverride[mutationPIndex] && (!(nuclChars.contains(mutation.wt) && nuclChars.contains(mutation.aa)) || isPMutation) {
                         if nuclRef.isEmpty {
                             print(vdb: vdb, "Error - protein mutations in nucleotide mode require the nucleotide reference file")
                             return []
                         }
                         var cdsBuffer: [UInt8] = Array(repeating: 0, count: 3)
                         var possCodons : [[UInt8]] = []
-                        let aaToMatch : UInt8 = !isWildcard ? mutation.aa : mutation.wt
+                        let aaToMatch : UInt8 = isWildcard == .normal ? mutation.aa : mutation.wt
                         if aaToMatch != dashChar {
                             for n0 in nuclChars[0..<4] {
                                 cdsBuffer[0] = n0
@@ -7596,7 +7889,7 @@ plot
                                     cdsBuffer[1] = n1
                                     for n2 in nuclChars[0..<4] {
                                         cdsBuffer[2] = n2
-                                        let tr : UInt8 = translateCodon(cdsBuffer)
+                                        let tr : UInt8 = VDB.translateCodon(cdsBuffer)
                                         if tr == aaToMatch {
                                             possCodons.append(cdsBuffer)
                                         }
@@ -7621,14 +7914,12 @@ plot
                         }
                         
                         let wtCodon : [UInt8] = Array(nuclRef[codonStart..<(codonStart+3)])
-                        let wtTrans : UInt8 = translateCodon(wtCodon)
+                        let wtTrans : UInt8 = VDB.translateCodon(wtCodon)
                         if mutation.wt == wtTrans {
                             for codon in possCodons {
                                 var nMut : [Mutation] = []
                                 for i in 0..<3 {
-//                                    if codon[i] != wtCodon[i] {
-                                        nMut.append(Mutation(wt: wtCodon[i], pos: codonStart+i, aa: codon[i]))
-//                                    }
+                                    nMut.append(Mutation(wt: wtCodon[i], pos: codonStart+i, aa: codon[i]))
                                 }
                                 if !nMut.isEmpty {
                                     nMutations.append(nMut)
@@ -7659,10 +7950,10 @@ plot
         
         let searchWithWildCard : Bool
         if nMutationSets.isEmpty {
-            searchWithWildCard = mutations.contains(where: {$0.aa == wildcardChar}) //reduce(false, {$0 || $1.aa == wildcardChar})
+            searchWithWildCard = mutations.contains(where: {$0.aa == wildcardChar}) || mutations.contains(where: {$0.aa == $0.wt})  //reduce(false, {$0 || $1.aa == wildcardChar})
         }
         else {
-            searchWithWildCard = nMutationSetsWildcard.contains(true)
+            searchWithWildCard = nMutationSetsWildcard.contains(.wildcard) || nMutationSetsWildcard.contains(.wildtype)
         }
         
         let mut_isolates : [Isolate]
@@ -7732,6 +8023,7 @@ plot
                     vdb.printTable(array: tableStrings, title: "", leftAlign: [true,true,false], colors: [], titleRowUsed: false)
                 }
                 if coercePMutationString {
+                    bestSet = bestSet.filter { $0.aa != $0.wt}
                     print(vdb: vdb, "Mutation \(mutationPatternString) converted to \(stringForMutations(bestSet, vdb: vdb))   fraction: \(String(format: "%6.4f", bestFrac*100.0))")
                     let tmpIsolate : Isolate = Isolate(country: "", state: "", date: Date(), epiIslNumber: 0, mutations: bestSet)
                     return [tmpIsolate]
@@ -7866,9 +8158,7 @@ plot
         else {
             nameUC = name
         }
-        if let aliasedName = vdb.aliasDict[nameUC] {
-            nameUC = aliasedName
-        }
+        nameUC = standardLineageNameForLineage(nameUC, vdb: vdb, quiet: quiet)
         let wildcardFound : Bool = nameUC.last == "*"
         if wildcardFound {
             nameUC = String(nameUC.dropLast())
@@ -8588,24 +8878,58 @@ plot
         return lineageNames
     }
     
-    // prints the consensus mutation pattern of a given lineage
-    //   indicates which mutations are new to the lineage
-    class func characteristicsOfLineage(_ lineageName: String, inCluster isolates:[Isolate], vdb: VDB) {
+    class func standardLineageNameForLineage(_ lineageName: String, vdb: VDB, quiet: Bool, verbose: Bool = false) -> String {
         var lineageName : String = lineageName.uppercased()
+        var variantName : Bool = false
         for (key,value) in VDB.whoVariants {
             if lineageName ~~ key {
                 let lNames : [String] = value.0.components(separatedBy: " + ")
                 lineageName = lNames[0]
                 let withSublineages : [String] = VDB.sublineagesOfLineage(lineageName, vdb: vdb)
-                if lNames.count > 1 || withSublineages.count > 1 {
+                if (lNames.count > 1 || withSublineages.count > 1) && !quiet {
                     print(vdb: vdb, "Using \(lineageName) as representative of variant \(key)")
                 }
+                variantName = true
+            }
+        }
+        let lineageDotCount : Int = lineageName.filter{ $0 == "." }.count
+        if lineageDotCount > 3 {
+            let stdLineageName = standardAliasedNameFor(lineageName, vdb: vdb)
+            if stdLineageName != lineageName {
+                if !quiet {
+                    print(vdb: vdb, "Lineage \(lineageName) is known as lineage \(stdLineageName)")
+                }
+                lineageName = stdLineageName
             }
         }
         if let aliasedName = vdb.aliasDict[lineageName] {
-            print(vdb: vdb, "Lineage \(lineageName) is an alias for lineage \(aliasedName)")
-            lineageName = aliasedName
+            let lineageName2 = standardizedNameForLineage(aliasedName, vdb: vdb)
+            let lineageName3 = standardAliasedNameFor(lineageName2, vdb: vdb)
+            if !quiet {
+                print(vdb: vdb, "Lineage \(lineageName) is an alias for lineage \(lineageName3)")
+            }
+//            print(vdb: vdb, "aliasedName = \(aliasedName)")
+//            print(vdb: vdb, "lineageName2 = \(lineageName2)")
+//            print(vdb: vdb, "lineageName3 = \(lineageName3)")
+            lineageName = lineageName3
         }
+        if verbose {
+            if !variantName {
+                let fullName : String = fullLineageName(lineageName, vdb: vdb)
+                for (key,value) in VDB.whoVariants {
+                    if fullName.contains(value.0) {
+                        print(vdb: vdb,"Lineage \(lineageName) is part of the \(key) variant")
+                    }
+                }
+            }
+        }
+        return lineageName
+    }
+    
+    // prints the consensus mutation pattern of a given lineage
+    //   indicates which mutations are new to the lineage
+    class func characteristicsOfLineage(_ lineageName: String, inCluster isolates:[Isolate], vdb: VDB) {
+        let lineageName : String = standardLineageNameForLineage(lineageName, vdb: vdb, quiet: false, verbose: true)
         let lineage : [Isolate] = isolates.filter { $0.pangoLineage ~~ lineageName }
         if lineage.isEmpty {
             if !vdb.lineageArray.contains(lineageName) {
@@ -8613,11 +8937,14 @@ plot
                 return
             }
         }
+        let sublineages : [Isolate] = isolatesInLineage(lineageName+"*", inCluster: isolates, vdb: vdb, quiet: true)
         let dealiasedName : String = dealiasedLineageNameFor(lineageName, vdb: vdb)
         if lineageName != dealiasedName {
             print(vdb: vdb, "de-aliased lineage name of \(lineageName): \(dealiasedName)")
         }
-        print(vdb: vdb, "Number of viruses in lineage \(lineageName): \(lineage.count)")
+        var tableStrings : [[String]] = []
+        tableStrings.append(["Number of viruses in lineage \(lineageName)","\(nf(lineage.count))"])
+        tableStrings.append(["Number of viruses in sublineages of \(lineageName)","\(nf(sublineages.count-lineage.count))"])
         let (parentLineageName,parentLineage) : (String,[Isolate]) = parentLineageFor(lineageName, inCluster: isolates, vdb: vdb)
         if lineageName.first == "X", let parents = vdb.recombDict[lineageName] {
             var secondParents : String = ""
@@ -8626,7 +8953,8 @@ plot
             }
             print(vdb: vdb, "Recombinant parents: \(parents[0])\(secondParents)")
         }
-        print(vdb: vdb, "Number of viruses in parent lineage \(parentLineageName): \(parentLineage.count)")
+        tableStrings.append(["Number of viruses in parent lineage \(parentLineageName)","\(nf(parentLineage.count))"])
+        vdb.printTable(array: tableStrings, title: "", leftAlign: [true,false], colors: [], titleRowUsed: false, printBlankLine: false)
         if lineage.isEmpty {
             print(vdb: vdb, "Error - unable to calculate consensus for \(lineageName) without any sequences")
             return
@@ -8671,21 +8999,8 @@ plot
         if directOnly {
             lineageName = lineageName.replacingOccurrences(of: "DIRECT ", with: "")
         }
-        for (key,value) in VDB.whoVariants {
-            if lineageName ~~ key {
-                let lNames : [String] = value.0.components(separatedBy: " + ")
-                lineageName = lNames[0]
-                let withSublineages : [String] = VDB.sublineagesOfLineage(lineageName, vdb: vdb)
-                if lNames.count > 1 || withSublineages.count > 1 {
-                    print(vdb: vdb, "Using \(lineageName) as representative of variant \(key)")
-                }
-            }
-        }
-        if let aliasedName = vdb.aliasDict[lineageName] {
-            print(vdb: vdb, "Lineage \(lineageName) is an alias for lineage \(aliasedName)")
-            lineageName = aliasedName
-        }
-        
+        lineageName = standardLineageNameForLineage(lineageName, vdb: vdb, quiet: false)
+
         func mostFrequentLocation(_ cluster: [Isolate]) -> String {
             var location : String = ""
             let countryList : List = listCountries(cluster, vdb: vdb, quiet: true)
@@ -8712,7 +9027,7 @@ plot
             }
         }
         let sublineages : [(String,[Isolate])] = sublineagesOf(lineageName, directOnly: directOnly, vdb: vdb)
-        var tableStrings : [[String]] = [["Lineage","Count","Primary Location"]]
+        var tableStrings : [[String]] = [["Lineage","Count","Location with Highest Count"]]
         tableStrings.append(["\(vdb.TColor.lightMagenta)\(lineageName)\(vdb.TColor.reset)",nf(lineage.count),mostFrequentLocation(lineage)])
         for sublineage in sublineages {
             tableStrings.append(["\(vdb.TColor.lightGreen)\(sublineage.0)\(vdb.TColor.reset)",nf(sublineage.1.count),mostFrequentLocation(sublineage.1)])
@@ -9311,6 +9626,17 @@ plot
         proteinMutationsForIsolate(tmpIsolate,true,vdb:vdb)
     }
     
+    // add wildcard to incomplete mutations
+    class func cleanMutationsString(_ mutationsString: String) -> String {
+        var mutationStrings : [String] = mutationsString.replacingOccurrences(of: ".", with: " ").components(separatedBy: CharacterSet(charactersIn: " ,")).filter { $0.count > 0}
+        for i in 0..<mutationStrings.count {
+            if let last = mutationStrings[i].last, last >= "0", last <= "9" {
+                mutationStrings[i].append(Character(UnicodeScalar(wildcardChar)))
+            }
+        }
+        return mutationStrings.joined(separator:" ")
+    }
+    
     // load a saved cluster from a file, converting protein/nucl. if necessary
     class func loadCluster(_ clusterName: String, fromFile fileName: String, vdb: VDB) {
         var clusterName : String = clusterName
@@ -9564,6 +9890,7 @@ plot
                 file = "global.tree"
             }
         }
+#if !os(iOS)
         if file.lowercased() == "mat" || file.lowercased() == "matv" {
             let _ = autoreleasepool { () -> Void in
                 let mutAnnotatedTree : PhTreeNode? = VDB.loadMutationAnnotatedTree(pbTreeFileName, expandTree: true, createIsolates: true, printMutationCounts: false, compareWithIsolates: false, quiet: file.count == 3, vdb: vdb)
@@ -9577,6 +9904,7 @@ plot
             }
             return
         }
+#endif
         if file.contains("global.") {
             do {
                 rootTreeNode = try PhTreeNode.loadTree(basePath: vdbPath)
@@ -10748,8 +11076,9 @@ plot
                 return false
             }
             var part = part
-            var pMutSpike : Bool = false
+            var pMutSpike : Bool = true
             var pMut : Bool = false
+            var nucleotideSearchOverride : Bool = false
             if vdb.nucleotideMode {
                 let subparts : [String] = part.components(separatedBy: CharacterSet(charactersIn: pMutationSeparator))
                 if subparts.count == 2 {
@@ -10759,7 +11088,8 @@ plot
                     }
                     pMutSpike = pName == "Spike"
                     pMut = true
-                    if VDBProtein(pName: pName) == nil {
+                    nucleotideSearchOverride = pName ~~ nucleotideSearchOverrideString
+                    if VDBProtein(pName: pName) == nil && !nucleotideSearchOverride {
                         return false
                     }
                     part = subparts[1]
@@ -10824,11 +11154,15 @@ plot
             if vdb.nucleotideMode {
                 let nuclChars : [UInt8] = [65,67,71,84,wildcardChar,dashChar] // A,C,G,T,*,-
                 if pos <= VDB.ref.count {
-                    if !(nuclChars.contains(firstChar) && nuclChars.contains(lastChar)) || pMut {
+                    let tmpReferenceArray = [UInt8](VDB.ref.utf8)
+                    if tmpReferenceArray[pos-1] == firstChar {
+                        pMut = true
+                    }
+                    if !nucleotideSearchOverride && (!(nuclChars.contains(firstChar) && nuclChars.contains(lastChar)) || pMut) {
                         if pMutSpike {
-                            let tmpReferenceArray = [UInt8](VDB.ref.utf8)
                             if tmpReferenceArray[pos-1] != firstChar {
                                 print(vdb: vdb, "Error - reference position \(pos) is \(Character(UnicodeScalar(tmpReferenceArray[pos-1]))) not \(Character(UnicodeScalar(firstChar)))")
+                                return false
                             }
                         }
                         return true
@@ -10837,6 +11171,7 @@ plot
             }
             if !vdb.referenceArray.isEmpty && vdb.referenceArray[pos] != firstChar {
                 print(vdb: vdb, "Error - reference position \(pos) is \(Character(UnicodeScalar(vdb.referenceArray[pos]))) not \(Character(UnicodeScalar(firstChar)))")
+                return false
             }
         }
         return true
@@ -11375,6 +11710,7 @@ plot
             isolates = VDB.loadMutationDB_MP(fileName, mp_number: mpNumber, vdb: self)
         }
         else {
+#if !os(iOS)
             let _ = autoreleasepool { () -> Void in
                 treeLoadingInfo.databaseSource = .USHER
                 isolates = VDB.loadPBMetadataDBTSV_MP(pbMetadataFileName, loadMetadataOnly: false, quiet: true, vdb: self)
@@ -11385,6 +11721,7 @@ plot
                     print(vdb: self, "Tree \(pbTreeIdentifier) assigned to mutation annotated tree")
                 }
             }
+#endif
         }
 #endif
 
@@ -11525,7 +11862,7 @@ plot
 #endif
     }
     
-    func printTable(array: [[String]], title: String, leftAlign: [Bool], colors:[String], titleRowUsed: Bool = true, maxColumnWidth: Int = 60) {
+    func printTable(array: [[String]], title: String, leftAlign: [Bool], colors:[String], titleRowUsed: Bool = true, maxColumnWidth: Int = 60, printBlankLine: Bool = true) {
         if array.isEmpty {
             return
         }
@@ -11549,7 +11886,9 @@ plot
                 columnWidth[i] += spacing
             }
         }
-        print(vdb: self, "")
+        if printBlankLine {
+            print(vdb: self, "")
+        }
         if !title.isEmpty {
             print(vdb: self, title)
             print(vdb: self, "")
@@ -11674,7 +12013,7 @@ plot
     func offerCompletions(_ offer: Bool, _ ln: LineNoise?) {
         if offer {
             var countriesStates : [String] = []
-            var completions : [String] = [beforeKeyword,afterKeyword,namedKeyword,lineageKeyword,consensusKeyword,patternsKeyword,countriesKeyword,statesKeyword,trendsKeyword,monthlyKeyword,weeklyKeyword,"clusters","proteins","history","settings","includeSublineages","excludeSublineages","simpleNuclPatterns","excludeNFromCounts","sixel","trendGraphs","stackGraphs","completions","displayTextWithColor",minimumPatternsCountKeyword,trendsLineageCountKeyword,containingKeyword,"group","reset",variantsKeyword,sequenceKeyword,maxMutationsInFreqListKeyword,"listSpecificity","treeDeltaMode",consensusPercentageKeyword,"sublineages",caseMatchingKeyword,arrayBaseKeyword]
+            var completions : [String] = [beforeKeyword,afterKeyword,namedKeyword,lineageKeyword,consensusKeyword,patternsKeyword,countriesKeyword,statesKeyword,trendsKeyword,trackKeyword,monthlyKeyword,weeklyKeyword,"clusters","proteins","history","settings","includeSublineages","excludeSublineages","simpleNuclPatterns","excludeNFromCounts","sixel","trendGraphs","stackGraphs","completions","displayTextWithColor",minimumPatternsCountKeyword,trendsLineageCountKeyword,containingKeyword,"group","reset",variantsKeyword,sequenceKeyword,maxMutationsInFreqListKeyword,"listSpecificity","treeDeltaMode",consensusPercentageKeyword,"sublineages",caseMatchingKeyword,arrayBaseKeyword]
             completions.append(contentsOf:Array(VDB.whoVariants.keys))
             if self.countriesStates.isEmpty {
                 var countrySet : Set<String> = []
@@ -12509,6 +12848,8 @@ plot
                 tokens.append(.listLineagesFor)
             case listTrendsForKeyword:
                 tokens.append(.listTrendsFor)
+            case trackKeyword:
+                tokens.append(.track)
             case listMonthlyForKeyword:
                 tokens.append(.listMonthlyFor)
             case listWeeklyForKeyword:
@@ -13278,13 +13619,19 @@ plot
                     }
                 }
                 let (_,expr) = parse(Array(tokens[i+1+shift..<newi+1]),node: nil)
-                if let expr = expr {
+                if var expr = expr {
                     // check if expr is a valid pattern
                     var precheckOkay : Bool = true
                     switch expr {
                     case let .Identifier(identifier):
                         if patterns[identifier] == nil && !VDB.isPattern(identifier, vdb: self) && VDB.patternListItemFrom(identifier, vdb: self) == nil {
                             precheckOkay = false
+                            // try to rescue identifier with incomplete mutations
+                            let newIdentifier : String = VDB.cleanMutationsString(identifier)
+                            if identifier != newIdentifier && VDB.isPattern(newIdentifier, vdb: self) {
+                                expr = Expr.Identifier(newIdentifier)
+                                precheckOkay = true
+                            }
                         }
 //                        case .Assignment, .Cluster, .Containing, .From:
 //                            precheckOkay = false
@@ -13343,6 +13690,77 @@ plot
                 print(vdb: vdb, "Syntax error - not containing command")
                 return([],nil)
 */
+            case .track:
+                var newi : Int = tokens.count-1
+                if i+1 < newi+1 {
+                    switch tokens[i+1] {
+                    case .textBlock:
+                        var operatorFollowing : Bool = false
+                        if i+2 < newi+1 {
+                            switch tokens[i+2] {
+                            case .plus, .minus, .multiply:
+                                operatorFollowing = true
+                            default:
+                                break
+                            }
+                        }
+                        if operatorFollowing {
+                            // is expression following operator a cluster expression?
+                            if i+3 < newi+1 {
+                                switch tokens[i+3] {
+                                case .containing, .notContaining, .after, .before, .from, .greaterThan, .lessThan, .equalMutationCount, .allIsolates, .lineage, .named, .sample:
+                                    operatorFollowing = false
+                                case let .textBlock(identifier):
+                                    if clusters[identifier] != nil {
+                                        operatorFollowing = false
+                                    }
+                                default:
+                                    break
+                                }
+                            }
+                        }
+                        if !operatorFollowing {
+                            newi = i+1
+                        }
+                    default:
+                        break
+                    }
+                }
+                let (_,expr) = parse(Array(tokens[i+1..<newi+1]),node: nil)
+                if var expr = expr {
+                    // check if expr is a valid pattern
+                    var precheckOkay : Bool = true
+                    switch expr {
+                    case let .Identifier(identifier):
+                        if patterns[identifier] == nil && !VDB.isPattern(identifier, vdb: self) && VDB.patternListItemFrom(identifier, vdb: self) == nil {
+                            precheckOkay = false
+                            // try to rescue identifier with incomplete mutations
+                            let newIdentifier : String = VDB.cleanMutationsString(identifier)
+                            if identifier != newIdentifier && VDB.isPattern(newIdentifier, vdb: self) {
+                                expr = Expr.Identifier(newIdentifier)
+                                precheckOkay = true
+                            }
+                        }
+//                        case .Assignment, .Cluster, .Containing, .From:
+//                            precheckOkay = false
+                    default:
+                        break
+                    }
+                    if precheckOkay == true {
+                        if let precedingExprTmp = precedingExpr {
+                            precedingExpr = Expr.TrackPattern(precedingExprTmp, expr, false)
+                            i = newi
+                            break tSwitch
+                        }
+                        else {
+                            precedingExpr = Expr.TrackPattern(allIsolates, expr, false)
+                            i = newi
+                            break tSwitch
+                        }
+                    }
+                }
+                print(vdb: self, "Syntax error - track command")
+                return([],nil)
             case .before:
                 if tokens.count > i+1 {
                     if let date = tokens[i+1].dateFromToken(vdb: self) {
@@ -13609,6 +14027,7 @@ list [<n>] <cluster>
 [list] proteins
 [list] variants <cluster>
 [list] sequence <pattern>   lists reconstructed sequence
+<cluster> track <pattern>   lists mutation content by week
 
 sort <cluster>  (by date)
 help [<command>]   alias ?
@@ -13695,6 +14114,7 @@ list [<n>] <cluster>
 [list] proteins
 [list] variants <cluster>
 [list] sequence <pattern>
+<cluster> track <pattern>
 
 sort <cluster>  (by date)
 help [<command>]   alias ?
@@ -13950,6 +14370,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
                 if clusters[variableName] != nil {
                     clusters[variableName] = nil
                     print(vdb: self, "Cluster \(variableName) cleared")
+                    clustersHaveBeenDeleted([variableName])
                 }
                 else if patterns[variableName] != nil {
                     patterns[variableName] = nil
@@ -14323,11 +14744,13 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
                 print(vdb: self, "Error - the compare command is only available in nucleotide mode")
             }
 #if VDB_EMBEDDED || VDB_TREE
+#if !os(iOS)
         case _ where lowercaseLine == "download mat":
             print(vdb: self, "Downloading mutation annotated tree ...")
             self.treeLoadingInfo.pbFilesUpToDate.value = 0
             VDB.downloadMutationAnnotatedTreeDataFiles(vdb: self, viewController: VDBViewController())
             VDB.downloadEpiToPublicFile(vdb: self, viewController: VDBViewController())
+#endif
         case _ where lowercaseLine.hasPrefix("most "):  // most <tree name> <cluster name>
             let lineTmp : String = line.replacingOccurrences(of: "most ", with: "", options: .caseInsensitive, range: nil)
             let parts : [String] = lineTmp.components(separatedBy: " ")
@@ -14871,114 +15294,170 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         runningInput.append(contentsOf: input[0..<count])
         let openB : UInt8 = 123
         let closeB : UInt8 = 125
-        var bCount : Int = 0
-        for x in runningInput {
-            switch x {
-            case openB:
-                bCount += 1
-            case closeB:
-                bCount -= 1
-            default:
-                break
+        while !runningInput.isEmpty {
+            var bCount : Int = 0
+            var messageData : Data? = nil
+
+        dataLoop: for xIndex in 0..<runningInput.count {
+                switch runningInput[xIndex] {
+                case openB:
+                    bCount += 1
+                case closeB:
+                    bCount -= 1
+                    if bCount == 0 {
+                        messageData = Data(runningInput[0...xIndex])
+                        break dataLoop
+                    }
+                default:
+                    break
+                }
             }
-        }
-        if bCount == 0 {
-            var remoteMethodCall1 : RemoteMethodCall = RemoteMethodCall(method: .empty, serialNumber: -1, clusterName: "", clusterIsolateCount: 0, groupLineages: false)
-            let runningCount : Int = runningInput.count
-            runningInput.withUnsafeMutableBytes { ptr in
-                let cmdData : Data = Data(bytesNoCopy: ptr.baseAddress!, count: runningCount, deallocator: .none)
+            if let messageData = messageData {
+                NSLog("Remote data received:  \(nf(messageData.count)) byte message of \(nf(runningInput.count)) running")
+                if runningInput.count == messageData.count {
+                    runningInput = []
+                }
+                else {
+                    runningInput = [UInt8](runningInput[messageData.count..<runningInput.count])
+                }
+                var remoteMethodCall1 : RemoteMethodCall = RemoteMethodCall(method: .empty, serialNumber: -1, clusterName: "", clusterIsolateCount: 0, groupLineages: false)
                 let decoder : JSONDecoder = JSONDecoder()
                 do {
-                    remoteMethodCall1 = try decoder.decode(RemoteMethodCall.self, from: cmdData)
+                    remoteMethodCall1 = try decoder.decode(RemoteMethodCall.self, from: messageData)
+                    NSLog("Remote Method Call #\(remoteMethodCall1.serialNumber)  \(remoteMethodCall1.method) \(remoteMethodCall1.clusterName)")
                 }
                 catch {
                     NSLog("Error decoding remote method call")
                 }
-            }
-            if remoteMethodCall1.method == .empty {
-                continue
-            }
-            runningInput = []
-            let remoteMethodCall : RemoteMethodCall =  remoteMethodCall1
-            Task {
-                let encoder : JSONEncoder = JSONEncoder()
-                var remoteMethodResponse : RemoteMethodResponse? = nil
-                switch remoteMethodCall.method  {
-                case .countriesCountArrayFor, .statesCountArrayFor, .lineagesCountArrayFor, .mutationFreqArrayFor, .lineagesListFor, .consensusFor:
-                    if let cluster = self.clusters[remoteMethodCall.clusterName] {
-                        let vdbCluster : VDBCluster = VDBCluster(name: remoteMethodCall.clusterName, isolates: cluster, isolatesCount: cluster.count)
-                        switch remoteMethodCall.method {
-                        case .countriesCountArrayFor:
-                            let countArray : CountArray = await vdbDataController.countriesCountArrayFor(vdbCluster)
-                            NSLog("here 22a countries countArray.count = \(countArray.count)")
-                            remoteMethodResponse = RemoteMethodResponse(serialNumber: remoteMethodCall.serialNumber, method: remoteMethodCall.method, stringArray: countArray.map { $0.0 }, intArray: countArray.map { $0.1 }, intArrayArray: countArray.map { $0.2 }, doubleArray: [], stringArray2: [], stringArrayArray: [], data: Data())
-                        case .statesCountArrayFor:
-                            let countArray : CountArray = await vdbDataController.statesCountArrayFor(vdbCluster)
-                            NSLog("here 22a states countArray.count = \(countArray.count)")
-                            remoteMethodResponse = RemoteMethodResponse(serialNumber: remoteMethodCall.serialNumber, method: remoteMethodCall.method, stringArray: countArray.map { $0.0 }, intArray: countArray.map { $0.1 }, intArrayArray: countArray.map { $0.2 }, doubleArray: [], stringArray2: [], stringArrayArray: [], data: Data())
-                        case .lineagesCountArrayFor:
-                            let countArray : CountArray = await vdbDataController.lineagesCountArrayFor(vdbCluster, groupLineages: remoteMethodCall.groupLineages)
-                            NSLog("here 22a lineages countArray.count = \(countArray.count)")
-                            remoteMethodResponse = RemoteMethodResponse(serialNumber: remoteMethodCall.serialNumber, method: remoteMethodCall.method, stringArray: countArray.map { $0.0 }, intArray: countArray.map { $0.1 }, intArrayArray: countArray.map { $0.2 }, doubleArray: [], stringArray2: [], stringArrayArray: [], data: Data())
-                        case .mutationFreqArrayFor:
-                            let freqArray : FreqArray = await vdbDataController.mutationFreqArrayFor(vdbCluster)
-                            NSLog("here 22a mutationFreqArray.count = \(freqArray.count)")
-                            remoteMethodResponse = RemoteMethodResponse(serialNumber: remoteMethodCall.serialNumber, method: remoteMethodCall.method, stringArray: freqArray.map { $0.0 }, intArray: [], intArrayArray: [], doubleArray: freqArray.map { $0.1 }, stringArray2: freqArray.map { $0.2 }, stringArrayArray: [], data: Data())
-                        case .consensusFor:
-                            let (consensusString,codons,consensusIsolate) : (String,[VDB.Codon],Isolate) = await vdbDataController.consensusFor(vdbCluster)
-                            NSLog("here 22a consensus codons.count = \(codons.count)")
-                            let consensusMutations : [Mutation] = consensusIsolate.mutations
-                            let consensusMutationsStrings : [String] = consensusMutations.map { $0.string(vdb: self) }
-                            var stringArray : [String] = [consensusString]
-                            stringArray.append(contentsOf: consensusMutationsStrings)
-                            let intArrayArray : [[Int]] = codons.map { codon in
-                                var intArray : [Int] = [codon.protein.rawValue,codon.pos,Int(codon.wt)]
-                                intArray.append(contentsOf: codon.nucl.map { Int($0) })
-                                return intArray
-                            }
-                            remoteMethodResponse = RemoteMethodResponse(serialNumber: remoteMethodCall.serialNumber, method: remoteMethodCall.method, stringArray: stringArray, intArray: [], intArrayArray: intArrayArray, doubleArray: [], stringArray2: [], stringArrayArray: [], data: Data())
-                        case .lineagesListFor:
-#if VDB_SERVER
-                            for aCluster in vdbClusters {
-                                if aCluster.name == remoteMethodCall.clusterName {
-                                    vdbCluster.countryListStruct = aCluster.countryListStruct
-                                    vdbCluster.stateListStruct = aCluster.stateListStruct
-                                    break
-                                }
-                            }
-#endif
-                            let lineagesList : ListStruct = await vdbDataController.lineagesListForCluster(vdbCluster, forCountries: remoteMethodCall.groupLineages) ?? ListStruct.empty()
-                            NSLog("here 22a lineagesList items.count = \(lineagesList.items.count)")
-                            remoteMethodResponse = RemoteMethodResponse(serialNumber: remoteMethodCall.serialNumber, method: remoteMethodCall.method, stringArray: [], intArray: [], intArrayArray: [], doubleArray: [], stringArray2: [], stringArrayArray: [], data: encodeLineagesArrayTuple(([],[],lineagesList)))
-                        default:
-                            break
-                        }
-                    }
-                case .countriesStates:
-                    let countriesStatesArray : [String] = await vdbDataController.countriesStates()
-                    NSLog("here 22a countriesStatesArray.count = \(countriesStatesArray.count)")
-                    remoteMethodResponse = RemoteMethodResponse(serialNumber: remoteMethodCall.serialNumber, method: remoteMethodCall.method, stringArray: countriesStatesArray, intArray: [], intArrayArray: [], doubleArray: [], stringArray2: [], stringArrayArray: [], data: Data())
-                case .whoVariantLineagesAll:
-                    let variantLineagesAll : [(String,[String])] = await vdbDataController.whoVariantLineagesAll()
-                    NSLog("here 22a whoVariantLineagesAll.count = \(variantLineagesAll.count)")
-                    remoteMethodResponse = RemoteMethodResponse(serialNumber: remoteMethodCall.serialNumber, method: remoteMethodCall.method, stringArray: variantLineagesAll.map { $0.0 }, intArray: [], intArrayArray: [], doubleArray: [], stringArray2: [], stringArrayArray: variantLineagesAll.map { $0.1 }, data: Data())
-                case .clusterHasBeenAssigned:
-                    break
-                case .empty:
-                    break
-                }
-                if let remoteMethodResponse = remoteMethodResponse {
+/*
+                let runningCount : Int = runningInput.count
+                runningInput.withUnsafeMutableBytes { ptr in
+                    let cmdData : Data = Data(bytesNoCopy: ptr.baseAddress!, count: runningCount, deallocator: .none)
+                    let decoder : JSONDecoder = JSONDecoder()
                     do {
-                        let dataOut : Data = try encoder.encode(remoteMethodResponse)
-                        dataOut.withUnsafeBytes { ptr in
-                            let countOut : Int = write(self.stdOut_fileNo2, ptr.baseAddress!, dataOut.count)
-                            NSLog("countOut = \(countOut)")
-                        }
+                        remoteMethodCall1 = try decoder.decode(RemoteMethodCall.self, from: cmdData)
                     }
                     catch {
-                        NSLog("Error encoding remote method response")
+                        NSLog("Error decoding remote method call")
                     }
                 }
+*/
+                if remoteMethodCall1.method == .empty {
+                    continue
+                }
+//                runningInput = []
+                let remoteMethodCall : RemoteMethodCall =  remoteMethodCall1
+                Task {
+                    let encoder : JSONEncoder = JSONEncoder()
+                    var remoteMethodResponse : RemoteMethodResponse? = nil
+                    let logPrep : Bool = remoteMethodCall.method == .empty
+                    switch remoteMethodCall.method  {
+                    case .countriesCountArrayFor, .statesCountArrayFor, .lineagesCountArrayFor, .mutationFreqArrayFor, .lineagesListFor, .consensusFor:
+                        if let cluster = self.clusters[remoteMethodCall.clusterName] {
+                            let vdbCluster : VDBCluster = VDBCluster(name: remoteMethodCall.clusterName, isolates: cluster, isolatesCount: cluster.count)
+                            switch remoteMethodCall.method {
+                            case .countriesCountArrayFor:
+                                let countArray : CountArray = await vdbDataController.countriesCountArrayFor(vdbCluster)
+                                if logPrep {
+                                    NSLog("Prepared countries countArray.count = \(countArray.count)")
+                                }
+                                remoteMethodResponse = RemoteMethodResponse(serialNumber: remoteMethodCall.serialNumber, method: remoteMethodCall.method, stringArray: countArray.map { $0.0 }, intArray: countArray.map { $0.1 }, intArrayArray: countArray.map { $0.2 }, doubleArray: [], stringArray2: [], stringArrayArray: [], data: Data())
+                            case .statesCountArrayFor:
+                                let countArray : CountArray = await vdbDataController.statesCountArrayFor(vdbCluster)
+                                if logPrep {
+                                    NSLog("Prepared states countArray.count = \(countArray.count)")
+                                }
+                                remoteMethodResponse = RemoteMethodResponse(serialNumber: remoteMethodCall.serialNumber, method: remoteMethodCall.method, stringArray: countArray.map { $0.0 }, intArray: countArray.map { $0.1 }, intArrayArray: countArray.map { $0.2 }, doubleArray: [], stringArray2: [], stringArrayArray: [], data: Data())
+                            case .lineagesCountArrayFor:
+                                let countArray : CountArray = await vdbDataController.lineagesCountArrayFor(vdbCluster, groupLineages: remoteMethodCall.groupLineages)
+                                if logPrep {
+                                    NSLog("Prepared lineages countArray.count = \(countArray.count)")
+                                }
+                                remoteMethodResponse = RemoteMethodResponse(serialNumber: remoteMethodCall.serialNumber, method: remoteMethodCall.method, stringArray: countArray.map { $0.0 }, intArray: countArray.map { $0.1 }, intArrayArray: countArray.map { $0.2 }, doubleArray: [], stringArray2: [], stringArrayArray: [], data: Data())
+                            case .mutationFreqArrayFor:
+                                let freqArray : FreqArray = await vdbDataController.mutationFreqArrayFor(vdbCluster)
+                                if logPrep {
+                                    NSLog("Prepared mutationFreqArray.count = \(freqArray.count)")
+                                }
+                                remoteMethodResponse = RemoteMethodResponse(serialNumber: remoteMethodCall.serialNumber, method: remoteMethodCall.method, stringArray: freqArray.map { $0.0 }, intArray: [], intArrayArray: [], doubleArray: freqArray.map { $0.1 }, stringArray2: freqArray.map { $0.2 }, stringArrayArray: [], data: Data())
+                            case .consensusFor:
+                                let (consensusString,codons,consensusIsolate) : (String,[VDB.Codon],Isolate) = await vdbDataController.consensusFor(vdbCluster)
+                                if logPrep {
+                                    NSLog("Prepared consensus codons.count = \(codons.count)")
+                                }
+                                let consensusMutations : [Mutation] = consensusIsolate.mutations
+                                let consensusMutationsStrings : [String] = consensusMutations.map { $0.string(vdb: self) }
+                                var stringArray : [String] = [consensusString]
+                                stringArray.append(contentsOf: consensusMutationsStrings)
+                                let intArrayArray : [[Int]] = codons.map { codon in
+                                    var intArray : [Int] = [codon.protein.rawValue,codon.pos,Int(codon.wt)]
+                                    intArray.append(contentsOf: codon.nucl.map { Int($0) })
+                                    return intArray
+                                }
+                                remoteMethodResponse = RemoteMethodResponse(serialNumber: remoteMethodCall.serialNumber, method: remoteMethodCall.method, stringArray: stringArray, intArray: [], intArrayArray: intArrayArray, doubleArray: [], stringArray2: [], stringArrayArray: [], data: Data())
+                            case .lineagesListFor:
+#if VDB_SERVER
+                                for aCluster in vdbClusters {
+                                    if aCluster.name == remoteMethodCall.clusterName {
+                                        vdbCluster.countryListStruct = aCluster.countryListStruct
+                                        vdbCluster.stateListStruct = aCluster.stateListStruct
+                                        break
+                                    }
+                                }
+#endif
+                                let lineagesList : ListStruct = await vdbDataController.lineagesListForCluster(vdbCluster, forCountries: remoteMethodCall.groupLineages) ?? ListStruct.empty()
+                                if logPrep {
+                                    NSLog("Prepared lineagesList items.count = \(lineagesList.items.count)")
+                                }
+                                remoteMethodResponse = RemoteMethodResponse(serialNumber: remoteMethodCall.serialNumber, method: remoteMethodCall.method, stringArray: [], intArray: [], intArrayArray: [], doubleArray: [], stringArray2: [], stringArrayArray: [], data: encodeLineagesArrayTuple(([],[],lineagesList)))
+                            default:
+                                break
+                            }
+                        }
+                        else {
+                            NSLog("Warning - cluster \(remoteMethodCall.clusterName) no longer exists")
+                            remoteMethodResponse = RemoteMethodResponse(serialNumber: remoteMethodCall.serialNumber, method: remoteMethodCall.method, stringArray: [], intArray: [], intArrayArray: [], doubleArray: [], stringArray2: [], stringArrayArray: [], data: Data())
+                        }
+                    case .countriesStates:
+                        let countriesStatesArray : [String] = await vdbDataController.countriesStates()
+                        if logPrep {
+                            NSLog("Prepared countriesStatesArray.count = \(countriesStatesArray.count)")
+                        }
+                        remoteMethodResponse = RemoteMethodResponse(serialNumber: remoteMethodCall.serialNumber, method: remoteMethodCall.method, stringArray: countriesStatesArray, intArray: [], intArrayArray: [], doubleArray: [], stringArray2: [], stringArrayArray: [], data: Data())
+                    case .whoVariantLineagesAll:
+                        let variantLineagesAll : [(String,[String])] = await vdbDataController.whoVariantLineagesAll()
+                        if logPrep {
+                            NSLog("Prepared whoVariantLineagesAll.count = \(variantLineagesAll.count)")
+                        }
+                        remoteMethodResponse = RemoteMethodResponse(serialNumber: remoteMethodCall.serialNumber, method: remoteMethodCall.method, stringArray: variantLineagesAll.map { $0.0 }, intArray: [], intArrayArray: [], doubleArray: [], stringArray2: [], stringArrayArray: variantLineagesAll.map { $0.1 }, data: Data())
+                    case .trackMutations:
+                        break
+                    case .clusterHasBeenAssigned, .clustersHaveBeenDeleted:
+                        break
+                    case .empty:
+                        break
+                    }
+                    if let remoteMethodResponse = remoteMethodResponse {
+                        serialQueue.async {
+                            do {
+                                let dataOut : Data = try encoder.encode(remoteMethodResponse)
+                                dataOut.withUnsafeBytes { ptr in
+                                    let countOut : Int = write(self.stdOut_fileNo2, ptr.baseAddress!, dataOut.count)
+                                    NSLog("Remote Method Response #\(remoteMethodResponse.serialNumber) \(remoteMethodResponse.method)")
+                                    if countOut != dataOut.count {
+                                        NSLog("QQQ  Error  dataOut = \(dataOut)  countOut = \(countOut)")
+                                    }
+                                }
+                            }
+                            catch {
+                                NSLog("Error encoding remote method response")
+                            }
+                        }
+                    }
+                }
+            }
+            else {
+                break
             }
         }
     } while true
@@ -15208,11 +15687,14 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         caseMatching = caseMatchingSetting
         arrayBase = arrayBaseSetting
         
+        var deletedClusterNames : [String] = []
         for key in clusters.keys {
             if !existingClusterNames.contains(key) {
                 clusters[key] = nil
+                deletedClusterNames.append(key)
             }
         }
+        clustersHaveBeenDeleted(deletedClusterNames)
         
     }
     
@@ -15363,11 +15845,14 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         caseMatching = caseMatchingSetting
         arrayBase = arrayBaseSetting
 
+        var deletedClusterNames : [String] = []
         for key in clusters.keys {
             if !existingClusterNames.contains(key) {
                 clusters[key] = nil
+                deletedClusterNames.append(key)
             }
         }
+        clustersHaveBeenDeleted(deletedClusterNames)
         demoMode = false
         
     }
@@ -15388,15 +15873,54 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
                 }
             }
             let remoteMethodResponse : RemoteMethodResponse = RemoteMethodResponse(serialNumber: 1, method: .clusterHasBeenAssigned, stringArray: [clusterName], intArray: [cluster.count], intArrayArray: [], doubleArray: [], stringArray2: [], stringArrayArray: [], data: Data())
-            do {
-                let dataOut : Data = try encoder.encode(remoteMethodResponse)
-                dataOut.withUnsafeBytes { ptr in
-                    let countOut : Int = write(self.stdOut_fileNo2, ptr.baseAddress!, dataOut.count)
-                    NSLog("countOut = \(countOut) for cluster has been assigned")
+            serialQueue.async {
+                do {
+                    let dataOut : Data = try encoder.encode(remoteMethodResponse)
+                    dataOut.withUnsafeBytes { ptr in
+                        let countOut : Int = write(self.stdOut_fileNo2, ptr.baseAddress!, dataOut.count)
+                        NSLog("Notification sent that Cluster \(remoteMethodResponse.stringArray[0]) has been assigned")
+                        if countOut != dataOut.count {
+                            NSLog("QQQ  Error  dataOut = \(dataOut)  countOut = \(countOut)")
+                        }
+                    }
+                }
+                catch {
+                    NSLog("Error encoding remote method response for cluster has been assigned")
                 }
             }
-            catch {
-                NSLog("Error encoding remote method response for cluster has been assigned")
+        }
+#endif
+    }
+#endif
+
+#if !VDB_EMBEDDED
+    func clustersHaveBeenDeleted(_ clusterNames: [String]) {
+#if VDB_CHANNEL2 && swift(>=1)
+        if stdOut_fileNo2 != STDOUT_FILENO {
+            let encoder : JSONEncoder = JSONEncoder()
+            for clusterName in clusterNames {
+                for (oldIndex,oldCluster) in vdbClusters.enumerated() {
+                    if oldCluster.name == clusterName {
+                        vdbClusters.remove(at:oldIndex)
+                        break
+                    }
+                }
+            }
+            let remoteMethodResponse : RemoteMethodResponse = RemoteMethodResponse(serialNumber: 1, method: .clustersHaveBeenDeleted, stringArray: clusterNames, intArray: [], intArrayArray: [], doubleArray: [], stringArray2: [], stringArrayArray: [], data: Data())
+            serialQueue.async {
+                do {
+                    let dataOut : Data = try encoder.encode(remoteMethodResponse)
+                    dataOut.withUnsafeBytes { ptr in
+                        let countOut : Int = write(self.stdOut_fileNo2, ptr.baseAddress!, dataOut.count)
+                        NSLog("Notification sent that Cluster \(remoteMethodResponse.stringArray.joined(separator: " ")) has been deleted")
+                        if countOut != dataOut.count {
+                            NSLog("QQQ  Error  dataOut = \(dataOut)  countOut = \(countOut)")
+                        }
+                    }
+                }
+                catch {
+                    NSLog("Error encoding remote method response for clusters have been deleted")
+                }
             }
         }
 #endif
@@ -15704,6 +16228,7 @@ enum Token {
     case listStatesFor
     case listLineagesFor
     case listTrendsFor
+    case track
     case listMonthlyFor
     case listWeeklyFor
     case list
@@ -15768,6 +16293,8 @@ enum Token {
                     return "_listLineagesFor_"
                 case .listTrendsFor:
                     return "_listTrendsFor_"
+                case .track:
+                    return "_track_"
                 case .listWeeklyFor:
                     return "_listWeeklyFor_"
                 case .list:
@@ -15846,6 +16373,7 @@ indirect enum Expr {
     case ListStates(Expr)              // Cluster                          --> List
     case ListLineages(Expr,Bool=false,Bool=false) // Cluster, ignoreGroups, quiet --> List
     case ListTrends(Expr)              // Cluster                          --> List
+    case TrackPattern(Expr,Expr,Bool=false) // Cluster, Pattern, quiet     --> List
     case ListMonthly(Expr,Expr)        // Cluster, Cluster                 --> List
     case ListWeekly(Expr,Expr)         // Cluster, Cluster                 --> List
     case ListIsolates(Expr,Int)        // Cluster                          --> nil
@@ -15915,7 +16443,7 @@ indirect enum Expr {
                         print(vdb: vdb, "Pattern \(identifier) defined as \(VDB.stringForMutations(pattern, vdb: vdb))")
                     }
                     break
-                case let .Identifier(identifier2):
+                case var .Identifier(identifier2):
                     if identifier ~~ minimumPatternsCountKeyword && vdb.isNumber(identifier2) {
                         vdb.minimumPatternsCount = Int(identifier2) ?? VDB.defaultMinimumPatternsCount
                         print(vdb: vdb, "\(minimumPatternsCountKeyword) set to \(vdb.minimumPatternsCount)")
@@ -15956,6 +16484,13 @@ indirect enum Expr {
                             print(vdb: vdb, "Error - \(arrayBaseKeyword) must be 0 or 1. The current value is \(vdb.arrayBase)")
                         }
                         break
+                    }
+                    if !VDB.isPattern(identifier2, vdb: vdb) {
+                        // try to rescue identifier with incomplete mutations
+                        let newIdentifier : String = VDB.cleanMutationsString(identifier)
+                        if identifier != newIdentifier && VDB.isPattern(newIdentifier, vdb: vdb) {
+                            identifier2 = newIdentifier
+                        }
                     }
                     if VDB.isPattern(identifier2, vdb: vdb) {
                         var coercePMutation : Bool = false
@@ -16528,6 +17063,18 @@ indirect enum Expr {
             let cluster = exprCluster.clusterFromExpr(vdb: vdb)
             let list : List = VDB.listLineages(cluster, vdb: vdb, trends: true)
             return Expr.List(list)
+        case let .TrackPattern(exprCluster, exprPattern, quiet):
+            let cluster = exprCluster.clusterFromExpr(vdb: vdb)
+            var pattern : [Mutation]? = nil
+            var mutationsString : String? = nil
+            if vdb.nucleotideMode, case let .Identifier(identifier) = exprPattern, VDB.isPattern(identifier, vdb: vdb) {
+                mutationsString = identifier
+            }
+            else {
+                pattern = exprPattern.patternFromExpr(vdb: vdb)
+            }
+            let list : List = VDB.trackPattern(pattern, mutationsString, forCluster: cluster, vdb: vdb, quiet: quiet)
+            return Expr.List(list)
         case let .ListMonthly(exprCluster,exprCluster2):
             vdb.printToPager = true
             let cluster = exprCluster.clusterFromExpr(vdb: vdb)
@@ -16829,10 +17376,20 @@ indirect enum Expr {
                 
                 // allow protein mutations as in isolatesContainingMutations()
                 let mutationsStrings : [String] = mutationPatternString.components(separatedBy: CharacterSet(charactersIn: " ,")).filter { $0.count > 0}
+                let nuclOverride : [Bool]
+                if vdb.nucleotideMode {
+                    nuclOverride = mutationsStrings.map { String($0.prefix(3)) ~~ nucleotideSearchOverrideString }
+                }
+                else {
+                    nuclOverride = []
+                }
                 var mutationPs : [MutationProtocol] = mutationsStrings.map { mutString in //Mutation(mutString: $0) }
                     let mutParts = mutString.components(separatedBy: CharacterSet(charactersIn: pMutationSeparator))
                     switch mutParts.count {
                     case 2:
+                        if mutParts[0] ~~ nucleotideSearchOverrideString {
+                            return Mutation(mutString: mutParts[1], vdb: vdb)
+                        }
                         return PMutation(mutString: mutString)
                     default:
                         return Mutation(mutString: mutString, vdb: vdb)
@@ -16842,15 +17399,24 @@ indirect enum Expr {
                 var mutations : [Mutation] = []
                 
                 var nMutationSets : [[[Mutation]]] = []
-                var nMutationSetsWildcard : [Bool] = []
+                var nMutationSetsWildcard : [NucleotideSearchMode] = []
                 if vdb.nucleotideMode {
                     let nuclRef : [UInt8] = vdb.referenceArray // nucleotideReference()
                     let dashChar : UInt8 = 45
                     let nuclChars : [UInt8] = [65,67,71,84,wildcardChar,dashChar] // A,C,G,T,*,-
                     var nMutationSetsUsed : Bool = false
-                    for mutationP in mutationPs {
+                    for (mutationPIndex,mutationP) in mutationPs.enumerated() {
                         var nMutations : [[Mutation]] = []
-                        let isWildcard : Bool = mutationP.aa == wildcardChar
+                        let isWildcard : NucleotideSearchMode
+                        if mutationP.aa == wildcardChar {
+                            isWildcard = .wildcard
+                        }
+                        else if mutationP.aa == mutationP.wt {
+                            isWildcard = .wildtype
+                        }
+                        else {
+                            isWildcard = .normal
+                        }
                         var protein : VDBProtein = VDBProtein.Spike
                         var isPMutation : Bool = false
                         if let pMutation = mutationP as? PMutation {
@@ -16866,14 +17432,15 @@ indirect enum Expr {
                         }
                         mutations.append(mutation)
                         if mutationP.pos <= protein.length {
-                            if !(nuclChars.contains(mutation.wt) && nuclChars.contains(mutation.aa)) || isPMutation {
+                            if !nuclOverride[mutationPIndex] && (!(nuclChars.contains(mutation.wt) && nuclChars.contains(mutation.aa)) || isPMutation) {
                                 if nuclRef.isEmpty {
                                     print(vdb: vdb, "Error - protein mutations in nucleotide mode require the nucleotide reference file")
                                     return []
                                 }
                                 var cdsBuffer: [UInt8] = Array(repeating: 0, count: 3)
                                 var possCodons : [[UInt8]] = []
-                                if mutation.aa != dashChar {
+                                let aaToMatch : UInt8 = isWildcard == .normal ? mutation.aa : mutation.wt
+                                if aaToMatch != dashChar {
                                     for n0 in nuclChars[0..<4] {
                                         cdsBuffer[0] = n0
                                         for n1 in nuclChars[0..<4] {
@@ -16881,7 +17448,7 @@ indirect enum Expr {
                                             for n2 in nuclChars[0..<4] {
                                                 cdsBuffer[2] = n2
                                                 let tr : UInt8 = VDB.translateCodon(cdsBuffer)
-                                                if tr == mutation.aa {
+                                                if tr == aaToMatch {
                                                     possCodons.append(cdsBuffer)
                                                 }
                                             }
@@ -16910,14 +17477,15 @@ indirect enum Expr {
                                     for codon in possCodons {
                                         var nMut : [Mutation] = []
                                         for i in 0..<3 {
-                                            if codon[i] != wtCodon[i] {
-                                                nMut.append(Mutation(wt: wtCodon[i], pos: codonStart+i, aa: codon[i]))
-                                            }
+                                            nMut.append(Mutation(wt: wtCodon[i], pos: codonStart+i, aa: codon[i]))
                                         }
                                         if !nMut.isEmpty {
                                             nMutations.append(nMut)
                                         }
                                     }
+                                }
+                                else {
+                                    print(vdb: vdb, "WARNING - mutation wildtype (\(Character(UnicodeScalar(mutation.wt)))) != reference (\(Character(UnicodeScalar(wtTrans))))")
                                 }
                             }
                         }
@@ -16938,6 +17506,13 @@ indirect enum Expr {
                     mutations = mutationsStrings.map { Mutation(mutString: $0, vdb: vdb) }
                 }
                 
+                let searchWithWildCard : Bool
+                if nMutationSets.isEmpty {
+                    searchWithWildCard = mutations.contains(where: {$0.aa == wildcardChar}) || mutations.contains(where: {$0.aa == $0.wt})  //reduce(false, {$0 || $1.aa == wildcardChar})
+                }
+                else {
+                    searchWithWildCard = nMutationSetsWildcard.contains(.wildcard) || nMutationSetsWildcard.contains(.wildtype)
+                }
                 
                 func clusterWithMut(_ node: PhTreeNode) {
                     
@@ -16964,8 +17539,55 @@ indirect enum Expr {
                         return true
                     }
 
+                    // whether the node contains at least n of the mutations in mutationsArray
+                    func containsMutationsWithWildcard(_ mutationsArray : [Mutation], _ n: Int) -> Bool {
+                        if n == 0 {
+                            for mutation in mutationsArray {
+                                if mutation.aa == mutation.wt {
+                                    if node.dMutations.contains(where: {$0.pos == mutation.pos}) {
+                                        return false
+                                    }
+                                }
+                                else if mutation.aa != wildcardChar {
+                                    if !node.dMutations.contains(mutation) {
+                                        return false
+                                    }
+                                }
+                                else {
+                                    if !node.dMutations.contains(where: {$0.pos == mutation.pos}) {
+                                        return false
+                                    }
+                                }
+                            }
+                        }
+                        else {
+                            var mutCounter : Int = 0
+                            for mutation in mutationsArray {
+                                if mutation.aa == mutation.wt {
+                                    if !node.dMutations.contains(where: {$0.pos == mutation.pos}) {
+                                        mutCounter += 1
+                                    }
+                                }
+                                else if mutation.aa != wildcardChar {
+                                    if node.dMutations.contains(mutation) {
+                                        mutCounter += 1
+                                    }
+                                }
+                                else {
+                                    if node.dMutations.contains(where: {$0.pos == mutation.pos}) {
+                                        mutCounter += 1
+                                    }
+                                }
+                            }
+                            if mutCounter < n {
+                                return false
+                            }
+                        }
+                        return true
+                    }
+
                     // whether the node contains at least n of the mutation sets in mutationsArray
-                    func containsMutationSets(_ mutationsArray : [[[Mutation]]], _ n: Int) -> Bool {
+                    func containsMutationSets(_ mutationsArray: [[[Mutation]]], _ n: Int) -> Bool {
                         let nn : Int
                         if n == 0 {
                             nn = mutationsArray.count
@@ -16975,16 +17597,44 @@ indirect enum Expr {
                         }
                         var mutCounter : Int = 0
                         for mutationSets in mutationsArray {
-                            for mutationSet in mutationSets {
-                                var mCounter : Int = 0
-                                for mutation in mutationSet {
-                                    if node.dMutations.contains(mutation) {
-                                        mCounter += 1
+                            let checkCodon : Bool = mutationSets[0].count == 3
+                            if !checkCodon {
+                                if mutationSets[0][0].aa != wildcardChar {
+                                    if node.dMutations.contains(mutationSets[0][0]) {
+                                        mutCounter += 1
                                     }
                                 }
-                                if mCounter == mutationSet.count {
-                                    mutCounter += 1
-                                    break
+                                else {
+                                    if node.dMutations.contains(where: {$0.pos == mutationSets[0][0].pos}) {
+                                        mutCounter += 1
+                                    }
+                                }
+                            }
+                            else {
+                                var codon : [UInt8] = [mutationSets[0][0].wt,mutationSets[0][1].wt,mutationSets[0][2].wt]
+                                let pos1 : Int = mutationSets[0][0].pos
+                                for m in node.dMutations {
+                                    if m.pos < pos1 {
+                                        continue
+                                    }
+                                    if m.pos > pos1 + 2 {
+                                        break
+                                    }
+                                    if m.pos == pos1 {
+                                        codon[0] = m.aa
+                                    }
+                                    if m.pos == pos1 + 1 {
+                                        codon[1] = m.aa
+                                    }
+                                    if m.pos == pos1 + 2 {
+                                        codon[2] = m.aa
+                                    }
+                                }
+                                for mutationSet in mutationSets {
+                                    if mutationSet[0].aa == codon[0] && mutationSet[1].aa == codon[1] && mutationSet[2].aa == codon[2] {
+                                        mutCounter += 1
+                                        break
+                                    }
                                 }
                             }
                         }
@@ -16994,7 +17644,106 @@ indirect enum Expr {
                         return true
                     }
 
-                    let containsMutation : Bool = nMutationSets.isEmpty ? containsMutations(mutations,0) : containsMutationSets(nMutationSets,0)  // node.dMutations.contains(mutation)
+                    // whether the node contains at least n of the mutation sets in mutationsArray
+                    func containsMutationSetsWithWildcard(_ mutationsArray: [[[Mutation]]], _ wildcards: [NucleotideSearchMode], _ n: Int) -> Bool {
+                        let nn : Int
+                        if n == 0 {
+                            nn = mutationsArray.count
+                        }
+                        else {
+                            nn = n
+                        }
+                        var mutCounter : Int = 0
+                        for (setIndex,mutationSets) in mutationsArray.enumerated() {
+                            let checkCodon : Bool = mutationSets[0].count == 3
+                            if !checkCodon {
+                                if mutationSets[0][0].aa == mutationSets[0][0].wt {
+                                    if !node.dMutations.contains(where: {$0.pos == mutationSets[0][0].pos}) {
+                                        mutCounter += 1
+                                    }
+                                }
+                                else if mutationSets[0][0].aa != wildcardChar {
+                                    if node.dMutations.contains(mutationSets[0][0]) {
+                                        mutCounter += 1
+                                    }
+                                }
+                                else {
+                                    if node.dMutations.contains(where: {$0.pos == mutationSets[0][0].pos}) {
+                                        mutCounter += 1
+                                    }
+                                }
+                            }
+                            else {
+                                var codon : [UInt8] = [mutationSets[0][0].wt,mutationSets[0][1].wt,mutationSets[0][2].wt]
+                                let pos1 : Int = mutationSets[0][0].pos
+                                for m in node.dMutations {
+                                    if m.pos < pos1 {
+                                        continue
+                                    }
+                                    if m.pos > pos1 + 2 {
+                                        break
+                                    }
+                                    if m.pos == pos1 {
+                                        codon[0] = m.aa
+                                    }
+                                    if m.pos == pos1 + 1 {
+                                        codon[1] = m.aa
+                                    }
+                                    if m.pos == pos1 + 2 {
+                                        codon[2] = m.aa
+                                    }
+                                }
+                                switch wildcards[setIndex] {
+                                case .normal:
+                                    for mutationSet in mutationSets {
+                                        if mutationSet[0].aa == codon[0] && mutationSet[1].aa == codon[1] && mutationSet[2].aa == codon[2] {
+                                            mutCounter += 1
+                                            break
+                                        }
+                                    }
+                                case .wildcard:
+                                    mutCounter += 1
+                                    for mutationSet in mutationSets {
+                                        if mutationSet[0].aa == codon[0] && mutationSet[1].aa == codon[1] && mutationSet[2].aa == codon[2] {
+                                            mutCounter -= 1
+                                            break
+                                        }
+                                    }
+                                case .wildtype:
+                                    for mutationSet in mutationSets {
+                                        if mutationSet[0].aa == codon[0] && mutationSet[1].aa == codon[1] && mutationSet[2].aa == codon[2] {
+                                            mutCounter += 1
+                                            break
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if mutCounter < nn {
+                            return false
+                        }
+                        return true
+                    }
+
+                    let n : Int = 0
+                    let containsMutation : Bool
+                    if nMutationSets.isEmpty {
+                        if !searchWithWildCard {
+                            containsMutation = containsMutations(mutations,n)
+                        }
+                        else {
+                            containsMutation = containsMutationsWithWildcard(mutations,n)
+                        }
+                    }
+                    else {
+                        if !searchWithWildCard {
+                            containsMutation = containsMutationSets(nMutationSets,n)
+                        }
+                        else {
+                            containsMutation = containsMutationSetsWithWildcard(nMutationSets,nMutationSetsWildcard,n)
+                        }
+                    }
+                    
                     if containsMutation {
                         if let isolate = node.isolate {
                             cluster.append(isolate)
@@ -17020,7 +17769,14 @@ indirect enum Expr {
             if identifier.contains(" ") {
                 let parts : [String] = identifier.components(separatedBy: " ")
                 if parts.count > 1, let tree = vdb.trees[parts[0]] {
-                    let mutString : String = parts.dropFirst().joined(separator: " ")
+                    var mutString : String = parts.dropFirst().joined(separator: " ")
+                    // try to rescue mutString with incomplete mutations
+                    if !VDB.isPattern(mutString, vdb: vdb) {
+                        let newIdentifier : String = VDB.cleanMutationsString(mutString)
+                        if identifier != newIdentifier && VDB.isPattern(newIdentifier, vdb: vdb) {
+                            mutString = newIdentifier
+                        }
+                    }
                     if VDB.isPattern(mutString, vdb: vdb) {
                         return clusterFromTree(tree, withDMutation: mutString)
                     }
@@ -17709,12 +18465,15 @@ extension VDB {
         caseMatching = caseMatchingSetting
         arrayBase = arrayBaseSetting
 
+        var deletedClusterNames : [String] = []
         for key in clusters.keys {
             if !existingClusterNames.contains(key) {
                 clusters[key] = nil
+                deletedClusterNames.append(key)
             }
         }
-        
+        clustersHaveBeenDeleted(deletedClusterNames)
+
         let endTime0 : DispatchTime = DispatchTime.now()
         let nanoTime0 : UInt64 = endTime0.uptimeNanoseconds - startTime0.uptimeNanoseconds
         let timeInterval0 : Double = (Double(nanoTime0) / 1_000_000_000)
