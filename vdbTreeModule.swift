@@ -1,5 +1,5 @@
 // vdbTreeModule.swift
-// for vdb version 3.1
+// for vdb version 3.3
 // 
 // Instructions: This file is designed to be compiled with vdb.swift:
 //    cat vdbTreeModule.swift vdb.swift > vdbtree.swift
@@ -7773,19 +7773,6 @@ internal enum ZigZag {
 
 import Foundation
 
-let pbTreeSource : String = "https://hgdownload.soe.ucsc.edu/goldenPath/wuhCor1/UShER_SARS-CoV-2/"
-let pbTreeFileName : String = "public-latest.all.masked.pb"
-let pbMetadataFileName : String = "public-latest.metadata.tsv"
-let epiToPublicFileName : String = "epiToPublic.tsv"
-
-func printTimeFrom(_ startTime: DispatchTime, label: String, vdb: VDB) {
-    let endTime : DispatchTime = DispatchTime.now()
-    let nanoTime : UInt64 = endTime.uptimeNanoseconds - startTime.uptimeNanoseconds
-    let timeInterval : Double = Double(nanoTime) / 1_000_000_000
-    let timeString : String = String(format: "%4.2f seconds", timeInterval)
-    print(vdb: vdb, "\(label) time: \(timeString)")
-}
-
 extension VDB {
         
     class func downloadMutationAnnotatedTreeDataFiles(quiet: Bool = true, vdb: VDB? = nil, viewController: VDBViewController? = nil) {
@@ -10182,7 +10169,7 @@ extension VDB {
         vdb.printToPager = true
         if node_id != Int.max {
             if let node = PhTreeNode.treeNodeWithId(rootTreeNode: rootTreeNode, node_id: node_id) {
-                print(vdb: vdb, "Tree node with id \(node.id)")
+                print(vdb: vdb, "Tree node with id \(accStringFromNumber(node.id))")
                 print(vdb: vdb, "  mutations:  \(VDB.stringForMutations(node.mutations, vdb: vdb))")
                 print(vdb: vdb, "  dMutations: \(VDB.stringForMutations(node.dMutations, vdb: vdb))")
                 if let pNode = node.parent {
@@ -11682,6 +11669,20 @@ final class PhTreeNode: Equatable, Hashable, CustomStringConvertible, Comparable
         return leaves
     }
     
+    @discardableResult
+    func assignNodeWeights() -> Int {
+        if children.isEmpty {
+            weight = 1
+        }
+        else {
+            weight = 0
+            for child in children {
+                weight += child.assignNodeWeights()
+            }
+        }
+        return weight
+    }
+    
     func treeDataArray() -> [Int32] {
         var dataArray : [Int32] = []
         func addData(_ node: PhTreeNode) {
@@ -12352,7 +12353,7 @@ final class PhTreeNode: Equatable, Hashable, CustomStringConvertible, Comparable
     }
     
     class func commonNodeForNodes(_ parts: [String], tree rootTreeNode: PhTreeNode, vdb: VDB) -> PhTreeNode? {
-        let node_ids : [Int] = parts.compactMap { Int($0) }
+        let node_ids : [Int] = parts.compactMap { VDB.numberFromAccString($0) }
         if parts.count != node_ids.count {
             print(vdb: vdb, "Error - invalid node id in \(parts.joined(separator: ","))")
             return nil
@@ -12688,6 +12689,14 @@ final class EpiToPublic {
         }
     }
     
+}
+
+func printTimeFrom(_ startTime: DispatchTime, label: String, vdb: VDB) {
+    let endTime : DispatchTime = DispatchTime.now()
+    let nanoTime : UInt64 = endTime.uptimeNanoseconds - startTime.uptimeNanoseconds
+    let timeInterval : Double = Double(nanoTime) / 1_000_000_000
+    let timeString : String = String(format: "%4.2f seconds", timeInterval)
+    print(vdb: vdb, "\(label) time: \(timeString)")
 }
 //
 //  Data+Gzip.swift
