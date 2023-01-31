@@ -154,6 +154,10 @@ Lists the WHO-designated variants.
 
 Lists the reconstructed sequence for the specified pattern.  
 <br />
+#### \<cluster> `track` \<pattern>  
+
+Lists by week the fraction of viruses having each mutation of a specified pattern. Also listed is the fraction of viruses by number of the specified mutations present. This can be used to follow the convergent evolution of mutations across lineages.  
+<br />
 
 #
 ## Other commands
@@ -352,4 +356,4 @@ For cluster or list subscripts, this setting determines whether zero- or one-bas
 <br />
 
 <br />
-Version 3.2
+Version 3.3
