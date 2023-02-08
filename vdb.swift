@@ -5,15 +5,15 @@
 //  VDB implements a read–eval–print loop (REPL) for a SARS-CoV-2 variant query language
 //
 //  Created by Anthony West on 1/31/21.
-//  Copyright (c) 2022  Anthony West, Caltech
-//  Last modified 1/30/23
+//  Copyright (c) 2023  Anthony West, Caltech
+//  Last modified 2/8/23
 
 import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
 
-let version : String = "3.3"
+let version : String = "3.4"
 let checkForVDBUpdate : Bool = true         // to inform users of updates; the updates are not downloaded
 let allowGitHubDownloads : Bool = true      // to download nucl. ref. and documentation, if missing
 let basePath : String = FileManager.default.currentDirectoryPath
@@ -38,6 +38,7 @@ let yearsMaxForDateCache : Int = 6
 let blankLineageNameAlias : String = "root"
 let wildcardChar : UInt8 = 42 // "*"
 let stopChar : UInt8 = 42 // "*"
+let lineageWildcard : String = "*"
 let nucleotideSearchOverrideString : String = "nuc"
 
 var trimMode : Bool = false
@@ -89,6 +90,12 @@ enum DatabaseSource {
     case USHER
 }
 #endif
+enum DiversityMethod {
+    case Entropy
+    case PairwiseDistance
+    case PairwiseDiversity
+    case DIVAA
+}
 
 #if !VDB_EMBEDDED && swift(>=1)
 let GUIMode : Bool = false
@@ -1746,6 +1753,8 @@ let trendsLineageCountKeyword : String = "trendsLineageCount"
 let rangeKeyword : String = "range"
 let variantsKeyword : String = "variants"
 let listVariantsKeyword : String = "listVariants"
+let entropyKeyword : String = "entropy"
+let listEntropyForKeyword : String = "listEntropyFor"
 let sequenceKeyword : String = "sequence"
 let listSequenceKeyword : String = "listSequence"
 let diffKeyword : String = "diff"
@@ -1981,7 +1990,7 @@ struct TColorStruct {
 enum VDBProtein : Int, CaseIterable, Equatable, Comparable {
     
     static let SARS2_Spike_protein_refLength : Int = 1273
-    static let SARS2_nucleotide_refLength : Int = 29892
+    static let SARS2_nucleotide_refLength : Int = 29891
     
     // proteins ordered based on Int raw values assigned in the order listed below
     static func < (lhs: VDBProtein, rhs: VDBProtein) -> Bool {
@@ -2833,6 +2842,7 @@ enum ListType {
     case list
     case lineageFrequenciesByLocation
     case tracking
+    case entropy
     case empty
 }
 
@@ -6502,9 +6512,28 @@ final class VDB {
                     continue
                 }
                 let groupSublineages : Bool = group.count == 1 && vdb.clusters[group[0]] == nil
+                var group : [String] = group
+                if group.count == 1 && group[0].last == lineageWildcard.last {
+                    group[0].removeLast()
+                }
+                let originalGroup : [String] = group
+                group = group.map { standardLineageNameForLineage($0, vdb: vdb, quiet: true) }
+                var replacements : [(String,String)] = []
+                for i in 0..<group.count {
+                    if group[i] != originalGroup[i] {
+                        replacements.append((group[i],originalGroup[i]))
+                    }
+                }
                 var lGroup : [String] = group
                 if groupSublineages {
                     lGroup = VDB.sublineagesOfLineage(group[0], vdb: vdb)
+                }
+                else if group.count != 1 {
+                    for groupMember in group[1..<group.count] {
+                        if groupMember.last == lineageWildcard.last {
+                            lGroup.append(contentsOf: VDB.sublineagesOfLineage( standardLineageNameForLineage(String(groupMember.dropLast()), vdb: vdb, quiet: true), includeLineage: false, vdb: vdb))
+                        }
+                    }
                 }
                 lGroups.append(lGroup)
                 var foundGroup : Bool = false
@@ -6513,7 +6542,7 @@ final class VDB {
                         foundGroup = true
                         if lGroup.count > 1 {
                             if !Array(VDB.whoVariants.keys).contains(where: {$0.caseInsensitiveCompare(lineageCounts[i].0) == .orderedSame}) {
-                                lineageCounts[i].0 += "*"
+                                lineageCounts[i].0 += lineageWildcard
                             }
                         }
                         for j in 0..<lineageCounts.count {
@@ -6521,13 +6550,22 @@ final class VDB {
                                 toDelete.append(j)
                                 deletedLineageNames.append(lineageCounts[j].0)
                                 lineageCounts[i].1 += lineageCounts[j].1
+                                for w in 0..<weekMax {
+                                    lineageCounts[i].2[w] += lineageCounts[j].2[w]
+                                }
                             }
                         }
                         break
                     }
                 }
                 if !foundGroup {
-                    lineageCounts.append((lGroup[0],0,Array(repeating: 0, count: weekMax)))
+                    var lGroupName = lGroup[0]
+                    if lGroup.count > 1 {
+                        if !Array(VDB.whoVariants.keys).contains(where: {$0.caseInsensitiveCompare(lGroupName) == .orderedSame}) {
+                            lGroupName += lineageWildcard
+                        }
+                    }
+                    lineageCounts.append((lGroupName,0,Array(repeating: 0, count: weekMax)))
                     for j in 0..<lineageCounts.count-1 {
                         if lGroup.contains(lineageCounts[j].0) && !toDelete.contains(j) && !namesToKeep.contains(lineageCounts[j].0) {
                             toDelete.append(j)
@@ -6535,6 +6573,15 @@ final class VDB {
                             lineageCounts[lineageCounts.count-1].1 += lineageCounts[j].1
                             for w in 0..<weekMax {
                                 lineageCounts[lineageCounts.count-1].2[w] += lineageCounts[j].2[w]
+                            }
+                        }
+                    }
+                }
+                if !replacements.isEmpty {
+                    for (new,old) in replacements {
+                        for (lIndex,lineageCount) in lineageCounts.enumerated() {
+                            if lineageCount.0.prefix(new.count) == new {
+                                lineageCounts[lIndex].0 = old + lineageCount.0.suffix(lineageCount.0.count-new.count)
                             }
                         }
                     }
@@ -6580,7 +6627,7 @@ final class VDB {
             return list
         }
         for i in 0..<lineageCounts.count {
-            if lineageCounts[i].0.last == "*" {
+            if lineageCounts[i].0.last == lineageWildcard.last {
                 lineageCounts[i].0 = String(lineageCounts[i].0.dropLast())
             }
         }
@@ -6781,7 +6828,7 @@ final class VDB {
                 if lineageNames[i] == lGroup[0] {
                     if lGroup.count > 1 {
                         if !Array(VDB.whoVariants.keys).contains(where: {$0.caseInsensitiveCompare(lineageNames[i]) == .orderedSame}) {
-                            lineageNames[i] += "*"
+                            lineageNames[i] += lineageWildcard
                         }
                     }
                     for j in 0..<lineageNames.count {
@@ -6881,7 +6928,7 @@ final class VDB {
                 if lineageNumbersToRemove.contains(ii) {
                     continue
                 }
-                if namesToAdd.contains(lineageNames[ii].replacingOccurrences(of: "*", with: "")) {
+                if namesToAdd.contains(lineageNames[ii].replacingOccurrences(of: lineageWildcard, with: "")) {
                     continue
                 }
                 if otherRemoved {
@@ -7233,6 +7280,10 @@ plot
             print(vdb: vdb, "Error - invalid input for track pattern command")
             return EmptyList
         }
+        if let mutationsString = mutationsString, !VDB.isPattern(mutationsString, vdb: vdb) {
+            print(vdb: vdb, "Error - invalid input for track pattern command")
+            return EmptyList
+        }
         // use [Mutation] for protein mode, [String] for nucleotide mode
         var mutations : [Mutation] = (mutations ?? []).sorted { $0.pos < $1.pos }
         var mutationStrings : [String] = (mutationsString ?? "").components(separatedBy: CharacterSet(charactersIn: " ,")).filter { $0.count > 0}
@@ -7249,7 +7300,9 @@ plot
             print(vdb: vdb, "Error - invalid input for track pattern command")
             return EmptyList
         }
-        print(vdb: vdb, "tracking pattern with \(mCount) mutation\(mCount > 1 ? "s" : "") for \(nf(cluster.count)) isolates")
+        if !quiet {
+            print(vdb: vdb, "tracking pattern with \(mCount) mutation\(mCount > 1 ? "s" : "") for \(nf(cluster.count)) isolates")
+        }
 
         // 1st month = Dec 2019      last month = current month
         let cal : Calendar = Calendar.current
@@ -7365,7 +7418,7 @@ plot
             }
         }
         
-        if skippedIsolates > 0 {
+        if skippedIsolates > 0 && !quiet {
             print(vdb: vdb, "skipped \(nf(skippedIsolates)) isolates out of \(nf(cluster.count)) due to invalid collection date")
         }
         
@@ -7672,7 +7725,220 @@ plot
         let list : List = List(type: .variants, command: vdb.currentCommand, items: listItems)
         return list
     }
-    
+
+    class func listEntropy(_ cluster: [Isolate], vdb: VDB, quiet: Bool = false, diversityMethods: [DiversityMethod] = [.Entropy]) -> List {
+        // single threaded 2.4 sec
+        var listItems : [[CustomStringConvertible]] = []
+        if !quiet {
+            print(vdb: vdb, "List entropy for cluster with \(nf(cluster.count)) isolates")
+        }
+        var datesToOmit : [Date] = []
+        for year in 2020..<2025 {
+            if let date = vdb.dateFromString("7/1/\(year)") {
+                datesToOmit.append(date)
+            }
+        }
+        if cluster.isEmpty || diversityMethods.isEmpty {
+            return List(type: .entropy, command: vdb.currentCommand, items: [])
+        }
+        
+        var dictionaryWrapped : DictionaryWrapped = DictionaryWrapped()   // [String:[Isolate]]
+        cluster.bin(into: &dictionaryWrapped) { "\($0.weekNumber())" }
+        var clusterByWeek : [[Isolate]] = Array(repeating: [], count: weekMax+1)
+        for (key,value) in dictionaryWrapped.wrappedDictionary {
+            if let week = Int(key), week >= 0, week <= weekMax {
+                clusterByWeek[week] = value
+            }
+        }
+        
+        func entropyForArray(_ array: [Int], _ total: Double) -> Double {
+            if total == 0.0 {
+                return 0.0
+            }
+            var shannonEntropy : Double = 0.0
+            for count in array {
+                if count <= 0 {
+                    continue
+                }
+                let p_i = Double(count)/total
+                let entropy_i = p_i * log2(p_i)
+                shannonEntropy += entropy_i
+            }
+            return -shannonEntropy
+        }
+
+        func pairwiseDiversityForArray(_ array: [Int], _ total: Double) -> Double {
+            if total == 0.0 {
+                return 0.0
+            }
+            var n : Int = 0
+            var niSum : Int = 0
+            for count in array {
+                if count <= 0 {
+                    continue
+                }
+                n += count
+                niSum += count*(count-1)
+            }
+            if n < 2 {
+                return 0.0
+            }
+            let pairwiseDiversity : Double = Double(n*(n-1) - niSum)/Double(n*(n-1))
+            return pairwiseDiversity
+        }
+
+        // DIVAA Rodi, et al. doi:10.1093/bioinformatics/bth432
+        let rodiN : Double = Double(vdb.nucleotideMode ? 4 : 20)
+        let rodiBase : Double = 1.0/Double(rodiN)
+        func rodiDiversityForArray(_ array: [Int], _ total: Double) -> Double {
+            if total == 0.0 {
+                return 0.0
+            }
+            var n : Int = 0
+            for count in array {
+                if count <= 0 {
+                    continue
+                }
+                n += count
+            }
+            if n < 2 {
+                return 0.0
+            }
+            let nDouble = Double(n)
+            var p_i_Sum : Double = 0.0
+            for count in array {
+                if count <= 0 {
+                    continue
+                }
+                let p_i : Double = Double(count)/nDouble
+                p_i_Sum += p_i*p_i
+            }
+            let rodiDiversity : Double = max((1.0/(rodiN * p_i_Sum)) - rodiBase,0.0)
+            return rodiDiversity
+        }
+        
+        func entropiesForCluster(_ cluster: [Isolate]) -> (Double,[Double],Double,Double) {
+            var aaCounts : [[Int]] = Array(repeating: Array(repeating: 0, count: 27), count: vdb.refLength+1)
+            var omitted : Int = 0
+            for iso in cluster {
+                if datesToOmit.contains(iso.date) {
+                    omitted += 1
+                    continue
+                }
+                for mutation in iso.mutations {
+                    let aa : Int = Int(mutation.aa) - 65
+                    if aa >= 0 && aa < 26 {
+                        aaCounts[mutation.pos][aa] += 1
+                    }
+                    else {
+                        aaCounts[mutation.pos][26] += 1
+                    }
+                }
+            }
+            let nCluster : Int = cluster.count - omitted
+            let totalDouble : Double = Double(nCluster)
+            for pos in 1...vdb.refLength {
+                var total : Int = 0
+                for i in 0..<27 {
+                    total += aaCounts[pos][i]
+                }
+                let wtCount : Int = nCluster - total
+                aaCounts[pos][Int(vdb.referenceArray[pos])-65] += wtCount
+            }
+            let entropies : [Double] = diversityMethods.contains(.Entropy) ? aaCounts.map { entropyForArray($0,totalDouble) } : []
+            let diversities : [Double] = diversityMethods.contains(.PairwiseDiversity) ? aaCounts.map { pairwiseDiversityForArray($0,totalDouble)} : []
+            let rodiDiversities : [Double] = diversityMethods.contains(.DIVAA) ? aaCounts.map { rodiDiversityForArray($0,totalDouble)} : []
+            let entropySum : Double = entropies.reduce(0,+)
+            let diversitySum : Double = diversities.reduce(0,+)
+            let rodiDiversitySum : Double = rodiDiversities.reduce(0,+)
+            return (entropySum,entropies,diversitySum,rodiDiversitySum)
+        }
+/*
+        func averagePairwiseDistanceSlow(_ cluster: [Isolate]) -> Double {
+            if cluster.isEmpty {
+                return 0.0
+            }
+            var totalDistance : Int = 0
+            var counter : Int = 0
+            for i in 0..<(cluster.count-1) {
+                let clusterSet_i : Set<Mutation> = Set(cluster[i].mutations)
+                for j in (i+1)..<cluster.count {
+                    totalDistance += VDB.distSD(cluster[j].mutations, clusterSet_i)
+                    counter += 1
+                }
+            }
+            return Double(totalDistance)/Double(counter)
+        }
+*/
+        func averagePairwiseDistance(_ cluster: [Isolate]) -> Double {
+            if cluster.count < 2 {
+                return 0.0
+            }
+            var totalDistance : Int = 0
+            var counter : Int = 0
+            for i in 0..<(cluster.count-1) {
+                if datesToOmit.contains(cluster[i].date) {
+                    continue
+                }
+                for j in (i+1)..<cluster.count {
+                    if datesToOmit.contains(cluster[j].date) {
+                        continue
+                    }
+                    totalDistance += cluster[i].distanceFastTo(cluster[j])
+                    counter += 1
+                }
+            }
+            return Double(totalDistance)/Double(counter)
+        }
+        
+        let sampleSizeForDistance : Int = 200
+        var columnNames : [String] = ["week"]
+        for method in diversityMethods {
+            switch method {
+            case .Entropy:
+                columnNames.append("Entropy")
+            case .PairwiseDistance:
+                columnNames.append("Pairwise Distance")
+            case .PairwiseDiversity:
+                columnNames.append("Pairwise Diversity")
+            case .DIVAA:
+                columnNames.append("DIVAA")
+            }
+        }
+        listItems.append(columnNames)
+        if !quiet {
+            print(vdb: vdb, "Week of     Entropy Sum")
+        }
+        for (week,weekCluster) in clusterByWeek.enumerated() {
+            var listItem : [CustomStringConvertible] = [week]
+            let (entropySum,_,diversitySum,rodiDiversitySum) : (Double,[Double],Double,Double) = entropiesForCluster(weekCluster)
+            var pairDist : Double = 0.0
+            if diversityMethods.contains(.PairwiseDistance) {
+                let sample : [Isolate] = VDB.isolatesSample(Float(sampleSizeForDistance), inCluster: weekCluster, vdb: vdb, quiet: true)
+                pairDist = averagePairwiseDistance(sample)
+            }
+            for method in diversityMethods {
+                switch method {
+                case .Entropy:
+                    listItem.append(entropySum)
+                    if !quiet {
+                        let dateString : String = dateFormatter.string(from: zeroDate.addWeek(n: week))
+                        print(vdb: vdb, "\(dateString)  \(String(format:"%4.2f",entropySum))")
+                    }
+                case .PairwiseDistance:
+                    listItem.append(pairDist)
+                case .PairwiseDiversity:
+                    listItem.append(diversitySum)
+                case .DIVAA:
+                    listItem.append(rodiDiversitySum)
+                }
+            }
+            listItems.append(listItem)
+        }
+        let list : List = List(type: .entropy, command: vdb.currentCommand, items: listItems)
+        return list
+    }
+
     class func binCluster<ReturnValue>(_ cluster: [Isolate], by isolateKey: ListType, query: ([Isolate]) -> ReturnValue) -> Array<(String,ReturnValue)> {
         var dictionaryWrapped : DictionaryWrapped = DictionaryWrapped()   // [String:[Isolate]]
         switch isolateKey {
@@ -7682,6 +7948,8 @@ plot
             cluster.bin(into: &dictionaryWrapped) { $0.country }
         case .states:
             cluster.bin(into: &dictionaryWrapped) { $0.stateShort }
+        case .monthlyWeekly:
+            cluster.bin(into: &dictionaryWrapped) { "\($0.weekNumber())" }
         default:
             return []
         }
@@ -8158,11 +8426,11 @@ plot
         else {
             nameUC = name
         }
-        nameUC = standardLineageNameForLineage(nameUC, vdb: vdb, quiet: quiet)
-        let wildcardFound : Bool = nameUC.last == "*"
+        let wildcardFound : Bool = nameUC.last == lineageWildcard.last
         if wildcardFound {
             nameUC = String(nameUC.dropLast())
         }
+        nameUC = standardLineageNameForLineage(nameUC, vdb: vdb, quiet: quiet)
         let cluster : [Isolate]
         if vdb.includeSublineages || wildcardFound {
             let sublineages : [String] = VDB.sublineagesOfLineage(nameUC, vdb: vdb)
@@ -8178,7 +8446,7 @@ plot
     }
     
     // returns randomly sampled isolates
-    class func isolatesSample(_ number: Float, inCluster isolates:[Isolate], vdb: VDB) -> [Isolate] {
+    class func isolatesSample(_ number: Float, inCluster isolates:[Isolate], vdb: VDB, quiet: Bool = false) -> [Isolate] {
         let clusterCount : Int = isolates.count
         let numberToSample : Int = number > 1.0 ? Int(number) : Int(number*Float(clusterCount))
         if numberToSample <= 0 || isolates.count == 0 {
@@ -8207,7 +8475,9 @@ plot
         for i in indexArray {
             sampledIsolates.append(isolates[i])
         }
-        print(vdb: vdb, "\(nf(sampledIsolates.count)) isolates sampled from set of size \(nf(isolates.count))")
+        if !quiet {
+            print(vdb: vdb, "\(nf(sampledIsolates.count)) isolates sampled from set of size \(nf(isolates.count))")
+        }
         return sampledIsolates
     }
     
@@ -8598,7 +8868,7 @@ plot
             monthStarts.append(monthStart.timeIntervalSinceReferenceDate)
         }
         let maxFromStart : TimeInterval = lastDate.timeIntervalSince(startWeek)
-        let weekMaxLocal : Int = Int(maxFromStart/604800.0) + 1
+        let weekMaxLocal : Int = Int(maxFromStart/604800.0) + 1 + 1
         let periods : Int = weekly ? weekMaxLocal : monthStarts.count
         
         func binCluster(_ clusterIn: [Isolate]) -> [[Isolate]] {
@@ -8640,7 +8910,7 @@ plot
         let binnedCluster2 : [[Isolate]] = binCluster(cluster2)
         
         var periodNumber : Int = 0
-        while start < lastDate {
+        while start <= lastDate {
             if !weekly {
                 end = start.addMonth(n: 1)
             }
@@ -8937,7 +9207,7 @@ plot
                 return
             }
         }
-        let sublineages : [Isolate] = isolatesInLineage(lineageName+"*", inCluster: isolates, vdb: vdb, quiet: true)
+        let sublineages : [Isolate] = isolatesInLineage(lineageName+lineageWildcard, inCluster: isolates, vdb: vdb, quiet: true)
         let dealiasedName : String = dealiasedLineageNameFor(lineageName, vdb: vdb)
         if lineageName != dealiasedName {
             print(vdb: vdb, "de-aliased lineage name of \(lineageName): \(dealiasedName)")
@@ -9268,7 +9538,7 @@ plot
             if firstCall && allowGitHubDownloads {
 //                downloadNucleotideReferenceToFile(nuclRefFile, vdb: vdb)
                 downloadFileFromGitHub(nuclRefFile, vdb: vdb) { refSequence in
-                    if refSequence.count == vdb.refLength {
+                    if refSequence.count == vdb.refLength+1 {
                         do {
                             try refSequence.write(toFile: nuclRefFile, atomically: true, encoding: .ascii)
                             vdb.nuclRefDownloaded = true
@@ -9282,6 +9552,7 @@ plot
             return []
         }
         nuclRef.insert(0, at: 0) // makes array 1-based
+        nuclRef.removeLast()     // remove line feed
         return nuclRef
     }
     
@@ -12013,7 +12284,7 @@ plot
     func offerCompletions(_ offer: Bool, _ ln: LineNoise?) {
         if offer {
             var countriesStates : [String] = []
-            var completions : [String] = [beforeKeyword,afterKeyword,namedKeyword,lineageKeyword,consensusKeyword,patternsKeyword,countriesKeyword,statesKeyword,trendsKeyword,trackKeyword,monthlyKeyword,weeklyKeyword,"clusters","proteins","history","settings","includeSublineages","excludeSublineages","simpleNuclPatterns","excludeNFromCounts","sixel","trendGraphs","stackGraphs","completions","displayTextWithColor",minimumPatternsCountKeyword,trendsLineageCountKeyword,containingKeyword,"group","reset",variantsKeyword,sequenceKeyword,maxMutationsInFreqListKeyword,"listSpecificity","treeDeltaMode",consensusPercentageKeyword,"sublineages",caseMatchingKeyword,arrayBaseKeyword]
+            var completions : [String] = [beforeKeyword,afterKeyword,namedKeyword,lineageKeyword,consensusKeyword,patternsKeyword,countriesKeyword,statesKeyword,trendsKeyword,trackKeyword,monthlyKeyword,weeklyKeyword,"clusters","proteins","history","settings","includeSublineages","excludeSublineages","simpleNuclPatterns","excludeNFromCounts","sixel","trendGraphs","stackGraphs","completions","displayTextWithColor",minimumPatternsCountKeyword,trendsLineageCountKeyword,containingKeyword,"group","reset",variantsKeyword,sequenceKeyword,maxMutationsInFreqListKeyword,"listSpecificity","treeDeltaMode",consensusPercentageKeyword,"sublineages",caseMatchingKeyword,arrayBaseKeyword,entropyKeyword]
             completions.append(contentsOf:Array(VDB.whoVariants.keys))
             if self.countriesStates.isEmpty {
                 var countrySet : Set<String> = []
@@ -12451,7 +12722,7 @@ plot
                 }
             }
         }
-        let listCmds : [String] = [countriesKeyword,statesKeyword,lineagesKeyword,trendsKeyword,freqKeyword,frequenciesKeyword,monthlyKeyword,weeklyKeyword,variantsKeyword,sequenceKeyword]
+        let listCmds : [String] = [countriesKeyword,statesKeyword,lineagesKeyword,trendsKeyword,freqKeyword,frequenciesKeyword,monthlyKeyword,weeklyKeyword,variantsKeyword,sequenceKeyword,entropyKeyword]
         if listCmds.contains(where: { $0 ~~ parts[0] }) {
             parts.insert(listKeyword, at: 0)
         }
@@ -12602,6 +12873,17 @@ plot
                     }
                 }
             }
+            if parts.count > 1 {
+                for i in 0..<parts.count-2 {
+                    if parts[i] ~~ listKeyword && parts[i+1] ~~ entropyKeyword && parts[i+2] ~~ forKeyword {
+                        parts[i] = listEntropyForKeyword
+                        parts.remove(at: i+1)
+                        parts.remove(at: i+1)
+                        changed = true
+                        break
+                    }
+                }
+            }
             for i in 0..<parts.count-1 {
                 if parts[i] ~~ patternsKeyword && parts[i+1] ~~ "in" {
                     parts[i] = patternsInKeyword
@@ -12718,12 +13000,22 @@ plot
                     }
                 }
             }
+            if parts.count > 1 {
+                for i in 0..<parts.count-1 {
+                    if parts[i] ~~ listKeyword && parts[i+1] ~~ entropyKeyword {
+                        parts[i] = listEntropyForKeyword
+                        parts.remove(at: i+1)
+                        changed = true
+                        break
+                    }
+                }
+            }
         } while changed
         // Automatic insertion of lineage keyword
         repeat {
             changed = false
             for i in 0..<parts.count {
-                let parti : String = parts[i].last != "*" ? parts[i] : String(parts[i].dropLast())
+                let parti : String = parts[i].last != lineageWildcard.last ? parts[i] : String(parts[i].dropLast())
                 let matchesAlias : Bool = aliasDict[parti.uppercased()] != nil || recombDict[parti.uppercased()] != nil
                 if (parts[i].contains(".") || parti ~~ "A" || parti ~~ "B" || parts[i] ~~ blankLineageNameAlias || matchesAlias) && (i == 0 || (!(parts[i-1] ~~ lineageKeyword) && !(parts[i-1] ~~ namedKeyword)  && !(parts[i-1] ~~ sampleKeyword)) ) {
                     if clusters[parts[i]] != nil || patterns[parts[i]] != nil || lists[parts[i]] != nil || trees[parts[i]] != nil {
@@ -12870,6 +13162,8 @@ plot
                 tokens.append(.listVariants)
             case listSequenceKeyword:
                 tokens.append(.listSequence)
+            case listEntropyForKeyword:
+                tokens.append(.listEntropyFor)
             default:
                 tokens.append(.textBlock(parts[i]))
             }
@@ -12920,7 +13214,7 @@ plot
                 case let .textBlock(identifier):
                     var topLevelOverride : Bool = false
                     switch tokens[2] {
-                    case .listFrequenciesFor, .listCountriesFor, .listStatesFor, .listLineagesFor, .listTrendsFor, .listMonthlyFor, .listWeeklyFor, .listVariants, .listSequence:
+                    case .listFrequenciesFor, .listCountriesFor, .listStatesFor, .listLineagesFor, .listTrendsFor, .listMonthlyFor, .listWeeklyFor, .listVariants, .listSequence, .listEntropyFor:
                         topLevelOverride = true
                     default:
                         break
@@ -12966,7 +13260,7 @@ plot
             var exprCluster : Expr?
             if tokens.count > 1 {
                 switch tokens[0] {
-                case .listFrequenciesFor, .listCountriesFor, .listStatesFor, .listLineagesFor, .listTrendsFor, .listMonthlyFor, .listWeeklyFor, .list, .listVariants, .listSequence:
+                case .listFrequenciesFor, .listCountriesFor, .listStatesFor, .listLineagesFor, .listTrendsFor, .listMonthlyFor, .listWeeklyFor, .list, .listVariants, .listSequence, .listEntropyFor:
                     (_,exprCluster) = parse(Array(tokens[1..<tokens.count]),node: nil)
                 default:
                     break
@@ -13104,6 +13398,15 @@ plot
                 }
                 else {
                     print(vdb: self, "Syntax error - pattern expression is nil")
+                    return ([],nil)
+                }
+            case .listEntropyFor:
+                if let exprCluster = exprCluster {
+                    let expr : Expr = Expr.ListEntropy(exprCluster)
+                    return ([],expr)
+                }
+                else {
+                    print(vdb: self, "Syntax error - cluster expression is nil")
                     return ([],nil)
                 }
             default:
@@ -13390,7 +13693,7 @@ plot
                     }
                 }
 
-            case .listFrequenciesFor, .listCountriesFor, .listStatesFor, .listLineagesFor, .listTrendsFor, .listMonthlyFor, .listWeeklyFor, .list, .listVariants, .listSequence:
+            case .listFrequenciesFor, .listCountriesFor, .listStatesFor, .listLineagesFor, .listTrendsFor, .listMonthlyFor, .listWeeklyFor, .list, .listVariants, .listSequence, .listEntropyFor:
                 print(vdb: self, "Syntax error - extraneous list command")
                 return ([],nil)
             case .equality:
@@ -14632,7 +14935,26 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
                     }
                 }
                 if !existingNames.contains(lineageNames[0]) {
-                    lineageGroups.append(lineageNames)
+                    var appendToEnd : Bool = true
+                    if lineageNames.count == 1 {
+                        for existingGroup in lineageGroups {
+                            if existingGroup.count == 1 {
+                                let sublineages : [String] = VDB.sublineagesOfLineage(existingGroup[0], vdb: self)
+                                if sublineages.contains(VDB.standardLineageNameForLineage(lineageNames[0], vdb: self, quiet: true)) {
+                                    appendToEnd = false
+                                }
+                            }
+                            else if existingGroup.contains(VDB.standardLineageNameForLineage(lineageNames[0], vdb: self, quiet: true)) {
+                                appendToEnd = false
+                            }
+                        }
+                    }
+                    if appendToEnd {
+                        lineageGroups.append(lineageNames)
+                    }
+                    else {
+                        lineageGroups.insert(lineageNames, at: 0)
+                    }
                     print(vdb: self, "New lineage group: \(lineageNames.joined(separator: " "))")
                     clusterHasBeenAssigned(updateGroupsKeyword)
                 }
@@ -15189,7 +15511,9 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         offerCompletions(completions, ln)
         loadrc()
         VDB.loadAliases(vdb: self)
+#if VDB_EMBEDDED
         clusterHasBeenAssigned(allIsolatesKeyword)
+#endif
 //        optimizeMemory()
         mainRunLoop: repeat {
             if !latestVersionString.isEmpty {
@@ -15280,6 +15604,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         let vdbDataController : VDBDataController = VDBDataController()
         Task {
             _ = await vdbDataController.setup(vdb: self)
+            clusterHasBeenAssigned(allIsolatesKeyword)
         }
         Thread.sleep(forTimeInterval: 0.05)
         var runningInput : [UInt8] = []
@@ -15352,8 +15677,22 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
                     var remoteMethodResponse : RemoteMethodResponse? = nil
                     let logPrep : Bool = remoteMethodCall.method == .empty
                     switch remoteMethodCall.method  {
-                    case .countriesCountArrayFor, .statesCountArrayFor, .lineagesCountArrayFor, .mutationFreqArrayFor, .lineagesListFor, .consensusFor:
-                        if let cluster = self.clusters[remoteMethodCall.clusterName] {
+                    case .countriesCountArrayFor, .statesCountArrayFor, .lineagesCountArrayFor, .mutationFreqArrayFor, .lineagesListFor, .consensusFor, .trackMutations, .entropyFor:
+                        let clusterName : String
+                        let mutationsString : String
+                        if remoteMethodCall.method != .trackMutations {
+                            clusterName = remoteMethodCall.clusterName
+                            mutationsString = ""
+                        }
+                        else {
+                            let parts : [String] = remoteMethodCall.clusterName.components(separatedBy: "\n")
+                            if parts.count != 2 {
+                                break
+                            }
+                            clusterName = parts[0]
+                            mutationsString = parts[1]
+                        }
+                        if let cluster = self.clusters[clusterName] {
                             let vdbCluster : VDBCluster = VDBCluster(name: remoteMethodCall.clusterName, isolates: cluster, isolatesCount: cluster.count)
                             switch remoteMethodCall.method {
                             case .countriesCountArrayFor:
@@ -15410,6 +15749,26 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
                                     NSLog("Prepared lineagesList items.count = \(lineagesList.items.count)")
                                 }
                                 remoteMethodResponse = RemoteMethodResponse(serialNumber: remoteMethodCall.serialNumber, method: remoteMethodCall.method, stringArray: [], intArray: [], intArrayArray: [], doubleArray: [], stringArray2: [], stringArrayArray: [], data: encodeLineagesArrayTuple(([],[],lineagesList)))
+                            case .trackMutations:
+                                let (list1,list2,earliestWeek,latestWeek) : (ListStruct,ListStruct,Int,Int) = await vdbDataController.trackMutations(mutationsString, cluster: vdbCluster)
+                                if logPrep {
+                                    NSLog("Prepared track mutations list1.items.count = \(list1.items.count)")
+                                }
+                                var doubleArray : [Double] = []
+                                for item in list1.items[1..<list1.items.count] {
+                                    doubleArray.append(contentsOf: item[1..<item.count].compactMap { $0 as? Double })
+                                }
+                                for item in list2.items {
+                                    doubleArray.append(contentsOf: item[1..<item.count].compactMap { $0 as? Double })
+                                }
+                                remoteMethodResponse = RemoteMethodResponse(serialNumber: remoteMethodCall.serialNumber, method: remoteMethodCall.method, stringArray: list1.items[0].compactMap{ $0 as? String }, intArray: [list2.items.count,earliestWeek,latestWeek], intArrayArray: [], doubleArray: doubleArray, stringArray2: [], stringArrayArray: [], data: Data())
+                            case .entropyFor:
+                                let entropyList : ListStruct = await vdbDataController.entropyForCluster(vdbCluster)
+                                var doubleArray : [Double] = []
+                                for item in entropyList.items[1..<entropyList.items.count] {
+                                    doubleArray.append(contentsOf: item[1..<item.count].compactMap { $0 as? Double })
+                                }
+                                remoteMethodResponse = RemoteMethodResponse(serialNumber: remoteMethodCall.serialNumber, method: remoteMethodCall.method, stringArray: entropyList.items[0].compactMap{ $0 as? String }, intArray: [], intArrayArray: [], doubleArray: doubleArray, stringArray2: [], stringArrayArray: [], data: Data())
                             default:
                                 break
                             }
@@ -15430,10 +15789,42 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
                             NSLog("Prepared whoVariantLineagesAll.count = \(variantLineagesAll.count)")
                         }
                         remoteMethodResponse = RemoteMethodResponse(serialNumber: remoteMethodCall.serialNumber, method: remoteMethodCall.method, stringArray: variantLineagesAll.map { $0.0 }, intArray: [], intArrayArray: [], doubleArray: [], stringArray2: [], stringArrayArray: variantLineagesAll.map { $0.1 }, data: Data())
-                    case .trackMutations:
-                        break
                     case .clusterHasBeenAssigned, .clustersHaveBeenDeleted:
                         break
+                    case .invalidStringsForCC:
+                        let parts : [String] = remoteMethodCall.clusterName.components(separatedBy: "\n")
+                        if parts.count == 6 {
+                            let locationName : String = parts[0]
+                            let afterDateString : String = parts[1]
+                            let beforeDateString : String = parts[2]
+                            let withMutationsString : String = parts[3]
+                            let withoutMutationsString : String = parts[4]
+                            let lineageString : String = parts[5]
+                            let whoVariantsArray : [[String]] = Array(VDB.whoVariants.keys).map { [$0] }
+                            let (additionalInvalidStrings,beforeDate,afterDate) : ([String],Date?,Date?) = await vdbDataController.invalidStringsFor(locationName: locationName, afterDateString: afterDateString, beforeDateString: beforeDateString, withMutationsString: withMutationsString, withoutMutationsString: withoutMutationsString, lineageString: lineageString, whoVariantsArray: whoVariantsArray)
+                            let date1 : TimeInterval
+                            if let beforeDate = beforeDate {
+                                date1 = beforeDate.timeIntervalSinceReferenceDate
+                            }
+                            else {
+                                date1 = Date.distantPast.timeIntervalSinceReferenceDate
+                            }
+                            let date2 : TimeInterval
+                            if let afterDate = afterDate {
+                                date2 = afterDate.timeIntervalSinceReferenceDate
+                            }
+                            else {
+                                date2 = Date.distantPast.timeIntervalSinceReferenceDate
+                            }
+                            if logPrep {
+                                NSLog("Prepared invalid strings for create cluster validation")
+                            }
+                            remoteMethodResponse = RemoteMethodResponse(serialNumber: remoteMethodCall.serialNumber, method: remoteMethodCall.method, stringArray: additionalInvalidStrings, intArray: [], intArrayArray: [], doubleArray: [date1,date2], stringArray2: [], stringArrayArray: [], data: Data())
+                        }
+                        break
+                    case .invalidateCaches:
+                        await vdbDataController.invalidateCachesForCluster(VDBCluster.empty)
+                        remoteMethodResponse = RemoteMethodResponse(serialNumber: remoteMethodCall.serialNumber, method: remoteMethodCall.method, stringArray: [], intArray: [], intArrayArray: [], doubleArray: [], stringArray2: [], stringArrayArray: [], data: Data())
                     case .empty:
                         break
                     }
@@ -15865,14 +16256,21 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         }
         if stdOut_fileNo2 != STDOUT_FILENO {
             let encoder : JSONEncoder = JSONEncoder()
-            guard let cluster : [Isolate] = self.clusters[clusterName] else { return }
-            for (oldIndex,oldCluster) in vdbClusters.enumerated() {
-                if oldCluster.name == clusterName {
-                    vdbClusters.remove(at:oldIndex)
-                    break
+            let clusterCount : Int
+            if clusterName != updateGroupsKeyword {
+                guard let cluster : [Isolate] = self.clusters[clusterName] else { return }
+                clusterCount = cluster.count
+                for (oldIndex,oldCluster) in vdbClusters.enumerated() {
+                    if oldCluster.name == clusterName {
+                        vdbClusters.remove(at:oldIndex)
+                        break
+                    }
                 }
             }
-            let remoteMethodResponse : RemoteMethodResponse = RemoteMethodResponse(serialNumber: 1, method: .clusterHasBeenAssigned, stringArray: [clusterName], intArray: [cluster.count], intArrayArray: [], doubleArray: [], stringArray2: [], stringArrayArray: [], data: Data())
+            else {
+                clusterCount = 0
+            }
+            let remoteMethodResponse : RemoteMethodResponse = RemoteMethodResponse(serialNumber: 1, method: .clusterHasBeenAssigned, stringArray: [clusterName], intArray: [clusterCount], intArrayArray: [], doubleArray: [], stringArray2: [], stringArrayArray: [], data: Data())
             serialQueue.async {
                 do {
                     let dataOut : Data = try encoder.encode(remoteMethodResponse)
@@ -16236,6 +16634,7 @@ enum Token {
     case range
     case listVariants
     case listSequence
+    case listEntropyFor
     case textBlock(String)
     
     var description: String {
@@ -16307,6 +16706,8 @@ enum Token {
                     return "_listVariants_"
                 case .listSequence:
                     return "_listSequence_"
+                case .listEntropyFor:
+                    return "_listEntropyFor_"
                 case let .textBlock(value):
                     return value
                 }
@@ -16381,6 +16782,7 @@ indirect enum Expr {
     case List(List)                    //  --> List  (a list expression, not a list command)
     case ListVariants(Expr)            // Cluster                          --> List
     case ListSequence(Expr)            // Pattern or Identifier            --> nil
+    case ListEntropy(Expr)             // Cluster                          --> List
     case Nil
     
     // evaluate node of abstract syntax tree
@@ -16487,8 +16889,8 @@ indirect enum Expr {
                     }
                     if !VDB.isPattern(identifier2, vdb: vdb) {
                         // try to rescue identifier with incomplete mutations
-                        let newIdentifier : String = VDB.cleanMutationsString(identifier)
-                        if identifier != newIdentifier && VDB.isPattern(newIdentifier, vdb: vdb) {
+                        let newIdentifier : String = VDB.cleanMutationsString(identifier2)
+                        if identifier2 != newIdentifier && VDB.isPattern(newIdentifier, vdb: vdb) {
                             identifier2 = newIdentifier
                         }
                     }
@@ -17110,6 +17512,11 @@ indirect enum Expr {
         case let .ListVariants(exprCluster):
             let cluster = exprCluster.clusterFromExpr(vdb: vdb)
             let list : List = VDB.listVariants(cluster, vdb: vdb)
+            return Expr.List(list)
+        case let .ListEntropy(exprCluster):
+            vdb.printToPager = true
+            let cluster = exprCluster.clusterFromExpr(vdb: vdb)
+            let list : List = VDB.listEntropy(cluster, vdb: vdb)
             return Expr.List(list)
         case let .Diff(expr1, expr2):
             
@@ -17773,7 +18180,7 @@ indirect enum Expr {
                     // try to rescue mutString with incomplete mutations
                     if !VDB.isPattern(mutString, vdb: vdb) {
                         let newIdentifier : String = VDB.cleanMutationsString(mutString)
-                        if identifier != newIdentifier && VDB.isPattern(newIdentifier, vdb: vdb) {
+                        if mutString != newIdentifier && VDB.isPattern(newIdentifier, vdb: vdb) {
                             mutString = newIdentifier
                         }
                     }
@@ -18596,7 +19003,7 @@ extension Array where Element == Isolate {
             return result
         }
     }
-
+    
     @inlinable internal func reduceRange<Result: ParallelResult>(into initialResult: Result, _ updateAccumulatingResult: (inout Result, Int, Int) -> ()) -> Result {
 #if VDB_TEST
         let mp_number : Int = mpTest
