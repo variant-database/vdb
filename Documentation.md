@@ -154,6 +154,10 @@ Lists the WHO-designated variants.
 
 Lists the reconstructed sequence for the specified pattern.  
 <br />
+#### [`list`] `entropy` [\<cluster>]  
+
+Lists the sum of per site Shannon entropies by week for the specified cluster.  
+<br />
 #### \<cluster> `track` \<pattern>  
 
 Lists by week the fraction of viruses having each mutation of a specified pattern. Also listed is the fraction of viruses by number of the specified mutations present. This can be used to follow the convergent evolution of mutations across lineages.  
@@ -356,4 +360,4 @@ For cluster or list subscripts, this setting determines whether zero- or one-bas
 <br />
 
 <br />
-Version 3.3
+Version 3.4
