@@ -359,5 +359,28 @@ Determines case matching behavior for virus name searches by the `named` command
 For cluster or list subscripts, this setting determines whether zero- or one-based numbering is used. The default value is `0`.  
 <br />
 
+## Bracket and tree assignment commands
+
+#### \<cluster name>[\<Int>]                prints info on single isolate  
+#### \<cluster name>[\<Int>][\<Int>..\<\<Int>]        prints sequence of isolate over given nucleotide/residue range  
+#### \<cluster name> = \<cluster name2>[\<Int>] or [\<Int>-\<Int>] or [\<Int>..\<\<Int>] or [\<Int>...\<Int>]  assigns subset of existing cluster  
+#### sequence \<cluster name>[\<Int>]        list reconstructed sequence for single isolate  
+<br />
+
+#### \<cluster name> = \<tree name>            makes cluster including all leaf node isolates  
+#### \<cluster name> = \<tree name>.all        makes cluster including all leaf and interior nodes  
+#### \<cluster name> = \<tree name>[\<node id>].all  makes cluster including all leaf and interior nodes from subtree w/ specified node id  
+<br />
+
+#### \<tree name>[\<node id>]                prints info on tree node  
+#### \<tree name> = \<tree name2>[\<node id>].copy        makes a deep copy of subtree and assigns to \<tree name>  
+#### \<tree name> = \<tree name2>[\<node id>]          assigns subtree with specified node to \<tree name>  
+#### \<tree name> = \<tree name2>[\<lineage name>]        finds and assigns subtree that best represents the specified lineage  
+#### \<tree name> = \<tree name2>[\<node id> \<node id2>]   finds and assigns the smallest subtree that contains the specified nodes  
+#### a = \<tree name> \<mutation>               searches for tree nodes with given mutation (delta mode)  returns cluster  
+<br />
+
+#### \<list name>[\<item number>]                a list item from a list  
+
 <br />
 Version 3.4
