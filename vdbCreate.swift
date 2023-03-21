@@ -3,14 +3,14 @@
 //  VDBCreate
 //
 //  Copyright (c) 2023  Anthony West, Caltech
-//  Last modified 2/8/23
+//  Last modified 3/21/23
 
 import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
 
-let version : String = "3.4"
+let version : String = "3.5"
 let checkForVDBUpdate : Bool = true
 let mpNumberDefault : Int = 12
 let basePath : String = FileManager.default.currentDirectoryPath
