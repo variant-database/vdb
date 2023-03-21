@@ -209,7 +209,7 @@ Runs built-in tests of **vdb**.
 
 Runs a demonstration of **vdb**.  
 <br />
-#### `save` \<cluster or pattern or history or list name> \<file name>  
+#### `save` \<cluster, pattern, history, list, or tree name> \<file name>  
 
 Saves a list of the viruses in the given cluster to the specified file. Patterns, history, or lists can also be saved. Clusters saved to a file name ending in `.fasta` are saved in FASTA format, otherwise **vdb** format is used. For clusters, two space-separated options can be given after the file name: `m` - create an accompanying metadata file for the given cluster, and `z` - saves the cluster in a compressed format.   
 <br />
@@ -383,4 +383,4 @@ For cluster or list subscripts, this setting determines whether zero- or one-bas
 #### \<list name>[\<item number>]                a list item from a list  
 
 <br />
-Version 3.4
+Version 3.5
