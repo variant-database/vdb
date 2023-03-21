@@ -1,5 +1,5 @@
 // vdbTreeModule.swift
-// for vdb version 3.3
+// for vdb version 3.5+
 // 
 // Instructions: This file is designed to be compiled with vdb.swift:
 //    cat vdbTreeModule.swift vdb.swift > vdbtree.swift
@@ -222,7 +222,6 @@
     otherwise be required by Sections 4(a), 4(b) and 4(d) of the License.
 
 */
-
 // Sources/SwiftProtobuf/BinaryDecoder.swift - Binary decoding
 //
 // Copyright (c) 2014 - 2016 Apple Inc. and the project authors
@@ -8673,7 +8672,7 @@ line 4  length 27
                     if node.id > 400_000 && node.id < 20_000_000 {
                         epiCount += 1
                     }
-                    else if node.id > 100_000_000 && node.id < 200_000_000 {
+                    else if node.id > internalNodeIDShift && node.id < internalNodeIDShift+internalNodeIDShift {
                         nnumCount += 1
                     }
                     else {
@@ -9125,7 +9124,7 @@ line 4  length 27
             }
             if colonPosition > -1 || epiToPublic.usherTree {
                 if underscorePosition != -1 && verticalPos.isEmpty {
-                    let shift : Int = underscorePosition - closePosition == 5 ? 100_000_000 : 0
+                    let shift : Int = underscorePosition - closePosition == 5 ? internalNodeIDShift : 0
                     var cpTmp : Int = colonPosition
                     if underscorePosition2 != -1 {
                         cpTmp = underscorePosition2
@@ -11478,7 +11477,7 @@ import Foundation
 
 // FIXME: Loading via "load tree x global" works for assign mutations, while loading via VDBTreeViewController does not
 
-final class PhTreeNode: Equatable, Hashable, CustomStringConvertible, Comparable {
+final class PhTreeNode: Equatable, Hashable, CustomStringConvertible, Comparable, Codable {
     
     let id : Int
     weak var parent : PhTreeNode?
@@ -11515,6 +11514,26 @@ final class PhTreeNode: Equatable, Hashable, CustomStringConvertible, Comparable
     
     var lineage : String {
         isolate?.pangoLineage ?? calculatedLineage
+    }
+    
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case children
+        
+        case distanceFromParent
+        case height
+        case depth
+        case isolate
+        case calculatedLineage
+        case calculatedDate
+        case branchValue
+        case highlight
+        case weight
+        case mutDict
+        
+        case mutations
+        case dMutations
+        case mutationsAssigned
     }
     
     // MARK: -
@@ -12525,7 +12544,7 @@ final class PhTreeNode: Equatable, Hashable, CustomStringConvertible, Comparable
             closePosition = start-1
         }
         if colonPosition > -1 {
-            let shift : Int = underscorePosition - closePosition == 5 ? 100_000_000 : 0
+            let shift : Int = underscorePosition - closePosition == 5 ? internalNodeIDShift : 0
             nodeId = intA((underscorePosition+1)..<colonPosition) + shift
             distance = intA(colonPosition+1..<(end+1))
         }
@@ -12593,6 +12612,31 @@ final class PhTreeNode: Equatable, Hashable, CustomStringConvertible, Comparable
         }
         addressOffset += 1
         return (node,addressOffset)
+    }
+    
+    func newickString() -> String {
+        // matches format of global.tree
+        let prefix : String = "EPI_ISL_"
+        var nString : String = ""
+        if self.isLeaf {
+            nString = "\(prefix)\(self.name):\(self.distanceFromParent)"
+        }
+        else {
+            var mutNString : String = ""
+            var notFirst : Bool = false
+            for child in self.children {
+                if notFirst {
+                    mutNString.append(",")
+                }
+                else {
+                    notFirst = true
+                }
+                mutNString.append(child.newickString())
+            }
+            let internalLabel : String = "node_\(id-internalNodeIDShift)"
+            nString = "(\(mutNString))\(internalLabel):\(self.distanceFromParent)"
+        }
+        return nString
     }
     
 }
